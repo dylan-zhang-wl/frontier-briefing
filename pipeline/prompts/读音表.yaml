@@ -1,0 +1,902 @@
+# 读音表：口播稿（播客、视频旁白）里的人名、公司、产品、媒体怎么写
+#
+# 为什么要有它：配音模型照字念。稿子写"奥尔特曼"，它就按中文念；写"Altman"，它就按英文念。
+# 怎么用：
+#   · 写稿：写稿指令把这份表附在系统提示后面，主笔照着写；
+#   · 写完：python pipeline/lexicon_check.py 稿.md 扫一遍；加 --fix 把表里列出的音译换成规定写法；
+#   · 补表：检查会列出"表里还没有的英文名"，按下面的规则定好写法，补进对应的分类。
+#
+# 每一条的字段（只有"写法"必填）：
+#   写法     稿子里怎么写。西方人名写全名
+#   之后     人名第二次起怎么写（只说姓）
+#   身份     第一次提到时带的身份。职位会变，用之前按当天事件卡核对
+#   也可写   同样算对的其他写法，如"Ars"是"Ars Technica"的简称
+#   音译     不该出现的中文音译。--fix 时：带"·"的全名换成"写法"，单独的姓换成"之后"
+#   应改     不该出现的其他写法。写法是中文的条目，这里放它的英文原名，稿子里出现会被提醒改成中文
+#   只提醒   true：--fix 不自动改，只提醒（同一个词在别的说法里可能是对的，如"Intel 3"是制程名）
+#   例外     这些固定说法里的"应改"不算错
+#   中文名   写法是英文、第一次出现时要补上的中文名（字符串或列表，任一个都算）。口播说"MIT，也就是麻省理工学院"，
+#            网页写"MIT（麻省理工学院）"；之后只用英文。lexicon_check 查第一次出现的前后有没有（2026-11-03 加）
+#   只改口播稿 true："应改""音译"只在命令行查口播稿时算（总调度第 7 步查播客稿、--fix 自动改）；网页（build_v3）和视频旁白的
+#            配音前检查（video3_build）不查，网页、视频照原样。用于不是名字、只影响念法的写法，如"C+ 轮"口播写"C 加轮"（2026-11-05 加）
+#   区分大小写 true：这一条的写法、应改按大小写认（平时不分大小写）。用于只差大小写的两种写法，如口播把"Hy4"改成"HY4"（2026-11-06 加）
+#   读音     给人看的读音提示，不进稿子
+#   配音写法 只在送去配音的那份文字里用的写法（2026-11-07 加）。配音程序 pipeline/tts.py 把这一条的"写法""也可写"
+#            换成它再发给配音模型；播客、视频旁白、周日对谈（dialog_tts.py）都经过 tts.py 的同一处，所以三样都生效。
+#            稿子文件、字幕、网页、画面，以及读音表检查、稿子检查、配音后的对稿，看到的都还是原来的写法，写稿照写原来的写法。
+#            英文写法按整词换（前后紧挨着字母或数字的不换，如 SDRAM 里的 DRAM 不换；DRAM-on-logic 这种连字符复合词里的换）；
+#            大小写按"区分大小写"那一栏。用于模型照字念会念错、换个写法就念对的词，如 DRAM 写成 D-RAM（念 dee-ram）。
+#            新加或改了这一栏，含这个词的配音块下次配音时内容指纹变了，会重配（花钱）；不含的照旧用缓存
+#   配音写法（待启用） 试出来、还没定的配音写法，只记着、程序不认（2026-11-09 加，Claude 的 Klawd）。
+#            用户耳听定了，把这一栏名字改成"配音写法"就生效；不用了就删掉这一行
+#   备注     其他说明
+#
+# 来源：2026-10-31 测试版 12 张事件卡（03_事件卡/cards_写稿用.json）里出现的全部人名、公司、
+#       产品和媒体，外加规则里举的例子。新名字按同样的规则补。
+
+版本: 2026-11-10 晚（Claude 定为不启用 Klawd，照原写法。补 11-10 第 7 步提醒"读音表里还没有"的四个：Fable〔放进产品 Claude Fable 5.2 一条，读音 FAY-bəl〕、GR00T〔英伟达机器人模型，读 groot〕、Marco Rubio〔美国国务卿，事件卡中文写"马可·鲁比奥"〕、LingBot-Touch〔蚂蚁灵波的触觉基础模型〕；GR00T、Fable 各试了配音写法〔Gemini 庚A，记在测试账本，没进月度账本〕：Groot 念成一个音节，但转写只有一条是 Groot，写在"配音写法（待启用）"；Fable 原写法这次都念出来了，没定配音写法。上一版 2026-11-09 晚（补 Thurrock〔地名，读音 THUR-ək〕；John Ternus 补读音 TUR-nəs；两个名字各试三种配音写法〔Gemini 庚A 共 20 条 $0.0496，记在测试账本，没进月度账本〕：原写法这次都没念错、候选没显出更好，都没启用；Ternus 记下 Tur-nus〔单列一条，写在"配音写法（待启用）"〕，Thurrock 没定配音写法。上一版 2026-11-09：补姚顺雨〔事件卡只有拼音 Yao Shunyu，查实中文名、附出处〕、Mark Gurman〔读音、通行译名〕、巴淡岛〔地名，口播写法〕；Claude 记下试出的配音写法 Klawd〔11-09 实测；写在"配音写法（待启用）"，没生效，待用户耳听后启用，配音仍照原写法 Claude〕。上一版 2026-11-07：DRAM 写清读音 dee-ram，配音写法定为 D-RAM，从"按单词读"挪到"其他"；加"配音写法"字段。上一版 2026-11-06：补 11-06 那期"表里还没有"的人名、公司、产品、媒体；口播"设闸"改"设下闸门"、Hy4 按字母念写成"HY4"；加"区分大小写"字段；加规则：参数量写读法、英文名后接动词加逗号））
+
+规则:
+  - 西方人名写英文原名。第一次带身份，如"OpenAI 的 CEO Sam Altman"；之后只说"Altman"。
+  - 华人名字用中文，如黄仁勋、苏姿丰、陈立武。
+  - 公司有通行中文名的用中文（苹果、谷歌、微软、英伟达、英特尔、三星、亚马逊）；没有的用英文（OpenAI、Anthropic、Meta、Reddit、Cursor、Mistral）。
+  - 产品、模型和英文媒体用原名（ChatGPT、Gemini、The Verge、Ars Technica）；有通行中文名的媒体用中文（彭博社、路透社、《金融时报》）。
+  - 中国公司的产品用它自己的中文名，如千问。
+  - CEO、AI、GPU 这类缩写照写字母，按字母读。
+  - 名字本来是英文（机构、公司、媒体、人名）的写英文、按英文念；有官方或通行中文名、听众不一定熟悉的（表里标了"中文名"），第一次出现时补上中文：口播说"MIT，也就是麻省理工学院"或"麻省理工学院 MIT"，不用括号；网页中文写"MIT（麻省理工学院）"。之后只用英文。苹果、谷歌这类中文名就是日常叫法的，照旧用中文。（2026-11-03 用户定）
+  - 名字本来是中文、没有官方英文名的（如《科创板日报》），中文稿照写中文；英文稿和视频画面英文字用拼音（Kechuangban Ribao），不意译，同 Huxiu、Wujie Dongli。
+  - 日本、韩国人名查不到汉字写法的，保留英文拼写（如 Rikiya Takehi），第一次带身份、之后只说姓同西方人名。
+  - 播客稿里三位以上的"数字＋B/M/K/T"（参数量、上下文长度）写成中文的亿、万："五千零一十亿参数"（501B）、"一点五万亿个词元"（1.5T）、"十二万八千"（128K）；65B、27B 这类一两位的照写。没改的程序会自动改（spoken_numbers.abbr_to_hanzi，2026-11-06 加）。不写"五百零一 B"：稿子检查（script_check）把它当成 501，对不上事件卡里的 5010 亿，会停下。视频旁白照写 501B，配音前自动念成"五百零一 B"。
+  - 口播里两个词以上的英文名后面紧接"发布""推出""宣布"这类动词时，中间加逗号："Ricursive Intelligence，发布了……"；播客稿没加的程序会自动加（lexicon_check 第 8 项，2026-11-06 加）。逗号不够，要中文起句（11-06 晚更正）：视频一章、播客一段、对谈一轮都是单独一次配音请求，开口就是英文名、后面只夹两三个字又接英文的，中间那几个字会被带成英文腔（加了逗号的"Ricursive Intelligence，发布了"照样被转写成 Fabula）；开头先垫六个左右汉字（"前谷歌研究员创立的 Ricursive Intelligence，发布了……"），见《写作指南》第六节。lexicon_check 第 8 项后半只提醒。
+
+# ───────────────────────────── 人名 ─────────────────────────────
+人名:
+  - 写法: Sam Altman
+    之后: Altman
+    身份: OpenAI 的 CEO
+    音译: [萨姆·奥尔特曼, 山姆·奥尔特曼, 萨姆·奥特曼, 山姆·奥特曼, 萨姆·阿尔特曼, 奥尔特曼, 奥特曼, 阿尔特曼]
+    备注: 奥特曼也是动画片的名字，--fix 之前看一眼上下文
+  - 写法: Tim Cook
+    之后: Cook
+    身份: 苹果的执行董事长（10-31 事件卡的说法）
+    音译: [蒂姆·库克, 提姆·库克, 库克]
+  - 写法: Steve Huffman
+    之后: Huffman
+    身份: Reddit 的 CEO 兼联合创始人
+    音译: [史蒂夫·霍夫曼, 斯蒂夫·霍夫曼, 史蒂夫·赫夫曼, 霍夫曼, 赫夫曼, 哈夫曼]
+    应改: [Hoffman]
+    备注: TechCrunch 原文有一处误拼成 Hoffman
+  - 写法: Luke Roberts
+    之后: Roberts
+    身份: 安全公司 Phorian 的 CTO 兼联合创始人
+    音译: [卢克·罗伯茨, 卢克·罗伯特斯, 罗伯茨]
+  - 写法: Kevin Beaumont
+    之后: Beaumont
+    身份: 独立安全研究员
+    音译: [凯文·博蒙特, 凯文·博蒙, 博蒙特]
+  - 写法: Dave Zinsner
+    之后: Zinsner
+    身份: 英特尔的首席财务官
+    也可写: [David Zinsner]
+    音译: [戴夫·辛斯纳, 戴维·辛斯纳, 大卫·辛斯纳, 戴夫·津斯纳, 大卫·津斯纳, 辛斯纳, 津斯纳]
+  - 写法: 陈立武
+    身份: 英特尔的 CEO
+    应改: [Lip-Bu Tan]
+    备注: 华人，用中文名
+  - 写法: Benjamin Reitzes
+    之后: Reitzes
+    身份: Melius 的分析师
+    音译: [本杰明·赖特泽斯, 本杰明·莱特泽斯, 赖特泽斯]
+  - 写法: Matt Orton
+    之后: Orton
+    身份: Raymond James 的首席市场策略师
+    音译: [马特·奥顿, 奥顿]
+  - 写法: Andrew E. Freedman
+    之后: Freedman
+    身份: Tom's Hardware 的作者
+    音译: [安德鲁·弗里德曼, 弗里德曼]
+  - 写法: 鲍康如
+    身份: Reddit 当时的负责人（2015 年卸任，只在 Huffman 的引语里提到）
+    应改: [Ellen Pao]
+    备注: 华裔，按规则用中文名；这个中文名没出现在事件卡里，用之前再核一下
+  - 写法: 黄仁勋
+    身份: 英伟达的 CEO
+    应改: [Jensen Huang]
+    备注: 规则里的例子，10-31 事件卡里没有
+  - 写法: 苏姿丰
+    身份: AMD 的 CEO
+    应改: [Lisa Su]
+    备注: 规则里的例子，10-31 事件卡里没有
+
+  # 11-01 补
+  - 写法: David Sacks
+    之后: Sacks
+    身份: 美国白宫科学与技术顾问会议主席（11-01 事件卡里 IT之家的说法）
+    也可写: [David Oliver Sacks]
+    音译: [戴维·奥利弗·萨克斯, 戴维·萨克斯, 大卫·萨克斯]
+    备注: 单独的"萨克斯"没列进音译：它也是乐器名，--fix 会误改
+  - 写法: Santiago Schnell
+    之后: Schnell
+    身份: 达特茅斯学院的教务长（11-01 已辞职）
+    音译: [圣地亚哥·施内尔, 桑蒂亚哥·施内尔, 施内尔]
+  - 写法: Mark Zuckerberg
+    之后: Zuckerberg
+    身份: Meta 的 CEO
+    音译: [马克·扎克伯格, 扎克伯格, 小扎]
+  - 写法: 刘扬伟
+    身份: 鸿海董事长
+    应改: [Young Liu, Young-way Liu]
+  - 写法: 梁文锋
+    身份: DeepSeek 创始人
+    应改: [Liang Wenfeng]
+
+  # 本节目的主播（2026-11-01 晚用户定）：按英文念；开场自我介绍"我是 Shirley""大家好，我是 Dylan"是"只说我们"唯一的例外
+  - 写法: Shirley
+    身份: 本节目的女声主播（声音档案"主声音"，庚A）
+    音译: [雪莉, 雪丽, 谢莉, 舍莉]
+    读音: 按英文念 /ˈʃɜːrli/；第十轮 Gemini 实测念"我是 Shirley"，本机 Whisper 转写成英文 Shirley
+    备注: 名字固定，没有"之后"的简称；视频旁白不出现
+  - 写法: Dylan
+    身份: 本节目周日对谈的男声搭档（声音档案"周日搭档.乙"，男声03）
+    音译: [迪伦, 狄伦, 迪兰, 狄兰]
+    例外: [鲍勃·迪伦]
+    读音: 按英文念 /ˈdɪlən/；第十轮 Gemini 实测念"大家好，我是 Dylan"，本机 Whisper 转写成英文 Dylan
+    备注: 只出现在周日对谈
+
+  # 11-01 晚周末彩排补（身份照 11-01 周日彩排的事件卡；事件卡没写身份的留空，用时按当天事件卡）
+  - 写法: Elon Musk
+    之后: Musk
+    音译: [埃隆·马斯克, 伊隆·马斯克, 马斯克]
+    备注: 11-01 事件卡只说他在 Reddit 截图里回复，没写身份
+  - 写法: Sundar Pichai
+    之后: Pichai
+    身份: 谷歌的 CEO
+    音译: [桑达尔·皮查伊, 桑达尔·皮柴, 皮查伊, 皮柴, 劈柴]
+  - 写法: Demis Hassabis
+    之后: Hassabis
+    音译: [戴密斯·哈萨比斯, 德米斯·哈萨比斯, 哈萨比斯]
+    备注: 11-01 事件卡没写身份
+  - 写法: Arav Srinivas
+    之后: Srinivas
+    身份: Perplexity 的 CEO
+    音译: [阿拉夫·斯里尼瓦斯, 斯里尼瓦斯]
+    备注: 照 11-01 事件卡的写法；外面常见写法是 Aravind Srinivas，用前对一下原报道
+  - 写法: Mike Overell
+    之后: Overell
+    身份: Anthropic 负责 Claude 订阅产品
+    音译: [迈克·奥弗雷尔, 奥弗雷尔]
+
+  # 11-03 补（身份照 11-03 事件卡）
+  - 写法: Dan Driscoll
+    之后: Driscoll
+    身份: 前美国陆军部长
+    备注: 11-03 事件卡：加入 OpenAI，任国家安全现代化高级顾问
+  - 写法: John Ternus
+    之后: Ternus
+    身份: 苹果的 CEO（11-03 事件卡的说法）
+    音译: [约翰·特努斯, 特努斯]
+    读音: TUR-nəs（/ˈtɜːrnəs/，重音在前）；不念 Weston
+    备注: 11-03 事件卡（钛媒体）里写作"约翰·特努斯"；Tim Cook 那一条的身份是 10-31 的说法。11-09 云端那期播客两处（7:33 全名、7:50 只说姓）转写成 Weston，你耳听确认念错了；正式那期音频用本机两个转写模型再转，是 Weston、Weston（large-v3-turbo）和 Weston、Wesdon（medium）。11-09 晚用 Gemini 庚A、正式那一块的语气原文、正式稿的两句（全名句"苹果 CEO John Ternus 正在施压……"、只说姓句"Ternus 在公开场合……"）实测三种写法（共 10 条）：原写法 Ternus 4 条，turbo 转写 Turnus、Ternus、Turnus、Ternus，medium 转写 Ternes、Ternes、Ternes、Ternus；Tur-nus 4 条，turbo 4 条都是 Ternus，medium 是 Turnis、Ternes、Turness、Ternus；Turnus 2 条，turbo 是 Turnus、Ternus，medium 两条都是 Ternes。十条都是 TUR-nəs 的同音写法，没再出现 Weston：11-09 那次念错是碰上的，原写法这次没念错，候选没显出比原写法强，所以没启用，配音照原写法。Tur-nus（turbo 每条都转写回 Ternus）记在"其他"里单列的 Ternus 一条"配音写法（待启用）"，待你耳听 本机资料/试验/读音试听_1109b/（给人听的 wav，iCloud 同步、不进 git；实验脚本和数据在 mini 的 ~/.cache/frontier-daily/验证/读音实测_1109b/）再定。单列是因为人名这一条的"配音写法"会把整个"John Ternus"换成一个词，又不换只说姓的"Ternus"。对稿的专名读音清单会拦 Weston（2026-11-09 晚补）。待验证：之后每期出现就按审片清单第 25 项单列核对
+  - 写法: Kevan Parekh
+    之后: Parekh
+    身份: 苹果的 CFO
+  - 写法: Mark Mahaney
+    之后: Mahaney
+    身份: Evercore ISI 的分析师
+  - 写法: Rob Oliver
+    之后: Oliver
+    身份: Baird 的高级研究分析师
+  - 写法: Emmanuel Roman
+    之后: Roman
+    身份: PIMCO 的首席执行官
+    备注: 11-03 事件卡里的"罗马"是 MiMo 自造的译名，不用；也不放进音译（"罗马"是地名，自动改会误伤）
+  - 写法: Rikiya Takehi
+    之后: Takehi
+    备注: 日本研究者，查不到汉字写法，保留英文（用户 11-03 定）
+
+  # 11-04 补（写法照 11-04 事件卡里英文原报道的拼写，身份照事件卡的说法；2026-11-05 补表）
+  - 写法: Chris Phillips
+    之后: Phillips
+    身份: 谷歌的教育业务副总裁（11-04 事件卡 E001：The Verge 转述《纽约时报》，原文 Google’s vice president of education）
+    音译: [克里斯·菲利普斯]
+    备注: 单独的"菲利普斯"没列进音译：会误改"菲利普斯堡"这类地名
+  - 写法: Bernie Sanders
+    之后: Sanders
+    身份: 参议员（佛蒙特州；11-04 事件卡 E001，CNBC）
+    音译: [伯尼·桑德斯]
+  - 写法: Zohran Mamdani
+    之后: Mamdani
+    身份: 纽约市市长（11-04 事件卡 E001，The Verge）
+    音译: [佐兰·马姆达尼, 佐赫兰·马姆达尼, 马姆达尼]
+  - 写法: Lina Khan
+    之后: Khan
+    身份: 前美国联邦贸易委员会主席（11-04 事件卡 E001，CNBC）
+    音译: [莉娜·汗, 莉娜·可汗, 丽娜·汗]
+  - 写法: Richard Blumenthal
+    之后: Blumenthal
+    身份: 联邦参议员（康涅狄格州，民主党；11-04 事件卡 E001，CNBC）
+    音译: [理查德·布卢门撒尔, 理查德·布卢门萨尔, 布卢门撒尔, 布卢门萨尔]
+  - 写法: Josh Hawley
+    之后: Hawley
+    身份: 联邦参议员（密苏里州，共和党；11-04 事件卡 E001，CNBC）
+    音译: [乔什·霍利, 乔希·霍利]
+  - 写法: Adam Fry
+    之后: Fry
+    身份: OpenAI 的 ChatGPT 消费者产品负责人（11-04 事件卡 E004，The Verge）
+    音译: [亚当·弗莱]
+    备注: 事件卡中文写"亚当·弗莱""弗莱"；单独的"弗莱"没列进音译：会误改"弗莱堡"
+  - 写法: Satya Nadella
+    之后: Nadella
+    身份: 微软的 CEO（11-04 事件卡 E004，The Verge）
+    音译: [萨蒂亚·纳德拉, 萨提亚·纳德拉, 纳德拉]
+
+  # 11-06 补（写法、身份照 11-06 事件卡；读音一栏的"11-06 配音"指 11-06 回听核对报告里的转写结果）
+  - 写法: Chris Lehane
+    之后: Lehane
+    身份: OpenAI 的首席全球事务官（11-06 事件卡 E003：Chief Global Affairs Officer，CNBC）
+    读音: 11-06 配音念得可以（转写成 Lehane、LeHain、Lahane），不另注
+  - 写法: Fouad Matin
+    之后: Matin
+    身份: OpenAI 网络安全准备度与安全团队负责人（11-06 事件卡 E001，The Verge：head of OpenAI’s cyber preparedness and safety）
+    读音: Fouad 是阿拉伯语名，常见读法约 foo-AHD（英文维基 Fuad 条给的阿拉伯语读音 [fuːʔ.aːd]）；Matin 本人怎么念未核实（2026-11-06 查过，没找到他本人的读法）。11-06 配音念成 Fo-ward Martin／Matan，Fouad 还算可以，Matin 是否贴近本人读法待查
+  - 写法: Matti Klemm
+    之后: Klemm
+    身份: 德国配音演员，演员 Jason Momoa 的德语配音（11-06 事件卡 E206，Slator）
+    读音: 11-06 配音念得可以（转写成 Maddie Klimm）
+  - 写法: Jason Momoa
+    之后: Momoa
+    身份: 演员（11-06 事件卡 E206：Matti Klemm 是他的德语配音）
+  - 写法: Yassamin Ansari
+    之后: Ansari
+    身份: 美国亚利桑那州的民主党众议员（11-06 事件卡 E176）
+    读音: 11-06 配音念得可以（转写成 Yasemin Ansari）
+
+  # 11-09 补
+  - 写法: 姚顺雨
+    身份: 腾讯首席 AI 科学家（11-09 事件卡 E008 还写了"前 OpenAI 研究员"）
+    应改: [Yao Shunyu, Vinces Yao]
+    读音: yáo shùn yǔ
+    备注: 11-09 事件卡只写拼音（南华早报原文写 Vinces Yao Shunyu），那期播客照写拼音，配音念怪了（转写成"姚书游""姚承宇""姚书怀"）。2026-11-09 查实中文名：IT之家 2026-06-05 https://www.ithome.com/0/960/277.htm 写"姚顺雨（Vinces Yao）"任腾讯"CEO／总裁办公室"首席 AI 科学家，并写他 2024 年 8 月加入 OpenAI 任研究科学家；澎湃新闻 2026-06-07 https://www.thepaper.cn/newsDetail_forward_33323740 写"腾讯首席AI科学家姚顺雨"。英文名 Vinces Yao、单位、职务、OpenAI 经历都和事件卡对得上。腾讯官方页面没查（待核，不影响用字）。专名读音清单（专名读音.yaml）里有这几种已知误读
+  - 写法: Mark Gurman
+    之后: Gurman
+    身份: 彭博记者（11-09 事件卡 E010：Bloomberg's Mark Gurman）
+    音译: [马克·古尔曼, 古尔曼, 马克·格尔曼, 格尔曼]
+    读音: GUR-mən，G 是硬音（同 good 的 g），不念 German（JUR-mən）
+    备注: 西方人名照规矩写英文、按英文念。主流中文媒体的通行译名是"古尔曼"（IT之家 https://www.ithome.com/0/981/811.htm 、凤凰网科技 https://tech.ifeng.com/c/8wAQ24MPwQM 等，2026-11-09 查），只当读音参考，口播不用。11-09 播客三处里一处被转写成 German，你耳听确认像 German。11-09 实测三种写法（Mark Gurman、Mark Ghurman、Mark Gur-man，各一句），转写都是 Gurman，看辅音开头的摩擦噪声也分不出高下，所以没定配音写法，试听文件在 本机资料/试验/读音试听_1109/（给人听的 wav，在仓库根目录下、iCloud 同步、不进 git；实验脚本和数据在 mini 的 ~/.cache/frontier-daily/验证/读音实测_1109/），待你耳听再定；对稿的专名读音清单会拦"German"
+  - 写法: Marco Rubio
+    之后: Rubio
+    身份: 美国国务卿（11-10 事件卡 E001 的说法：The Verge 转引《纽约时报》，美国国务卿马可·鲁比奥在特朗普 5 月访华前曾协助起草一份备忘录）
+    音译: [马可·鲁比奥, 马尔科·鲁比奥, 鲁比奥, 卢比奥]
+    读音: ROO-bee-oh（/ˈruːbioʊ/，重音在前）；Marco 是 MAR-koh
+    备注: 事件卡中文原文写"马可·鲁比奥"，中文媒体也常写"卢比奥"；照规矩写英文原名、按英文念，第一次带身份，之后只说 Rubio（2026-11-10 补）。11-10 云端那期视频 81–83 秒念的"美国国务卿 Marco Rubio"，本机两个转写模型（large-v3-turbo、medium）都转写成 Marco Rubio，没发现问题
+
+# ─────────────────────── 公司与机构：通行中文名 ───────────────────────
+公司:
+  - 写法: 苹果
+    应改: [Apple, Apple Inc.]
+    只提醒: true
+    备注: 产品名里的 Apple 保留，如"Apple 智能""通过 Apple 登录""Apple Vision Pro"（见产品）
+  - 写法: 谷歌
+    应改: [Google]
+    只提醒: true
+  - 写法: Alphabet
+    身份: 谷歌的母公司
+    备注: 没有通行中文名，用英文
+  - 写法: 微软
+    应改: [Microsoft]
+    只提醒: true
+  - 写法: 英伟达
+    应改: [Nvidia, NVIDIA]
+  - 写法: 英特尔
+    应改: [Intel]
+    只提醒: true
+    例外: [Intel 3]
+    备注: Intel 3 是英特尔一代制程的名字，保留
+  - 写法: 三星
+    也可写: [三星电子]
+    应改: [Samsung, Samsung Electronics]
+  - 写法: SK 海力士
+    也可写: [SK海力士]
+    应改: [SK Hynix, SK hynix]
+    读音: SK 按字母读
+  - 写法: 亚马逊
+    应改: [Amazon]
+    只提醒: true
+    备注: 规则里的例子
+  - 写法: 阿里巴巴
+    也可写: [阿里]
+    应改: [Alibaba]
+  - 写法: 阿里云
+    应改: [Alibaba Cloud]
+  - 写法: 百度
+    应改: [Baidu]
+  - 写法: 台积电
+    应改: [TSMC]
+  - 写法: 高通
+    应改: [Qualcomm]
+  - 写法: 博通
+    应改: [Broadcom]
+  - 写法: 长鑫科技
+    也可写: [长鑫]
+    应改: [CXMT, ChangXin Memory]
+  - 写法: 欣兴电子
+    应改: [Unimicron]
+  - 写法: 农业银行
+    也可写: [中国农业银行]
+    应改: [Agricultural Bank of China]
+  - 写法: 工商银行
+    也可写: [中国工商银行]
+    应改: [ICBC]
+  - 写法: 标普
+    也可写: [标普全球评级]
+    应改: [S&P, S&P Global Ratings, Standard & Poor's]
+  - 写法: 道琼斯
+    应改: [Dow Jones]
+    备注: 10-31 用到的是"道琼斯市场数据"
+  - 写法: 网信办
+    也可写: [国家网信办]
+    应改: [CAC]
+    只提醒: true
+  - 写法: 中证指数公司
+    应改: [China Securities Index]
+  - 写法: 华尔街
+    应改: [Wall Street]
+
+# ─────────────────────── 公司与机构：用英文 ───────────────────────
+  - 写法: OpenAI
+  - 写法: Anthropic
+  - 写法: Meta
+    也可写: [Meta Platforms]
+  - 写法: Reddit
+  - 写法: Cursor
+    备注: AI 编程工具，也是它的插件商城名（Cursor Marketplace）
+  - 写法: Mistral
+    也可写: [Mistral AI]
+    备注: 法国公司
+  - 写法: AMD
+    读音: 按字母读
+  - 写法: Arm
+  - 写法: Ibiden
+    备注: 日本公司，通行写英文
+  - 写法: Phorian
+    备注: 安全公司
+  - 写法: Cognition
+    备注: AI 编程公司，FrontierCode 基准是它的
+  - 写法: Artificial Analysis
+    备注: 第三方评测机构
+  - 写法: Orange Cyberdefense
+  - 写法: OpenCode
+    备注: AI 编程工具
+  - 写法: DeepSeek
+    备注: 公司中文名深度求索，口播通用 DeepSeek
+  - 写法: LSEG
+    读音: 按字母读
+    备注: 伦敦证券交易所集团，CNBC 引它的分析师预期
+  - 写法: KeyBanc
+    备注: 投行
+  - 写法: Melius
+    备注: 研究机构 Melius Research
+  - 写法: D.A. Davidson
+    备注: 投行
+  - 写法: Raymond James
+    音译: [雷蒙德·詹姆斯, 雷蒙德詹姆斯]
+    备注: 投行
+  - 写法: Citizens
+    也可写: [Citizens JMP]
+    备注: 分析师机构
+
+  # 11-01 补
+  - 写法: 黑石
+    也可写: [黑石集团]
+    应改: [Blackstone]
+  - 写法: 鸿海
+    也可写: [富士康, 鸿海精密]
+    应改: [Foxconn, Hon Hai]
+  - 写法: 铠侠
+    应改: [Kioxia]
+  - 写法: 美光
+    应改: [Micron]
+  - 写法: 闪迪
+    应改: [SanDisk, Sandisk]
+  - 写法: 傅利叶
+    应改: [Fourier, Fourier Intelligence]
+  - 写法: 腾讯
+    应改: [Tencent]
+  - 写法: 宁德时代
+    应改: [CATL]
+  - 写法: 京东
+    应改: [JD, JD.com]
+  - 写法: 中芯国际
+    应改: [SMIC]
+  - 写法: 长鑫存储
+    备注: 长鑫科技的存储业务名，事件卡里两种都有
+  - 写法: 无界动力
+  - 写法: 达特茅斯学院
+    也可写: [达特茅斯]
+    应改: [Dartmouth, Dartmouth College]
+  - 写法: xAI
+    备注: SpaceX 旗下；报道里也写 SpaceXAI、SpaceXSI，口播统一 xAI，读 x-A-I
+  - 写法: NAACP
+    读音: 按字母读 N-A-A-C-P
+    备注: 美国民权组织，口播直接说 NAACP
+
+  # 11-01 晚周末彩排补
+  - 写法: Perplexity
+    备注: AI 搜索公司
+  - 写法: Andon Labs
+    备注: 独立评测机构（Vending-Bench、Blueprint-Bench）
+  - 写法: ValsAI
+    也可写: [Vals, Vals AI]
+    备注: 第三方评测机构，事件卡写作 ValsAI，也简称 Vals
+  - 写法: Arena
+    备注: 人类偏好评测平台，榜单有 Text Arena、Agent Arena、Code Arena
+
+  # 11-03 补
+  - 写法: Evercore ISI
+    备注: 投行 Evercore 的研究部门（11-03 事件卡）
+  - 写法: Baird
+    备注: 投行（11-03 事件卡）
+  - 写法: PIMCO
+    中文名: [品浩, 太平洋投资管理公司]
+    备注: PIMCO 香港中文官网写作'品浩（PIMCO）'（2026-11-03 查 pimco.com/hk/zh/about-us）；全称太平洋投资管理公司，媒体常用，两个都算
+  - 写法: MIT
+    中文名: 麻省理工学院
+    备注: 11-03 事件卡；第一次出现补中文名（用户 11-03 定）
+  - 写法: MIT CSAIL
+    也可写: [CSAIL]
+    中文名: [麻省理工学院计算机科学与人工智能实验室, 麻省理工学院]
+    备注: 11-03 事件卡；第一次出现补中文名（用户 11-03 定）。口播里全称太长，点明是麻省理工学院就够，如"麻省理工学院的一个 AI 实验室，MIT CSAIL"（11-03 定）
+  - 写法: Bing
+    中文名: 必应
+    备注: 微软的搜索引擎，官方中文名"必应"（cn.bing.com）；11-04 稿里出现，按 11-03 规则第一次补中文，如"Bing，也就是必应"（11-05 补）
+
+  # 11-04 补（2026-11-05 查官网）
+  - 写法: OPPO
+    备注: 国产手机品牌，官网 oppo.com 全大写（页脚"© 2004 - 2026 OPPO"，2026-11-05 查）；中英文都写 OPPO，按英文念
+  - 写法: vivo
+    备注: 国产手机品牌，官网 vivo.com.cn 全小写（2026-11-05 查）；句首也写 vivo，按英文念
+  - 写法: OpenRouter
+    备注: 模型接口聚合平台，官网 openrouter.ai 写 OpenRouter（页脚"© 2026 OpenRouter, Inc"，2026-11-05 查）；11-04 事件卡 E059：Hy4 在上面上线
+  - 写法: Ferric
+    也可写: [Ferric, Inc.]
+    备注: 集成稳压器（IVR）企业；onsemi（安森美）2026-11-02 新闻稿宣布收购，第一次写 Ferric, Inc.、之后写 Ferric（2026-11-05 查）。口播说"集成稳压器企业 Ferric"
+
+  # 11-06 补（写法、身份照 11-06 事件卡）
+  - 写法: Ricursive Intelligence
+    也可写: [Ricursive]
+    身份: 由前谷歌研究员创立的 AI 实验室（11-06 事件卡 E002）
+    读音: 拼写是 Ricursive（不是 Recursive），配音和转写都按 recursive 念，听起来一样。11-06 视频"Ricursive Intelligence 发布"连着念，"发布"被带成英文腔（转写成 fabist）；加了逗号也一样（转写成 Fabula），要放在句中、前面先垫中文（"前谷歌研究员创立的 Ricursive Intelligence，发布了"，11-06 晚重录后两个模型都听成"发布了"）
+    备注: Ripple-65B Preview 是它的模型
+  - 写法: Thinking Machines Lab
+    也可写: [Thinking Machines]
+    备注: AI 公司，Inkling 系列模型是它的（11-06 事件卡 E009）
+  - 写法: Modal
+    身份: 算力平台（11-06 事件卡 E142 的说法）
+    读音: 按英文单词 modal 念（公司自己的读法未核实）；11-06 配音念得接近 model，听众可能听成"模型介绍……"，口播第一次说"算力平台 Modal"
+  - 写法: Plaid
+    身份: 银行桥接平台（11-06 事件卡 E006）
+    读音: 按英文单词 plaid 念 plad；11-06 配音念对
+  - 写法: ABB
+    身份: 瑞士-瑞典的电气与自动化技术公司（11-06 事件卡 E007）
+    读音: 按字母读 A-B-B
+  - 写法: Manus
+    身份: AI 初创公司（11-06 事件卡 E007：Meta 被要求撤销对它的收购）
+  - 写法: Hugging Face
+    身份: 开源 AI 社区（11-06 事件卡 E001）
+  - 写法: Netflix
+    备注: 11-06 事件卡 E206 写 Netflix；中文媒体也有"奈飞""网飞"的叫法，口播照原名 Netflix（11-06 配音念对）
+  - 写法: Airbnb
+    备注: 11-06 事件卡 E017 写 Airbnb；口播照原名
+  - 写法: Ballotpedia
+    备注: 美国的选举信息网站（11-06 事件卡 E003：CNBC 引用它的分析）；11-06 配音念得可以（转写成 Balapedia）
+
+# ───────────────────── 产品、模型、项目、榜单 ─────────────────────
+产品:
+  # 苹果（官方中文名照用）
+  - 写法: Apple 智能
+    也可写: [Apple智能]
+    应改: [Apple Intelligence]
+    备注: 苹果官方中文名
+  - 写法: Siri
+  - 写法: Siri AI
+    备注: WWDC 2026 宣布的下一代 Siri
+  - 写法: FaceTime
+  - 写法: iPhone
+    备注: 型号写法如 iPhone 15 Pro、iPhone 16e、iPhone Air、iPhone Duo
+  - 写法: iPad
+  - 写法: Mac
+  - 写法: MacBook Pro
+  - 写法: Apple Vision Pro
+  - 写法: iOS
+    备注: 版本写法如 iOS 27.3
+  - 写法: WWDC
+    读音: 按字母读
+    备注: 苹果全球开发者大会，如 WWDC 2026
+  - 写法: Newsroom
+    备注: 苹果官网的新闻栏目
+  - 写法: 通过 Apple 登录
+    应改: [Sign in with Apple]
+  - 写法: 私密云端运算
+    应改: [Private Cloud Compute]
+  - 写法: 智绘表情
+    应改: [Genmoji]
+  - 写法: 图乐园
+    应改: [Image Playground]
+  - 写法: 视觉智能
+    应改: [Visual Intelligence]
+  - 写法: 写作工具
+    应改: [Writing Tools]
+  # 阿里
+  - 写法: 千问
+    也可写: [通义千问]
+    应改: [Qwen]
+    备注: 阿里巴巴的模型品牌，官方中文名。英文 Qwen 配音读法不稳（10-31 v2 对稿里被转写成"宽文""q1""婚"），口播一律写"千问"
+  - 写法: 千问 4
+    也可写: [千问4]
+    应改: [Qwen4, Qwen 4]
+    备注: 预告里的型号 Qwen4-Max、Qwen4-Flash、Qwen4-Plus、Qwen4-27B，口播说成"千问 4 的 Max、Flash、Plus 和一款 27B"
+  - 写法: 千问 4 Max
+    应改: [Qwen4-Max]
+    只提醒: true
+  - 写法: 千问 4 Flash
+    应改: [Qwen4-Flash]
+    只提醒: true
+  - 写法: 千问 4 Plus
+    应改: [Qwen4-Plus]
+    只提醒: true
+  - 写法: 千问 4 27B
+    应改: [Qwen4-27B]
+    只提醒: true
+  - 写法: 通义万相
+    应改: [Wanxiang, Tongyi Wanxiang]
+  - 写法: 云栖大会
+    应改: [Apsara Conference, Apsara]
+    备注: 阿里云的年度大会；10-31 预告里那场在阿姆斯特丹
+  - 写法: qwen-code
+    备注: 千问的开源编程工具代码库；口播一般说"一段代码提交"即可
+  # OpenAI
+  - 写法: ChatGPT
+  - 写法: Stargate
+    应改: [星际之门]
+    备注: OpenAI 的数据中心项目，口播用原名
+  - 写法: GPT-6 Astra
+    也可写: [Astra]
+    备注: 第二次起可以只说 Astra
+  - 写法: GPT-6 Luna
+    备注: Tom's Hardware 提到的订阅产品名，材料里没有更多背景
+  # Anthropic
+  - 写法: Claude
+    读音: /klɔːd/，一个音节，像英文 clawed；不念 cloud（/klaʊd/）
+    配音写法（待启用）: Klawd
+    备注: 11-10 你耳听试听后定：原写法念出来本来就接近 Klawd，不启用，配音照原写法 Claude；Klawd 这一栏只留作记录（程序不认）。以下是当初的实测：11-09 播客三处都转写成 cloud，你耳听确认念成了 cloud；往期 11-02、11-03、11-06 有 Claude 的块转写也全是 cloud。11-09 用 Gemini 庚A（正式的语气）实测 Claude、Clawed、Klawd、Klod 各一句，Claude、Klawd 另各补一句，再配一段和正式块一样长的 Klawd（共 $0.0195，记在测试账本，没进月度账本）。看元音共振峰（F1：嘴张多大）：正式那期念错的三处，元音里 F1 从约 840–880 赫兹往下掉 260–300 赫兹，是滑向 /ʊ/ 的双元音 cloud；Klawd 第一句 F1 只掉 45 赫兹、高位保持约 105 毫秒，而且是唯一被整句转写成 Claude 的；长段落里两处 Klawd 掉 120–150 赫兹、开口也小一些（F1 峰值 665–735），比正式那期更像单元音 /ɔː/。证据不算硬（同一写法两次结果不同，转写也会把念对的写成 Cloud），Klawd 只是候选，待你耳听 本机资料/试验/读音试听_1109/（给人听的 wav，在仓库根目录下、iCloud 同步、不进 git；实验脚本和数据在 mini 的 ~/.cache/frontier-daily/验证/读音实测_1109/） 里的试听再定。启用后：稿子、字幕、网页照写 Claude；Claude Code、Claude Opus 这些里的 Claude 也一起换（按整词换）
+  - 写法: Claude Code
+  - 写法: Claude Opus 5.5
+    也可写: [Claude Opus, Opus 5.5, Opus]
+  - 写法: Claude Sonnet 5.5
+    也可写: [Claude Sonnet, Sonnet 5.5, Sonnet]
+  - 写法: Claude Fable 5.2
+    也可写: [Claude Fable, Fable 5.2, Fable]
+    读音: Fable 念 FAY-bəl（/ˈfeɪbəl/，两个音节，同英文单词 fable）
+    备注: Anthropic 的模型线（11-10 事件卡 E002，官方博客：Anthropic 升级了 Claude Fable 与 Claude Mythos 两条模型线，发布 Fable 5.2、Mythos 5.2）。11-10 云端那期视频 21 秒"发布了 Claude Fable 5.2"，Fable 整个没念，你耳听确认：本机两个转写模型整句都是"Claude（Cloud）5.2"，从"了"到"5.2"中间只有约 0.3 秒，只够念一个 Claude；单切"发布了"到句末，"发布了"被转写成 Fabula（英文腔），Fable 仍没有。11-10 用 Gemini 庚A、正式那一章的语气试配：原写法 2 条、前面垫"新模型"（事件卡原话"新模型"）2 条，4 条都念出了 Fable（转写 Fable、Fabel、Faber），垫中文没显出更好，没定配音写法，配音照原写法。这种整个英文名被吞掉的，11-10 起对稿另有一道"英文名漏念"（tts_qc.name_drops）：自动重录一次，还在就在 qc.json 那一块写"英文名漏念（请你耳听）"。试听在 本机资料/试验/读音试听_1110/（iCloud 同步、不进 git；脚本和数据在 mini 的 ~/.cache/frontier-daily/验证/读音实测_1110/）
+  # 英伟达
+  - 写法: GR00T
+    读音: groot（/ɡruːt/，一个音节，同英文 Groot）；中间是两个数字 0，不是字母 O，也不按字母、数字逐个念。读法照 11-10 用户给的；英伟达官方怎么念没查（未核实）
+    配音写法（待启用）: Groot
+    备注: 英伟达的开放机器人世界动作模型，型号如 GR00T 2（11-10 事件卡 E032，NVIDIA 官方博客：在机器人学习大会 CoRL 上发布 GR00T 2）。11-10 云端那期播客 7:00"发布了 GR00T 2"，两个转写模型都是"GR002 2.0"，你耳听确认念得不对；从"GR"到"2.0"约 1.5 秒，像是逐个念的。11-10 用 Gemini 庚A、正式那一块的语气试配三种写法、各两条：原写法 GR00T 2 两条，转写 GR00TR、GROOT2（medium 是 GR00T2、GROOT2），名字连"2"约 1.3 秒，不像一个音节；Groot 2 两条，名字连"2"只有 0.6–0.7 秒，是一个音节，但转写是 Growth 2、Group 2（medium 是 Growth2、Groot 2），只有一条写成 Groot；G-R-zero-zero-T 2 两条，转写 GR00T2、GR0T2（两个模型一样），是按字母念的，不是 groot。按规矩（原写法确实念错、候选两条以上都转写对才启用），Groot 只记在"配音写法（待启用）"，没生效，配音照原写法；你耳听 本机资料/试验/读音试听_1110/ 里的"GR00T_原写法""GR00T_候选Groot"和"正式11-10播客_6分59到7分05"再定（试听是 wav，iCloud 同步、不进 git；脚本和数据在 mini 的 ~/.cache/frontier-daily/验证/读音实测_1110/）。启用后：稿子、字幕、网页照写 GR00T，对稿的专名读音清单会拦 GR002 这一类（专名读音.yaml）
+  # 蚂蚁灵波
+  - 写法: LingBot-Touch
+    也可写: [LingBot-Touch-Tiny, LingBot-Touch-Small]
+    读音: 按英文拼写念 Ling-bot Touch；官方读法没查到（未核实）
+    备注: 蚂蚁灵波科技 11 月 10 日开源的触觉基础模型（11-10 事件卡 E005，IT之家转述官方介绍）；两种容量 LingBot-Touch-Tiny、LingBot-Touch-Small（同一张事件卡）。11-10 云端那期播客三处、视频一处，本机两个转写模型都写成 Limbo Touch（"灵波"也有一处转写成"凌波""零波"）；你没说念错，没试配音写法，待你耳听（2026-11-10 补）
+  # 谷歌
+  - 写法: Gemini
+    备注: 型号如 Gemini 4 Carbon、Gemini 4 Argon、Gemini 3.1 Pro
+  - 写法: Gemini 4 Carbon
+    也可写: [Carbon]
+    备注: 第二次起可以只说 Carbon
+  - 写法: Gemini 4 Argon
+    也可写: [Argon]
+    备注: 第二次起可以只说 Argon
+  - 写法: AI 概览
+    应改: [AI Overviews, AI Overview]
+    备注: 谷歌搜索结果顶部的 AI 摘要
+  - 写法: AI 模式
+    应改: [AI Mode, AI mode]
+  # Meta
+  - 写法: Muse
+    备注: Meta 的智能体应用，同名基础模型；榜单上另有 Muse Wonder
+  - 写法: Muse Wonder
+  # Mistral
+  - 写法: Mistral Large 4
+  - 写法: Le Chonk
+    读音: 英文读，约"勒 chonk"
+    备注: Mistral Large 4 的昵称
+  - 写法: Mistral Forge
+  # 其他模型与工具
+  - 写法: DeepSeek V4.1 Flash
+    也可写: [DeepSeek V4.1-Flash]
+  - 写法: OpenCode Go
+    备注: OpenCode 的订阅档
+  - 写法: Operation Cheepseek
+    备注: OpenCode 的低价额度计划，cheap 和 DeepSeek 拼成
+  - 写法: GLM-5.3
+  - 写法: Kimi K3
+    也可写: [Kimi K3.1 Pro, Kimi]
+  - 写法: Grok 4.7
+    也可写: [Grok]
+  - 写法: Surface RTX Spark Dev Box
+  - 写法: VS Code
+  - 写法: Windows
+  - 写法: macOS
+  - 写法: Linux
+  - 写法: YouTube
+  - 写法: X
+    备注: 社交平台，原来的 Twitter；口播说"X 平台"
+  - 写法: GitHub
+  - 写法: Git
+  - 写法: For You
+    备注: Reddit 新的推荐信息流，口播可以说"For You 推荐流"
+  - 写法: 隐身模式
+    应改: [incognito mode]
+  # 11-01 晚周末彩排补：评测、项目和产品
+  - 写法: Text Arena
+    也可写: [Agent Arena, Code Arena]
+  - 写法: HLE-Diamond
+  - 写法: SEC-bench Pro
+    也可写: [SEC-bench]
+    备注: 漏洞发现基准
+  - 写法: ExploitGym
+    备注: 漏洞可利用性验证基准
+  - 写法: CWE-bench
+    备注: Collinear 的根因修补基准
+  - 写法: AA-Briefcase
+    也可写: [Briefcase]
+    备注: Artificial Analysis 的知识工作评测
+  - 写法: Antigravity CLI
+    备注: 谷歌的编程智能体命令行工具（事件卡：Carbon 用它跑 Coding Agent Index）
+  - 写法: Fairwind Program
+    也可写: [Fairwind]
+    备注: 谷歌逐步开放 Carbon 给可信伙伴的计划
+  - 写法: Chrome
+  - 写法: iMac
+  # 英特尔的制程和技术
+  - 写法: 18A
+  - 写法: 14A
+  - 写法: Intel 3
+  - 写法: EMIB-T
+    读音: 按字母读
+  # 榜单与评测
+  - 写法: FrontierCode
+    备注: Cognition 的私有编程基准，如 FrontierCode 2.0
+  - 写法: Terminal-Bench
+    备注: 如 Terminal-Bench 4.0
+  - 写法: Coding Agent Index
+    也可写: [Artificial Analysis Coding Agent Index, 编程智能体指数]
+    备注: 口播可以说"Artificial Analysis 的编程智能体指数"
+  - 写法: Cyber Index
+    也可写: [Artificial Analysis Cyber Index, 网络安全指数]
+  - 写法: Intelligence Index
+    也可写: [智能指数]
+    备注: Artificial Analysis 的综合指数，如 Intelligence Index v5
+  - 写法: Surge Code
+    备注: 盲测两两比较的评测
+  - 写法: 费城半导体指数
+    应改: [PHLX Semiconductor Index, Philadelphia Semiconductor Index]
+  - 写法: 上证综合指数
+    也可写: [上证指数]
+    应改: [SSE Composite Index]
+  # 节目
+  - 写法: Cheeky Pint
+    备注: YouTube 上的播客，Altman 在这里谈内存
+  - 写法: Squawk Box Europe
+    备注: CNBC 的节目
+
+  # 11-01 补
+  - 写法: Codex
+    备注: OpenAI 的编程智能体产品
+  - 写法: Xeon
+    读音: ZEE-on
+    备注: 英特尔的服务器处理器
+  - 写法: Colossus
+    备注: xAI 在孟菲斯的数据中心
+  - 写法: S-1
+    读音: S one
+    备注: 美国上市注册文件的编号；口播可以说"S-1 注册文件"
+  - 写法: Business
+    备注: OpenAI 的订阅档位名（Plus、Pro、Business）
+  - 写法: 腾讯混元
+    也可写: [混元]
+    应改: [Hunyuan]
+  - 写法: 微信支付
+    应改: [WeChat Pay]
+  - 写法: 飞书
+    应改: [Feishu, Lark]
+
+  # 11-03 补
+  - 写法: Daybreak
+    备注: OpenAI 和盟友一起加强网络韧性、保护关键服务的项目（11-03 事件卡）
+  - 写法: Gemma
+    备注: 谷歌的模型，如 Gemma 3 270M（11-03 事件卡）
+  - 写法: MATH-500
+    备注: 数学测试集，成绩写百分比（11-03 事件卡）；读音没实测
+  - 写法: Python
+    备注: 编程语言
+
+  # 11-04 补（2026-11-05 查官网）
+  - 写法: Classroom
+    也可写: [Google Classroom]
+    备注: 谷歌的课堂应用，官网 edu.google.com 写 Google Classroom（2026-11-05 查）；口播说"谷歌的课堂应用 Classroom"（11-04 事件卡 E001）
+  - 写法: Hy4
+    备注: 腾讯混元的模型（11-04 事件卡 E059，IT之家转述腾讯发布；混元官网首页是动态页，没取到型号写法）。网页、视频照写 Hy4；口播按字母念 H-Y-4，播客稿由"其他"里的"HY4"一条自动改成大写（2026-11-06 定，依据见那一条）。11-05 以前这里的也可写"Hy4 preview"去掉了：留着它，口播稿里的"Hy4 preview"就改不到（preview 记在型号后缀里，不会报"表里还没有"）
+  - 写法: Blender
+    备注: 开源三维软件，官网 blender.org（2026-11-05 查）；11-04 事件卡 E059
+
+  # 11-06 补（写法照 11-06 事件卡）
+  - 写法: Ripple-65B Preview
+    也可写: [Ripple-65B, Ripple]
+    备注: Ricursive Intelligence 的开放权重模型（11-06 事件卡 E002）；65B 是参数量，型号里的数字不转。11-06 配音另外 4 处转写成 Ripple，2 处含糊（Repo、Repple）
+  - 写法: TerminalBench
+    备注: 编程智能体基准，如 TerminalBench 2.1（11-06 事件卡 E002，Ricursive 自报成绩的写法）。和上面的 Terminal-Bench 是不是同一个基准未核实，照事件卡写
+  - 写法: Reflection Beam
+    备注: Ricursive 在 TerminalBench 2.1 上列出的对手模型（11-06 事件卡 E002，501B）；哪家公司的，事件卡没写
+  - 写法: Muse Spark Open
+    也可写: [Muse Spark]
+    备注: Meta 的开放权重模型（11-06 事件卡 E002，816B）；11-06 配音念成 MuSpark（连读），可以
+  - 写法: Inkling 2 Small
+    也可写: [Inkling 2, Inkling]
+    备注: Thinking Machines Lab 的模型（11-06 事件卡 E009）；"2"按英文念 two，11-06 配音念对
+  - 写法: GPT-6 Cyber
+    备注: OpenAI 专门做网络安全研究的模型（11-06 事件卡 E001）。11-06 视频"GPT-6 Cyber 在 OpenAI 自己的框架里"的"在"被吞掉了
+  - 写法: GPT-5.6 Cyber
+    备注: GPT-6 Cyber 的上一代（11-06 事件卡 E001）
+  - 写法: Daybreak Red
+    备注: OpenAI Daybreak 下面向经授权的防御性网络安全工作的项目（11-06 事件卡 E001）；Daybreak 见上
+  - 写法: Firefox
+    备注: 浏览器
+  - 写法: Apache 2.0
+    也可写: [Apache]
+    备注: 开源许可证，口播说"Apache 2.0 许可"（11-06 事件卡 E009）
+
+# ───────────────────────────── 媒体 ─────────────────────────────
+媒体:
+  # 通行中文名
+  - 写法: 《金融时报》
+    也可写: [金融时报]
+    应改: [Financial Times, The Financial Times]
+  - 写法: 《金融时报》
+    应改: [FT]
+    只提醒: true
+  - 写法: 《华尔街日报》
+    也可写: [华尔街日报]
+    应改: [The Wall Street Journal, Wall Street Journal, WSJ]
+  - 写法: 彭博社
+    也可写: [彭博]
+    应改: [Bloomberg]
+    只提醒: true
+  - 写法: 路透社
+    应改: [Reuters]
+    备注: 规则里的例子
+  - 写法: 《南华早报》
+    也可写: [南华早报]
+    应改: [South China Morning Post, SCMP]
+  - 写法: 澎湃新闻
+    应改: [The Paper]
+  - 写法: 极客公园
+    应改: [GeekPark, Geekpark]
+  - 写法: 少数派
+    应改: [sspai, SSPAI]
+  - 写法: IT之家
+    也可写: [IT 之家]
+    应改: [ITHome, IT Home]
+    读音: IT 按字母读
+  - 写法: 虎嗅
+    应改: [Huxiu]
+  - 写法: 新智元
+  # 用英文原名
+  - 写法: The Verge
+  - 写法: Ars Technica
+    也可写: [Ars]
+  - 写法: Tom's Hardware
+    也可写: [Tom’s Hardware]
+  - 写法: VentureBeat
+  - 写法: The Information
+  - 写法: TechCrunch
+  - 写法: CNBC
+    应改: [消费者新闻与商业频道]
+    读音: 按字母读
+  - 写法: Techmeme
+    读音: tech-meme
+    备注: 科技新闻聚合站，常常是转述别家的报道
+  - 写法: BleepingComputer
+    也可写: [bleepingcomputer]
+  - 写法: Hacker News
+  - 写法: AINews
+    备注: 每天汇总 X、Reddit 讨论的简报
+  - 写法: scaling01
+    备注: X 平台上的分析人士账号；口播一般说"一位分析人士"
+  - 写法: nrehiew
+    备注: X 平台上讨论评测方法的账号；口播一般说"一位讨论评测方法的人"
+  - 写法: teortaxesTex
+    备注: X 平台账号；口播一般不点名，说"X 平台上的一位用户"
+
+  # 11-01 补
+  - 写法: All-In
+    备注: 美国播客，口播说"All-In 播客"
+  - 写法: Semafor
+  - 写法: CNMO
+    读音: 按字母读
+    备注: 国内手机媒体，转述 The Information 的报道
+  - 写法: 日经亚洲
+    应改: [Nikkei Asia]
+  - 写法: 《华盛顿邮报》
+    也可写: [华盛顿邮报]
+    应改: [Washington Post, The Washington Post]
+
+  # 11-03 补
+  - 写法: Slator
+    备注: 语言服务业媒体（11-03 事件卡）
+  - 写法: 《科创板日报》
+    也可写: [科创板日报]
+    备注: 中文媒体，没有官方英文名；英文里用拼音 Kechuangban Ribao，不意译（用户 11-03 定）
+
+  # 11-04 补
+  - 写法: APPSO
+    也可写: [AppSo]
+    备注: 爱范儿旗下的应用栏目和公众号；爱范儿官网菜单、公众号二维码都写 APPSO（2026-11-05 查），站内也有 AppSo，统一写 APPSO。读音没定：11-04 配音一处被转写成 Epson
+
+  # 11-06 补
+  - 写法: NBC News
+    读音: NBC 按字母读
+    备注: 美国电视网的新闻部门（11-06 事件卡 E003：全国出口民调）
+
+# ───────────────────────────── 其他 ─────────────────────────────
+# 不是名字、但口播要按某种写法念的（2026-11-05 加）。标了"只改口播稿"的，网页、视频旁白不改（见文件头的字段说明）。
+# 写了"配音写法"的，稿子哪儿都不改，只在送去配音的那份文字里换（2026-11-07 加，见文件头）
+其他:
+  - 写法: DRAM
+    区分大小写: true
+    读音: dee-ram（/ˈdiːræm/，两个音节）：D 按字母念，RAM 按单词念（同 RAM）；不是英文单词 dram（烈酒，一个音节）
+    配音写法: D-RAM
+    备注: 动态随机存取存储器，内存芯片的主流。原来放在"缩写·按单词读"，只说别按字母念，没写清 D 要按字母念；11-07 视频旁白定案章"3D DRAM""DRAM-on-logic"两处都被念成一个音节的 dram（转写成 DREAM、D ream），同一期推手章、定案章作废的那一条念对了，是每次合成碰运气。11-07 用 Gemini 庚A 实测三种配音写法：D-RAM（两条）、D RAM、迪-RAM（各一条），四处、两处、两处都念成 dee-ram（看共振峰：DRAM 前面多出一段 /iː/）；定 D-RAM（连字符让"DRAM-on-logic"这类复合词换完仍连成一个词：D-RAM-on-logic）。MiMo 没测过。稿子、字幕、网页照写 DRAM，配音程序自动换（2026-11-07 加）
+  - 写法: C 加轮
+    也可写: [C+]
+    应改: [C+ 轮, C+轮]
+    只改口播稿: true
+    备注: 融资轮次。中文口播惯常念"C 加轮"，配音模型照字念"C+"可能念成"C plus"；11-04 三条配音（播客两条、视频一条，Gemini 庚A）实测都念成"C 加"，备用的 MiMo 没测过，口播稿统一写"C 加轮"更稳。网页、视频旁白里仍写"C+ 轮"（11-05 加）
+  - 写法: 设下闸门
+    应改: [设闸]
+    例外: [设闸门, 建设闸]
+    只改口播稿: true
+    备注: 11-06 的主题词"设闸"三处都没念成 zhá（视频开场、收尾转写成"设斩""设诈"，播客快讯转写成"社长""社砸"，音高是降升，不是第二声）；同一期"闸门"两处都念对了。口播稿自动改成"设下闸门"；视频旁白的字幕和配音是同一份字，程序不改，写稿时就别用"设闸"（写作指南第六节）。网页照原样（2026-11-06 加）
+  - 写法: HY4
+    应改: [Hy4]
+    只改口播稿: true
+    区分大小写: true
+    读音: 按字母读 H-Y-4
+    备注: 腾讯混元的模型 Hy4（见产品）。定成按字母念的依据：11-04 那期配音多数念成 H-Y-4（一处念成 high four）；11-06 播客"腾讯 Hy4"转写成"还为4""还未4""韩位4"，是把 Hy 当成一个音节念了。按字母念不会和别的词混，也和 11-04 多数一致。腾讯官方怎么念没查到（未核实）。口播稿自动改成全大写"HY4"：配音模型一般把全大写的字母串按字母念（11-06 的 NDA、CNBC 都念对了），但"HY4"本身还没实测。不用"H Y 4""H-Y-4"：稿子检查（script_check）要在事件卡里找到稿子的英文名，事件卡写的是 Hy4，大写 HY4 对得上，拆开的对不上，会停下。这一条要"区分大小写"，不然 HY4 会被当成 Hy4 再改一遍。网页、视频照写 Hy4（2026-11-06 加）
+
+  - 写法: 巴淡
+    也可写: [巴淡岛]
+    应改: [峇淡]
+    只改口播稿: true
+    读音: bā dàn dǎo
+    备注: 地名（读音表没有"地名"一组，暂放这里）。印尼廖内群岛省的岛，和新加坡隔海相望（11-09 事件卡 E035 英文：Batam, the Indonesian island facing Singapore；中文原文写"峇淡（巴淡）"）。口播第一次说"印尼的巴淡岛"，之后可以只说"巴淡岛"：11-09 播客写"和新加坡隔海相望的印度尼西亚巴淡"，你听成了印度。"峇"是生僻字，口播稿自动改成"巴淡"（"峇淡岛"改成"巴淡岛"）；"印尼的""岛"程序加不了，靠写稿（总规矩第 9 条）。网页照原样（2026-11-09 加）
+  - 写法: Thurrock
+    读音: THUR-ək（/ˈθʌrək/，th 是咬舌音，同 thumb 的开头）；不念 Sorrock、Farrock
+    备注: 地名（读音表没有"地名"一组，同巴淡暂放这里）。英国英格兰埃塞克斯郡的地区，在伦敦以东约 24 公里（11-09 事件卡 E042，IT之家转述《连线》：谷歌拟在这里建大型数据中心；事件卡中文写"瑟罗克（Thurrock）"）。口播照写 Thurrock、按英文念；"瑟罗克"是 IT之家的译名，没写进"中文名"（写了第 7 项会要求口播补中文）。11-09 云端那期播客两处（8:23、11:59）转写成 Sorrock、FAROC（审片另一次转写是 Sirrock），你耳听确认念错了；正式音频用 medium 再转是 SOROC、Farrock，开头的 th 都没了；同期视频 72 秒两次转写是 Thurrock、therock。11-09 晚用 Gemini 庚A、正式那两块的语气原文、正式稿的两句（请愿句"……伦敦以东约二十四公里的 Thurrock 建大型数据中心"、结尾句"还有 Thurrock 那座数据中心……"）实测三种写法（共 10 条）：原写法 Thurrock 4 条，large-v3-turbo 转写 The Rock、Thorak、Thirrock、Thurrock，medium 转写 Thorek、Thorac、Thurrock、Thurrock；Thurruck 4 条，turbo 是 Therock、THEROC、Therick、Thurrock，medium 是 Thirrock、THEROC、Thorac、Thorok；Thurr-uck 2 条，turbo 是 Therwick、Curic，medium 是 Thirwork、SORIC（结尾句那条两个模型都没听出 th）。原写法这次 th 都在、转写回 Thurrock 的最多（8 次里 3 次），两个候选都没比它强，所以没定配音写法，配音照写 Thurrock；试听在 本机资料/试验/读音试听_1109b/，待你耳听再定。对稿的专名读音清单会拦 Sorrock、FAROC 这几种（2026-11-09 晚加）。待验证：之后每期出现就按审片清单第 25 项单列核对
+  - 写法: Ternus
+    配音写法（待启用）: Tur-nus
+    备注: 只为配音写法单列，读音和实测结果见人名 John Ternus 一条。人名那一条的"配音写法"会把整个"John Ternus"换成一个词、又不换只说姓的"Ternus"；单列这一个词按整词换，"John Ternus"也会换成"John Tur-nus"。没生效，配音照原写法 Ternus；你耳听定了，把这一栏名字改成"配音写法"就生效（2026-11-09 晚加）。11-09 晚你耳听 本机资料/试验/读音试听_1109b/ 的试听，原写法和 Tur-nus 都没问题：定为照原写法配音、不启用 Tur-nus（留着备查）；万一又念成 Weston，专名读音清单会自动重录一次
+
+# ────────────────────── 缩写和常用英文词 ──────────────────────
+# 这些照写字母，稿子里出现不算"表里没有的英文名"
+缩写:
+  按字母读: [AI, CEO, CTO, CFO, GPU, PC, API, IP, SSH, EPS, ARPU, ARPDAU, DAU, DAUq, MoE, RL, PR, IDE, ASIC, SKU, DCAI, AAA, AA, BBB, GB, IT, SK, ATM, LSEG, CAC, BB, CPU, B, PDF, RSI, CAD, NDA]
+  # "五百零一 B""一点五 T"这类读法（视频旁白配音前的念法）里单独的字母，lexicon_check 自己认（前面是汉字数字），不收进这里：
+  # 收了单独的 K、T，"K-12""T-Mobile"里的字母也会被当成认识的（11-06 补）
+  按单词读: [RAM]
+  # DRAM 原来也在"按单词读"里，11-07 挪到上面"其他"：它是 D 按字母、RAM 按单词（dee-ram），配音时写成 D-RAM
+常用英文词: [token, agent, open weights, open-weight, Beta, beta, app, benchmark, super-agent, bug, investment-grade rating, investment-grade, investment grade, post-training, held-out test, Southaven, Transformer, Mixture-of-Experts, High, Critical, Medium]
+# Transformer、Mixture-of-Experts（11-06 补）：模型结构的英文术语；High、Critical、Medium：OpenAI 准备度框架的风险等级（11-06 事件卡 E001）
+# Southaven：美国密西西比州的城市（11-01 事件卡：xAI 在那里装燃气轮机），地名照英文念
+型号后缀: [Pro, Max, Plus, Flash, Mini, Air, Ultra, Lite, Duo, Small, Preview]

@@ -1,0 +1,9 @@
+{
+  "name": "frontier-daily-trigger",
+  "private": true,
+  "type": "module",
+  "description": "每日AI科技前沿简报的保底触发器（Cloudflare Worker）的本机测试（node --test tests/worker.test.js；认领的测试是 python3 -m unittest discover -s cloud/trigger/tests）。不需要安装任何依赖；部署用 run_wrangler.py 或 GitHub 上的'保底触发器'流程。",
+  "scripts": {
+    "test": "node --test tests/worker.test.js"
+  }
+}

@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+"""fd：每日AI科技前沿简报的总调度入口（一条命令把一期从头跑到尾，每一步都有检查、能单独重跑）。
+
+    ./fd doctor                          体检
+    ./fd run --date 2026-11-02           跑一期（--dry-run 只看计划）
+    ./fd status --date 2026-11-02        每一步的状态
+
+说明：文档/方案/总调度说明.md。程序在 pipeline/orchestrator/（只用 Python 标准库）。
+"""
+import os
+import sys
+
+sys.dont_write_bytecode = True                 # 项目在 iCloud 里，不生成 __pycache__
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"    # 换进项目环境重跑、以及 fd 叫起的子程序，也都不生成
+HERE = os.path.dirname(os.path.realpath(__file__))
+VENV = os.path.expanduser("~/.venvs/frontier-daily")
+VENV_PY = os.path.join(VENV, "bin", "python")
+
+# 有项目环境就换到它里面跑（版本固定 3.12、带 -u 不缓冲）；没有也能用系统 python3 跑 doctor，告诉你缺什么
+if os.path.exists(VENV_PY) and not os.environ.get("FD_NO_REEXEC") and \
+        os.path.realpath(sys.prefix) != os.path.realpath(VENV):
+    os.environ["FD_NO_REEXEC"] = "1"
+    os.execv(VENV_PY, [VENV_PY, "-u", os.path.abspath(__file__)] + sys.argv[1:])
+
+sys.path.insert(0, os.path.join(HERE, "pipeline"))
+from orchestrator.cli import main  # noqa: E402
+
+sys.exit(main(sys.argv[1:]))

@@ -1,0 +1,139 @@
+/* frontier-daily v3 · video.css — 视频播放器的控制条、分章页签、播放大按钮（v2 视频和第一版视频共用的类名），换成“发布会玻璃”样式。
+ * 画面本身的样式在 video2.css。第一版播放器（video.js，只给旧格式的往期用）读 --paper / --rule 等旧变量，这里把它们映射到 v3 的颜色。
+ * 只改样式，不改类名：video.js / video2.js 依赖这些类名。 */
+.vplayer {
+  --paper: var(--glass-solid); --paper-2: var(--glass-strong); --paper-3: var(--chip-2); --rule: var(--hair); --rule-2: var(--hair-2);
+  --plate: var(--chip); --scrim: rgba(0, 0, 0, .72); --bar-muted: var(--chart-muted); --ink-4: var(--ink-3);
+  --accent-line: rgb(var(--accent-rgb) / .4); --accent-soft: rgb(var(--accent-rgb) / .12);
+  --warn: var(--accent); --warn-bg: rgb(var(--accent-rgb) / .1); --warn-line: rgb(var(--accent-rgb) / .4);
+  --font-num: var(--font-display); --font-serif: var(--font-title); --font-sans: var(--font-ui); --font-latin-serif: var(--font-display);
+  position: relative; max-width: none; margin: 0; outline: none; border-radius: 20px;
+}
+.vplayer:focus-visible { box-shadow: 0 0 0 3px rgb(var(--accent-rgb) / .4); }
+
+/* ---------- 控制条 ---------- */
+.vctl { padding: 8px 2px 0; }
+.vscrub { position: relative; height: 30px; }
+.vticks { position: absolute; left: 0; right: 0; top: 50%; height: 0; pointer-events: none; z-index: 2; }
+.vticks i { position: absolute; top: -3px; width: 2px; height: 6px; margin-left: -1px; border-radius: 1px; background: var(--glass-solid); }
+.vrow { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; }
+.vplayer .ibtn { width: 38px; height: 38px; flex: none; border: 0; border-radius: 50%; background: transparent; color: var(--ink-2); display: grid; place-items: center; cursor: pointer; padding: 0;
+  transition: background-color .3s var(--ease), color .3s var(--ease); }
+.vplayer .ibtn:hover { background: var(--chip); color: var(--ink); }
+.vplayer .ibtn[aria-pressed="true"] { color: var(--accent); background: rgb(var(--accent-rgb) / .12); }
+.vplayer .ibtn:disabled { opacity: .35; cursor: default; }
+.vplayer .ibtn svg { width: 20px; height: 20px; }
+.vtime { font: 500 14px/1 var(--font-ui); font-variant-numeric: tabular-nums; color: var(--ink-2); margin: 0 8px 0 6px; white-space: nowrap; }
+.vspacer { flex: 1; }
+.vnote { margin: 6px 0 4px; padding: 10px 14px; border-radius: 14px; background: rgb(var(--accent-rgb) / .1); border: 1px solid rgb(var(--accent-rgb) / .3); color: var(--ink); font: 400 14px/1.55 var(--font-ui); display: flex; gap: 8px; align-items: flex-start; }
+.vnote svg { width: 16px; height: 16px; flex: none; margin-top: 2px; color: var(--accent); }
+
+/* 进度条 */
+.range { -webkit-appearance: none; appearance: none; width: 100%; height: 30px; margin: 0; background: transparent; cursor: pointer; --pct: 0%; position: relative; z-index: 1; }
+.range::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: linear-gradient(90deg, var(--accent-hi) 0 var(--pct), var(--chip-2) var(--pct) 100%); }
+.range::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; margin-top: -6px; border-radius: 50%; background: var(--glass-solid); border: 0; box-shadow: 0 0 0 1px var(--hair-2), 0 2px 6px rgb(0 0 0 / .2); }
+.range::-moz-range-track { height: 4px; border-radius: 2px; background: var(--chip-2); }
+.range::-moz-range-progress { height: 4px; border-radius: 2px; background: var(--accent-hi); }
+.range::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: var(--glass-solid); border: 0; box-shadow: 0 0 0 1px var(--hair-2), 0 2px 6px rgb(0 0 0 / .2); }
+.range:focus-visible { outline: none; }
+.range:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px rgb(var(--accent-rgb) / .4); }
+
+/* ---------- 视频分章：和网页其他版块一样的编号页签，当前一章里有进度在走 ---------- */
+.vpgr { display: flex; align-items: center; gap: 10px; padding: 8px 0 2px; }
+.vpager { flex: 1; min-width: 0; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 2px; scroll-padding: 0 12px;
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 40px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 40px), transparent); }
+.vpager::-webkit-scrollbar { display: none; }
+.vpg.pg { flex: none; height: 38px; padding: 0 12px 0 5px; gap: 8px; font-size: 14px; }
+.vpg .pg-n { width: 28px; height: 28px; font-size: 13.5px; }
+.vpg .pg-t { max-width: 9em; }
+.vpg.on .pg-fill { transform: scaleX(var(--f, 0)); transition: none; }
+.vpgr .count { flex: none; font: 500 14px/1 var(--font-ui); }
+/* 第一版播放器的场景小标签（只在旧格式往期出现） */
+.vchips:not(.vpgr) { display: flex; gap: 6px; overflow-x: auto; padding: 8px 0 2px; scrollbar-width: thin; }
+.vchip { flex: none; display: inline-flex; align-items: baseline; gap: 6px; border: 1px solid var(--hair); background: transparent; border-radius: 999px; padding: 7px 12px; font: 500 13.5px/1 var(--font-ui); color: var(--ink-2); cursor: pointer; white-space: nowrap; }
+.vchip b, .vchip em { font: 600 12.5px/1 var(--font-ui); font-style: normal; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.vchip:hover { background: var(--chip); }
+.vchip.on { background: var(--glass-strong); border-color: transparent; color: var(--ink); box-shadow: 0 1px 2px rgb(0 0 0 / .06); }
+.vchip.on b { color: var(--accent); }
+
+/* ---------- 播放前的大按钮 ---------- */
+.vover { position: absolute; inset: 0; z-index: 8; display: flex; align-items: flex-end; padding: 0 5.5cqw 6cqh; }
+.v2stage .vover { background: linear-gradient(180deg, transparent 50%, rgb(var(--v-shade-rgb) / .78)); }
+.vover-in { display: flex; align-items: center; gap: 2.4cqmin; }
+.vbig { width: max(56px, 13cqmin); height: max(56px, 13cqmin); border-radius: 50%; border: 0; background: var(--accent); color: var(--on-accent); display: grid; place-items: center; cursor: pointer;
+  box-shadow: 0 10px 30px rgb(var(--accent-rgb) / .38); transition: transform .3s var(--ease); }
+.vbig:active { transform: scale(.95); }
+.vbig svg { width: 42%; height: 42%; margin-left: 6%; }
+.vbig.replay svg { margin-left: 0; }
+.vover-meta { font: 500 max(13px, 2.6cqmin)/1 var(--font-ui); background: var(--tip-bg); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); color: var(--ink); border: 1px solid var(--hair); border-radius: 999px; padding: .6em 1.1em; }
+
+/* ---------- 第一版播放器的画面（只在旧格式往期出现；结构不动，只换颜色和字体） ---------- */
+.vstage { position: relative; aspect-ratio: 16 / 9; container: stage / size; background: var(--paper); overflow: hidden; cursor: pointer; user-select: none; -webkit-user-select: none; touch-action: manipulation; isolation: isolate; border-radius: 18px; box-shadow: inset 0 0 0 1px var(--hair); }
+@media (max-width: 639px) { .vstage { aspect-ratio: 4 / 5; } }
+.vsegs { position: absolute; top: 3.2cqh; left: 5.5cqw; right: 5.5cqw; display: flex; gap: .7cqw; height: max(3px, .55cqmin); z-index: 3; }
+.vseg { flex: var(--len, 1) 1 0; background: var(--chip-2); border-radius: 2px; overflow: hidden; }
+.vseg i { display: block; height: 100%; background: var(--accent-hi); transform-origin: left center; transform: scaleX(var(--f, 0)); }
+.vtop { position: absolute; top: calc(3.2cqh + max(3px, .55cqmin) + 2.2cqmin); left: 5.5cqw; right: 5.5cqw; display: flex; align-items: center; gap: 2cqw; z-index: 3; }
+.vkick { font: 600 max(10.5px, 2.5cqmin)/1.2 var(--font-ui); letter-spacing: .06em; color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vchip-ai { margin-left: auto; flex: none; font: 500 max(9.5px, 2.1cqmin)/1 var(--font-ui); color: var(--ink-3); border: 1px solid var(--hair-2); border-radius: 999px; padding: .45em .8em; }
+.vbgnum { position: absolute; right: 3cqw; bottom: -4cqh; font: 400 46cqmin/1 var(--font-display); color: var(--chip-2); z-index: 0; pointer-events: none; }
+.vscene { position: absolute; inset: 15cqh 6.5cqw 21cqh; display: none; flex-direction: column; justify-content: center; gap: 2.4cqmin; z-index: 2; }
+.vscene.on { display: flex; }
+.vstep { opacity: var(--p, 0); transform: translate3d(0, calc((1 - var(--p, 0)) * 3.2cqmin), 0); }
+.vh { font: 700 6.6cqmin/1.22 var(--font-title); text-wrap: balance; }
+.vh-xl { font-size: 9.6cqmin; line-height: 1.16; }
+.vb { font: 400 max(12px, 3.5cqmin)/1.5 var(--font-ui); color: var(--ink-2); max-width: 74cqw; }
+.vrule { height: max(2px, .65cqmin); width: 20cqmin; background: var(--accent-hi); transform-origin: left center; transform: scaleX(var(--w, 0)); }
+.vsrc-tag { margin-top: auto; align-self: flex-start; font: 400 max(10px, 2.4cqmin)/1.4 var(--font-ui); color: var(--ink-3); border-top: 1px solid var(--hair-2); padding-top: 1.1cqmin; }
+.vlist { display: grid; gap: 2.2cqmin; }
+.vli { display: grid; grid-template-columns: 12cqmin 1fr; align-items: baseline; border-top: 1px solid var(--hair-2); padding-top: 2cqmin; }
+.vli .num { font: 400 7.6cqmin/1 var(--font-display); color: var(--accent); }
+.vli span { font: 700 4.9cqmin/1.38 var(--font-title); }
+.vstat { display: flex; align-items: flex-end; gap: 2cqmin 4.5cqmin; flex-wrap: wrap; }
+.vstat-n { font: 400 27cqmin/.84 var(--font-display); color: var(--accent-hi); white-space: nowrap; }
+.vstat-l { font: 600 4.1cqmin/1.38 var(--font-ui); max-width: 44cqw; padding-bottom: 1.2cqmin; }
+.vbars { display: grid; gap: 3.4cqmin; width: 100%; }
+.vbar { display: grid; grid-template-columns: minmax(0, 28%) 1fr; align-items: center; gap: 2.6cqmin; }
+.vbar-l { font: 600 max(11px, 3.6cqmin)/1.25 var(--font-ui); }
+.vbar-track { position: relative; height: 7.2cqmin; }
+.vbar-track::before { content: ""; position: absolute; inset: 0; background: var(--chip); border-radius: 0 .6cqmin .6cqmin 0; }
+.vbar-fill { position: absolute; left: 0; top: 0; bottom: 0; width: calc(var(--w, 0) * 100%); background: var(--chart-muted); border-radius: 0 .6cqmin .6cqmin 0; }
+.vbar.hl .vbar-fill { background: var(--accent-hi); }
+.vbar-v { position: absolute; top: 50%; left: calc(var(--w, 0) * 100%); transform: translate(1.6cqmin, -50%); font: 400 5.6cqmin/1 var(--font-display); white-space: nowrap; }
+.vq-mark { font: 400 22cqmin/.7 var(--font-display); color: var(--accent-hi); height: 9cqmin; margin-bottom: 1cqmin; }
+.vq-text { font: 700 6.4cqmin/1.42 var(--font-title); max-width: 92%; }
+.vq-who { font: 400 max(11px, 3.2cqmin)/1.4 var(--font-ui); color: var(--ink-3); margin-top: 2cqmin; }
+.vq-who::before { content: "— "; }
+.vscene--image.on { display: grid; grid-template-columns: 1.3fr 1fr; gap: 2cqmin 4.5cqmin; align-items: center; align-content: center; }
+.vimg { grid-row: 1 / span 4; margin: 0; aspect-ratio: 16 / 10; border-radius: 1.2cqmin; overflow: hidden; background: var(--chip); }
+.vimg img { width: 100%; height: 100%; object-fit: cover; transform: scale(var(--k, 1)); }
+.vimg-cap { font: 400 max(9.5px, 2.2cqmin)/1.3 var(--font-ui); color: var(--ink-3); }
+.vsrcs { display: grid; grid-template-columns: repeat(var(--n, 3), minmax(0, 1fr)); gap: 2.4cqmin; }
+.vsrc { border: 1px solid var(--hair-2); border-radius: 1.6cqmin; padding: 2.6cqmin; background: var(--glass-strong); display: grid; gap: 1cqmin; align-content: start; min-width: 0; }
+.vsrc .t { font: 600 max(9.5px, 2.1cqmin)/1 var(--font-ui); color: var(--accent); }
+.vsrc .n { font: 700 3.9cqmin/1.25 var(--font-title); }
+.vsrc .ti { font: 400 max(10.5px, 2.7cqmin)/1.4 var(--font-ui); color: var(--ink-2); }
+.vsrc .d { font: 500 max(10px, 2.5cqmin)/1.2 var(--font-ui); color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vsub { position: absolute; left: 6cqw; right: 6cqw; bottom: 5cqh; text-align: center; z-index: 4; pointer-events: none; }
+.vsub span { background: var(--scrim); color: #fff; font: 500 max(13px, 3.7cqmin)/1.85 var(--font-ui); padding: .22em .6em; border-radius: .3em; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+.vbgs { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
+.vbg { position: absolute; inset: 0; display: none; overflow: hidden; }
+.vbg.on { display: block; }
+.vbg img { width: 100%; height: 100%; object-fit: cover; transform: scale(var(--k, 1)); }
+.vbg::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, var(--paper) 0%, color-mix(in srgb, var(--paper) 88%, transparent) 36%, transparent 84%); }
+.vstage .vover { background: linear-gradient(180deg, transparent 58%, color-mix(in srgb, var(--paper) 72%, transparent)); }
+
+/* 全屏时：分章页签收起 */
+.vplayer:fullscreen .vpgr, .vplayer:-webkit-full-screen .vpgr, .vplayer.v2-zoom .vpgr { display: none; }
+.vplayer.v2p:fullscreen, .vplayer.v2p.v2-zoom { padding: 0 2vw; }
+
+@media (max-width: 640px) {
+  .vpg .pg-t { display: none; }
+  .vpg.pg { width: 38px; padding: 0; justify-content: center; }
+  .vpg.pg.on { width: 58px; }
+  .vtime { margin: 0 4px; font-size: 13px; }
+  .vplayer .ibtn { width: 36px; height: 36px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .vbig, .vplayer .ibtn { transition: none; }
+}

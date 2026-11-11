@@ -1,0 +1,9 @@
+{
+  "name": "frontier-daily-worker",
+  "private": true,
+  "type": "module",
+  "description": "每日AI科技前沿简报网站 Worker 的本机测试（node --test tests/worker.test.js）。不需要安装任何依赖；发布用 run_wrangler.py。",
+  "scripts": {
+    "test": "node --test tests/worker.test.js"
+  }
+}

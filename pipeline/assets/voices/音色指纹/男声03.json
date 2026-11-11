@@ -1,0 +1,30 @@
+{
+ "叫法": "男声03",
+ "说明": "第七轮 03 Gemini·沉稳带笑（GM-C1）单人版人声，变速之前的原声",
+ "声音ID": "voice_75b4b332-ee1b-472e-a864-0e71fdb5d3cc",
+ "块": [
+  {
+   "文件": "pipeline/assets/voices/参考人声/男声03_1_开场.flac",
+   "sha1": "70c5a42cb94023aa6e5ac3ce884f1fb7677c1c2c",
+   "说话秒数": 33.26,
+   "来源": "~/.cache/frontier-daily/tts/chunks/9137c2338ef77efc099d.wav",
+   "来源sha1": "bf2c86be69c104d42c48fade3aa4c346cb581b0f"
+  },
+  {
+   "文件": "pipeline/assets/voices/参考人声/男声03_2_热点一.flac",
+   "sha1": "a2e2b7c97d8b9a793d6e768ce772e424da68894f",
+   "说话秒数": 50.08,
+   "来源": "~/.cache/frontier-daily/tts/chunks/39fe8047c17b8d76f361.wav",
+   "来源sha1": "4288cef1689336c2dace44acecdc7c5218020d62"
+  }
+ ],
+ "块之间相似度": 0.852,
+ "模型": {
+  "名字": "speechbrain/spkrec-ecapa-voxceleb",
+  "speechbrain": "1.1.2",
+  "torch": "2.15.0",
+  "权重sha1": "2f40518a5993c71e1457fe956a1ae7008c71f236"
+ },
+ "生成于": "2026-11-01 18:00",
+ "怎么比": "新配音的相似度＝和这里每一块分别算余弦相似度再平均；整期比的是各块平均后的方向"
+}

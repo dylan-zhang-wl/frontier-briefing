@@ -1,0 +1,915 @@
+# 每日AI科技前沿简报（frontier-daily）· 云端版（2026-11-08 晚第二版：接上第 10–17 步、审片、放行、发布、邮件）
+#
+# 2026-11 起拆成两个仓库（这个是公开仓库 dylan-zhang-wl/frontier-briefing，只放程序；内容在私有仓库 dylan-zhang-wl/frontier-daily）：
+#   这里跑认领、第 1–17 步、审片、放行判定；开头用 STATE_REPO_TOKEN（只对私有仓库有效的细粒度令牌）从私有仓库取 测试版/ 和音乐，
+#   结尾把和以前同一批文字提交回私有仓库的 测试版/。整期文件包不再上传成产物，放进私有仓库的发行版 run-<运行编号>（草稿，不发通知）。
+#   画图：把网页稿、分镜打成小包放进同一个发行版，叫私有仓库的"配图"（images.yml，Codex 在那边画），最多等约 30 分钟，等不到用程序封面；
+#   这边正式运行的视频导演也不新画图（FD_DIRECTOR_NO_NEW_IMAGES=1）。没有 Codex、没有 Codex 登录。
+#   发布、存往期、发邮件：最后叫私有仓库的"放行发布"（publish.yml）。Cloudflare、邮件、Codex 的钥匙都只在私有仓库。
+#   日志和运行摘要只印状态（第几步、成没成、用了几分钟），不印稿子、审片、调度报告的内容；fd 第 10–17 步、放行判定的详细输出
+#   写进期目录 logs/，跟着文件包进私有仓库。
+#
+# 触发（2026-11 起两种；GitHub 自己的定时先不写进公开仓库，见下面 on: 那里）：手动（GitHub 网页 Actions → frontier-daily → Run workflow，输入默认是测试那一边）；
+# Cloudflare 上的保底触发器（cloud/trigger/，每天 04:17、04:43、06:47 UTC 经 GitHub 接口按正式的输入手动触发一次；11-10 起 04:17 是主力）；
+# （原来还有 GitHub 自己的定时 04:17、05:11 UTC；2026-11 起公开仓库先不写，见下面 on: 那里。）
+# 同一天只出一期：第一段 claim（认领）往仓库推标签 issue/<日期>，推上去的那次才出刊，其余一分钟左右安静跳过（显示 skipped）。
+#   只认领"正式、从头跑"的运行；测试（test_mode）和接着跑（from_run）不认领，和以前一样。
+#   第 4 步以前出错（抓取、归并、入库，还没用 Claude、没花钱）：最后一段 unclaim 把标签删掉，下一个时刻再试；
+#   第 4 步以后出错不删，发出错邮件，由人处理（邮件里写怎么接着跑、怎么删标签重跑）。
+# 周六（11-14 起）不出刊：正式、从头跑的运行遇到周六（这一期日期的星期，UTC）只跑第 1–3 步，状态照样提交回（私有仓库的）main，
+#   不审片、不放行，出错才发邮件。
+# 几段：
+#   第 1–3 步   抓取 → 粗筛归并 → 事件库入库：程序直接跑（./fd），不用模型、不花钱。
+#   第 4–9 步   选题 → 事件卡 → 写稿 → 稿子检查 → 独立审读 → 改稿：交给 claude -p，
+#               它按 cloud/任务说明_云端.md 派写稿、审读两个子代理（和 mini 上每天早上那套一样）。事件卡用 MiMo。
+#   第 10–17 步（选"17"时）配图（正式：私有仓库用 Codex 先画，画不成的用程序封面；测试：只试画 1 张，其余用程序封面）
+#               → 配音（正式：Gemini 主声音，每期 $0.6；测试：MiMo 备用声音、Gemini 预算 0）→ 混音 → 网页 → 视频
+#               → 再组装 → 验收 → 报告。转写用 cloud/whisper_standin（mlx_whisper 的同名替身，内部是 faster-whisper），
+#               Chrome 用软件渲染（SwiftShader）。预览 MP4 能录就录，录不成退回只出关键帧总览。
+#   审片        另一个只读的 claude -p，按 文档/方案/每日审片.md（云端版）审，只许写 审片.md、审片结论.json。
+#   放行判定    这里判一遍（结论 放行结论.json 跟着文件包走）；打包、发布（私有仓库的变量 SITE_DEPLOY_ENABLED 为 true 且不是测试才发）、
+#               存往期、发邮件（测试时只打印）都在私有仓库的"放行发布"里，它再判一遍放行。
+# "从某次运行的文件包接着跑"：填 from_run（那次运行的编号）和 from_step（从第几步起），先从私有仓库发行版 run-<from_run> 下载那次的
+#   整期目录再往下跑，调第 10–17 步时不用每次重写稿。
+#
+# 密钥只给用得着的那几步：MiMo 给体检、第 4–9 步、第 10–17 步；Claude 令牌给第 4–9 步和审片；
+#   Gemini 令牌（Workload Identity 换的，一小时）只给试配和第 10–17 步；STATE_REPO_TOKEN 只给取内容、传文件包、叫配图、等配图、
+#   提交回私有仓库、叫放行发布这几步（经环境变量临时给，不写进 .git/config）。claude -p 那几步的环境里没有 Gemini 令牌和
+#   STATE_REPO_TOKEN，也推不了代码。这个仓库里没有 Cloudflare、邮件、Codex 的钥匙。
+# Gemini 三档（输入 gemini）：off 测试默认，不用；trial 只试配一句；default 正式，程序默认每期 $0.6、月上限 $8。
+
+name: frontier-daily
+
+on:
+  # 2026-11 拆仓库时，GitHub 自己的定时（原来的 04:17、05:11 UTC）先不写进公开仓库：公开仓库在切换前几天就建好，认领标签又是各仓库各一套，
+  # 定时要是在切换前来了，会和旧仓库同时出同一期。它在私有仓库里 11-10 实测从没准点来过（gh run list --event schedule 是空的），
+  # 主力一直是 Cloudflare 保底触发器的 04:17（cloud/trigger/wrangler.toml），04:43、06:47 再各叫一次，所以去掉不少什么。
+  # 切换稳定以后想加回，把下面两行放回 on: 下面就行（同一天先认领到的那次出刊，其余一分钟左右跳过）：
+  #   schedule:
+  #     - cron: "17 4 * * *"
+  #     - cron: "11 5 * * *"
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "哪一期（YYYY-MM-DD）。留空＝今天（UTC）。从头跑时不能是仓库 测试版/ 里已有的日期（10-31～11-08，和云端正式运行提交回来的）"
+        required: false
+        default: ""
+        type: string
+      until:
+        description: "跑到第几步：3＝只抓取归并入库；9＝到改稿；17＝全部（测试：MiMo 备用声音、配图最多试画 1 张），之后审片、放行"
+        required: true
+        default: "9"
+        type: choice
+        options:
+          - "9"
+          - "3"
+          - "17"
+      from_run:
+        description: "从哪次运行的文件包接着跑（运行编号，网址 actions/runs/ 后面那串数字；文件包在私有仓库发行版 run-编号，留 14 天）。留空＝从头跑"
+        required: false
+        default: ""
+        type: string
+      from_step:
+        description: "接着跑时从第几步开始（4–17；只在填了 from_run 时有用）。10–17 的这一步一定重做（fd --redo），后面的按需重做"
+        required: false
+        default: "10"
+        type: string
+      review:
+        description: "Claude 的两个环节：第 14 步视频导演、跑完第 17 步后审片（只读），都用 Claude 订阅额度。关掉＝导演退回老路（FD_DIRECTOR=off）、不审片"
+        required: true
+        default: true
+        type: boolean
+      upload_media:
+        description: "测试时另传一份带音频、视频的整期目录（私有仓库发行版里的 media-日期.tar.gz，留 14 天，约 100 MB）。正式运行不看这一项：没放行的期自动传，放行了的不传"
+        required: true
+        default: true
+        type: boolean
+      test_mode:
+        description: "测试：不发布、邮件只打印、不认领日期、不提交回私有仓库、配图最多试画 1 张、和别的运行不排队"
+        required: true
+        default: true
+        type: boolean
+      gemini:
+        description: "Gemini 配音：off＝测试，不用（MiMo 备用声音，预算 0）；trial＝只试配一句验证身份（约 0.1 美分），整期照旧 MiMo；default＝正式，程序默认每期 $0.6、月上限 $8（不能调高）"
+        required: true
+        default: "off"
+        type: choice
+        options:
+          - "off"
+          - "trial"
+          - "default"
+      extra:
+        # 2026-11 拆仓库以后这里没有附加试验了：试画一张在私有仓库的"配图"（images.yml，mode=trial），测试邮件在私有仓库的"放行发布"。
+        # 输入留着（只有 none），保底触发器和出错邮件里的命令都带 extra=none，不用跟着改
+        description: "附加试验：只剩 none（试画一张、测试邮件挪到私有仓库的“配图”“放行发布”）"
+        required: true
+        default: "none"
+        type: choice
+        options:
+          - "none"
+
+permissions:
+  contents: write     # 只为认领：往这个仓库推、删标签 issue/<日期>（cloud/trigger/claim.py）。凭证只在 claim、unclaim 那两步临时给
+  actions: read       # unclaim 那一段读这次运行的 job 列表，看第 4 步开始了没有
+  id-token: write     # Gemini 配音：用 GitHub 给的身份证明向 Google 换一小时的令牌（Workload Identity，不存长期密钥）
+
+# 排队（concurrency）不在整个流程上，在下面 issue 那一段上：重复触发的运行在 claim 一步就跳过，不用排到前一期后面等两个小时才发现是重复的。
+
+jobs:
+  # ---- 认领：同一天只出一期（很快，不排队；cloud/trigger/claim.py）----
+  claim:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      day: ${{ steps.claim.outputs.day }}
+      official: ${{ steps.claim.outputs.official }}
+      claimed: ${{ steps.claim.outputs.claimed }}
+      tag: ${{ steps.claim.outputs.tag }}
+      tag_sha: ${{ steps.claim.outputs.tag_sha }}
+      run_issue: ${{ steps.claim.outputs.run_issue }}
+    steps:
+      - name: 取代码（只要认领程序）
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          sparse-checkout: cloud/trigger
+
+      - name: 定日期、认领这一天
+        id: claim
+        env:
+          IN_DATE: ${{ inputs.date }}
+          IN_TEST: ${{ inputs.test_mode }}
+          IN_FROM_RUN: ${{ inputs.from_run }}
+          # 推标签的凭证只在这一步经 git 的环境变量配置临时给（不写进 .git/config）；这一段里没有别的程序
+          GH_PUSH_TOKEN: ${{ github.token }}
+        run: |
+          # 日期和以前一样算：输入的 date，空就用当天（UTC）。算一次，经 job 输出交给 issue 那一段（它可能排队到第二天才开始）
+          DAY="${IN_DATE:-$(date -u +%F)}"
+          if ! [[ "$DAY" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || ! date -u -d "$DAY" +%F >/dev/null 2>&1; then
+            echo "::error::日期格式不对：$DAY（要 YYYY-MM-DD）"; exit 1
+          fi
+          # 定时触发没有输入：test_mode 是空的，按正式
+          OFFICIAL=true; [ "$IN_TEST" = "true" ] && OFFICIAL=false
+          { echo "day=$DAY"; echo "official=$OFFICIAL"; } >> "$GITHUB_OUTPUT"
+          if [ "$OFFICIAL" != "true" ] || [ -n "$IN_FROM_RUN" ]; then
+            if [ "$OFFICIAL" != "true" ]; then why="测试运行"; else why="接着跑（from_run）"; fi
+            echo "$why：不认领，照常跑（$DAY）"
+            { echo "claimed=false"; echo "run_issue=true"; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # main 上：issue/<日期>；在别的分支上跑正式（演练）：drill/<分支>/issue/<日期>，不占真日期
+          TAG=$(python3 cloud/trigger/claim.py tag-name --day "$DAY" --ref "$GITHUB_REF")
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_PUSH_TOKEN" | base64 -w0)"
+          set +e
+          python3 cloud/trigger/claim.py claim --tag "$TAG" --github-output "$GITHUB_OUTPUT" \
+            --note "认领 $DAY：运行 $GITHUB_RUN_ID（触发 $GITHUB_EVENT_NAME，$(date -u '+%F %T') UTC）"
+          rc=$?
+          set -e
+          case "$rc" in
+            0)  echo "run_issue=true" >> "$GITHUB_OUTPUT"
+                echo "### 认领到了 \`$TAG\`：这次出刊 $DAY" >> "$GITHUB_STEP_SUMMARY" ;;
+            10) echo "run_issue=false" >> "$GITHUB_OUTPUT"
+                echo "### $DAY 已经有别的运行认领（标签 \`$TAG\`）：这次跳过，不出刊" >> "$GITHUB_STEP_SUMMARY" ;;
+            *)  echo "::error::认领出错（标签 $TAG 推不上去）：这次不出刊，下一个时刻会再试"; exit 1 ;;
+          esac
+
+  issue:
+    needs: claim
+    if: needs.claim.outputs.run_issue == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360        # GitHub 自带机器的上限（6 小时）：写稿最多 150、制作最多 200（第 14 步含视频导演，最坏约 1 小时）、审片最多 60
+    # 正式运行（含接着跑）同一组 frontier-daily：一次只跑一个，免得两期同时配音。（排队组只在本仓库里算；发布在私有仓库的
+    # "放行发布"里，它在私有仓库自己排同名的组。）job 一级和流程一级的组名在整个仓库里是同一套（GitHub 文档："a single job or workflow using the same concurrency group"）。
+    # queue: max：排队的依次等着（最多 100 个），不会像默认那样被后来的挤掉（被挤掉的那一期标签已认领却没跑，当天就没了）。
+    # 测试（test_mode）各跑各的，不排队。
+    concurrency:
+      group: ${{ needs.claim.outputs.official == 'true' && 'frontier-daily' || format('frontier-daily-test-{0}', github.run_id) }}
+      cancel-in-progress: false
+      queue: max
+    outputs:
+      stage4: ${{ steps.mark4.outputs.stage4 }}
+    env:
+      # 手动运行的参数经环境变量传进脚本，不直接拼进命令行。日期用 claim 那一段定的（空输入时是那时的当天 UTC）
+      IN_DATE: ${{ needs.claim.outputs.day }}
+      IN_UNTIL: ${{ inputs.until }}
+      IN_FROM_RUN: ${{ inputs.from_run }}
+      IN_FROM_STEP: ${{ inputs.from_step }}
+      IN_GEMINI: ${{ inputs.gemini }}
+      IN_EXTRA: ${{ inputs.extra }}
+      # 下面三个在定时触发时是空的（GitHub 表达式里空值和 false 比较会被当成相等，所以不直接在 if 里用 inputs.*，
+      # 而是在"定日期"那一步换成明确的 true/false：空＝正式）
+      IN_REVIEW: ${{ inputs.review }}
+      IN_TEST: ${{ inputs.test_mode }}
+      IN_MEDIA: ${{ inputs.upload_media }}
+      # 认领（claim 那一段）：认领到了才有标签名；测试、接着跑是空的
+      IN_CLAIM_TAG: ${{ needs.claim.outputs.claimed == 'true' && needs.claim.outputs.tag || '' }}
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      # Playwright 装在仓库外（下面"装 Node 依赖"那步）；FD_PLAYWRIGHT 给 fd 的验收脚本，PLAYWRIGHT 给 .mjs 脚本
+      FD_PLAYWRIGHT: /home/runner/fd-node/node_modules/playwright
+      PLAYWRIGHT: /home/runner/fd-node/node_modules/playwright/index.mjs
+      # 转写：mlx_whisper 的同名替身（cloud/whisper_standin，faster-whisper），pipeline/tts_qc.py、site/tools/video_align.py 读这个变量
+      FD_WHISPER_BIN: /home/runner/.venvs/fd-whisper/bin/mlx_whisper
+      # 替身用的本地模型目录（下面"装转写替身"那步下载、存缓存）
+      FD_FW_LOCAL: /home/runner/.cache/fd-whisper
+      # Chrome：没有显卡，用 SwiftShader 软件渲染 WebGL（Chromium 文档 docs/gpu/swiftshader.md：新版要 --enable-unsafe-swiftshader 才肯用）
+      FD_CHROME_ARGS: "--use-gl=angle --use-angle=swiftshader-webgl --enable-unsafe-swiftshader --ignore-gpu-blocklist"
+      # 私有那一半：每期内容（测试版/）、音乐、整期文件包（发行版 run-<运行编号>）、配图、放行发布都在这里。不是秘密
+      STATE_REPO: dylan-zhang-wl/frontier-daily
+    steps:
+      - name: 取代码
+        uses: actions/checkout@v6
+        with:
+          # 不把令牌留在 .git/config：权限是 contents: write，claude -p 那几步跳过确认，留着它就能往任何分支推
+          persist-credentials: false
+
+      # 测试版/（往期事件库、月度账本、近 30 天每期的文字）和音乐只在私有仓库：浅克隆、只取这两个文件夹，拷进工作目录（.gitignore 掉，不会进这个仓库）。
+      # 令牌只在这一步经 git 的环境变量配置临时给（不写进 .git/config），克隆完就删掉那份克隆
+      - name: 取私有仓库的内容（测试版/、音乐）
+        env:
+          STATE_REPO_TOKEN: ${{ secrets.STATE_REPO_TOKEN }}
+        run: |
+          if [ -z "$STATE_REPO_TOKEN" ]; then
+            echo "::error::公开仓库 Secrets 里没有 STATE_REPO_TOKEN（只对私有仓库有效的细粒度令牌，见 cloud/密钥与重置手册.md）"; exit 1
+          fi
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$STATE_REPO_TOKEN" | base64 -w0)"
+          P="$RUNNER_TEMP/private"
+          for i in 1 2 3; do
+            rm -rf "$P"
+            git clone -q --depth 1 --filter=blob:none --no-checkout "https://github.com/$STATE_REPO.git" "$P" \
+              && git -C "$P" sparse-checkout set 测试版 pipeline/assets/music \
+              && git -C "$P" checkout -q main && break
+            echo "取私有仓库没成（第 $i 次），等一会儿再试"; sleep $((i * 10))
+          done
+          if [ ! -d "$P/测试版" ] || [ ! -d "$P/pipeline/assets/music" ]; then
+            echo "::error::从私有仓库 $STATE_REPO 取不到 测试版/ 或 pipeline/assets/music/（令牌过期了？权限够吗？）"; exit 1
+          fi
+          mkdir -p 测试版 pipeline/assets/music
+          rsync -a "$P/测试版/" 测试版/
+          rsync -a "$P/pipeline/assets/music/" pipeline/assets/music/
+          echo "私有仓库 main $(git -C "$P" rev-parse --short HEAD)：测试版/ $(find 测试版 -type f | wc -l) 个文件，音乐 $(find pipeline/assets/music -type f | wc -l) 个文件"
+          rm -rf "$P"
+
+      - name: 定日期、查参数
+        id: day
+        run: |
+          DAY="${IN_DATE:-$(date -u +%F)}"
+          # 定时触发没有输入：跑到第几步按正式的 17
+          IN_UNTIL="${IN_UNTIL:-17}"
+          if ! [[ "$DAY" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+            echo "::error::日期格式不对：$DAY（要 YYYY-MM-DD）"; exit 1
+          fi
+          # 仓库里 测试版/<日期>/ 放着往期的几份文字（mini 上那几期，和云端正式运行提交回来的；今日一词去重、往期已讲要读）。
+          # 拿已有的日期从头跑，fd 会把那几份当成"已经做过"直接采纳，测出来的东西就不对了。
+          # 接着跑（from_run）不拦：正式运行出错时这一期的文字也已经提交回（私有仓库的）main，接着跑本来就要从那里往下做（下面会用那次运行的产物盖上）。
+          if [ -d "测试版/$DAY" ] && [ -z "$IN_FROM_RUN" ]; then
+            echo "::error::测试版/$DAY 在仓库里已经有了（往期的文字），换一个日期，比如明天；要接着那次运行做，填 from_run"; exit 1
+          fi
+          TEST=false;  [ "$IN_TEST" = "true" ] && TEST=true
+          # 周六（11-14 起）不出刊：正式、从头跑的只做第 1–3 步（抓取、归并、入库），状态照样提交回（私有仓库的）main；不审片、不放行，出错才发邮件。
+          # 按这一期日期的星期（UTC）。fd 里按星期选版别的那几处不在这里管。
+          SATURDAY=false
+          if [ "$TEST" != "true" ] && [ -z "$IN_FROM_RUN" ] && [ "$(date -u -d "$DAY" +%u)" = "6" ]; then
+            SATURDAY=true
+            [ "$IN_UNTIL" != "3" ] && echo "$DAY 是周六，不出刊：这次只跑第 1–3 步（输入原来是跑到第 $IN_UNTIL 步）"
+            IN_UNTIL=3
+          fi
+          echo "IN_UNTIL=$IN_UNTIL" >> "$GITHUB_ENV"
+          FROM_STEP=1
+          if [ -n "$IN_FROM_RUN" ]; then
+            if ! [[ "$IN_FROM_RUN" =~ ^[0-9]+$ ]]; then echo "::error::from_run 要填运行编号（一串数字）：$IN_FROM_RUN"; exit 1; fi
+            FROM_STEP="${IN_FROM_STEP:-10}"
+            if ! [[ "$FROM_STEP" =~ ^[0-9]+$ ]] || [ "$FROM_STEP" -lt 4 ] || [ "$FROM_STEP" -gt 17 ]; then
+              echo "::error::from_step 要填 4 到 17：$FROM_STEP"; exit 1
+            fi
+          fi
+          FETCH=false;   [ "$FROM_STEP" -le 3 ] && FETCH=true
+          WRITE=false;   [ "$IN_UNTIL" != "3" ] && [ "$FROM_STEP" -le 9 ] && WRITE=true
+          PRODUCE=false; [ "$IN_UNTIL" = "17" ] && PRODUCE=true
+          # 离线（fd --offline）这一版去掉了输入（GitHub 一个流程最多 10 个输入）；要用时在这里改成 --offline
+          OFFLINE_FLAG=""
+          # Gemini：只有 default（正式）才给配音那段令牌和预算；off、trial 整期都走 MiMo 备用、预算 0
+          GEMINI="${IN_GEMINI:-default}"
+          if [ "$GEMINI" = "default" ]; then VOICE_FLAGS="--budget-usd 0.6"; else VOICE_FLAGS="--use-backup --budget-usd 0"; fi
+          {
+            echo "day=$DAY"; echo "from_step=$FROM_STEP"; echo "fetch=$FETCH"; echo "write=$WRITE"; echo "produce=$PRODUCE"
+          } >> "$GITHUB_OUTPUT"
+          REVIEW=true; [ "$IN_REVIEW" = "false" ] && REVIEW=false
+          MEDIA=false; [ "$IN_MEDIA" = "true" ] && MEDIA=true
+          RESUME=false; [ -n "$IN_FROM_RUN" ] && RESUME=true
+          {
+            echo "gemini=$GEMINI"; echo "review=$REVIEW"; echo "test=$TEST"; echo "media=$MEDIA"; echo "resume=$RESUME"
+            echo "extra=${IN_EXTRA:-none}"; echo "saturday=$SATURDAY"
+          } >> "$GITHUB_OUTPUT"
+          echo "触发：$GITHUB_EVENT_NAME；测试：$TEST；周六只抓取：$SATURDAY；认领：${IN_CLAIM_TAG:-不认领}；Claude 两个环节（导演、审片）：$REVIEW；带音视频的产物（测试时）：$MEDIA；附加试验：${IN_EXTRA:-none}"
+          { echo "DAY=$DAY"; echo "FROM_STEP=$FROM_STEP"; echo "OFFLINE_FLAG=$OFFLINE_FLAG"; echo "VOICE_FLAGS=$VOICE_FLAGS"; } >> "$GITHUB_ENV"
+          echo "这一期：$DAY；跑到第 $IN_UNTIL 步；从第 $FROM_STEP 步起（接着跑：${IN_FROM_RUN:-否}）；Gemini：$GEMINI（配音参数 $VOICE_FLAGS）"
+          echo "要做：抓取 $FETCH，写稿 $WRITE，制作 $PRODUCE"
+          df -h / | tail -1; nproc; free -g | head -2
+
+      - name: 装系统软件（ffmpeg、中文字体）
+        run: |
+          sudo apt-get update -qq
+          # fonts-noto-cjk：Ubuntu 默认没有中文字体，网页截图、视频里界面字（-apple-system、PingFang 等找不到时）要靠它，不然是方框
+          sudo apt-get install -y -qq ffmpeg fonts-noto-cjk rsync
+          fc-list :lang=zh family | head -3
+          ffmpeg -version | head -1
+
+      - name: 装 Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: 取缓存的模型（LaBSE 句向量、SpeechBrain 音色）
+        id: models
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/huggingface
+            ~/.cache/frontier-daily/models
+          key: fd-models-v2
+
+      - name: 装 Python 依赖（项目环境 ~/.venvs/frontier-daily，和 mini 同一个位置，./fd 会自动换进去）
+        run: |
+          python -m pip install -q uv
+          uv venv ~/.venvs/frontier-daily --python "$(which python)"
+          PY=~/.venvs/frontier-daily/bin/python
+          # torch 用 CPU 版（云端没有显卡；PyPI 上的 Linux 版带显卡库，太大）
+          uv pip install --python "$PY" --index-url https://download.pytorch.org/whl/cpu --no-deps torch==2.15.0 torchaudio==2.11.1
+          uv pip install --python "$PY" -r requirements-cloud.txt
+          "$PY" -c "import torch, sentence_transformers, feedparser, numpy; print('torch', torch.__version__)"
+
+      - name: 下载 LaBSE（缓存里没有时；cluster.py 只离线加载，自己不会下）
+        run: |
+          if [ ! -d ~/.cache/huggingface/hub/models--sentence-transformers--LaBSE ]; then
+            # 只下 sentence-transformers 要的那几个文件（约 1.8 GB）；不加 allow_patterns 会把 PyTorch、TensorFlow、ONNX 各种格式全下下来（11-08 实测 8.8 GB，把磁盘占满、缓存也存不进去）
+            ~/.venvs/frontier-daily/bin/python -c "from huggingface_hub import snapshot_download; snapshot_download('sentence-transformers/LaBSE', allow_patterns=['*.json', 'vocab.txt', 'README.md', 'model.safetensors', '2_Dense/model.safetensors'])"
+          fi
+          du -sh ~/.cache/huggingface || true
+          df -h / | tail -1
+
+      - name: 存模型缓存（第一次下载完马上存，后面哪步失败也不白下）
+        if: steps.models.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/huggingface
+            ~/.cache/frontier-daily/models
+          key: fd-models-v2
+
+      - name: 取缓存的转写模型（faster-whisper large-v3-turbo）
+        id: whisper_model
+        if: steps.day.outputs.produce == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/fd-whisper
+          key: fd-whisper-turbo-v2
+
+      - name: 装转写替身（~/.venvs/fd-whisper：faster-whisper ＋ 同名的 mlx_whisper 命令）
+        if: steps.day.outputs.produce == 'true'
+        run: |
+          uv venv ~/.venvs/fd-whisper --python "$(which python)"
+          uv pip install --python ~/.venvs/fd-whisper/bin/python ./cloud/whisper_standin
+          # 替身照 mlx 的名字 mlx-community/whisper-large-v3-turbo 对到 faster-whisper 的 large-v3-turbo（cloud/whisper_standin/mlx_whisper/cli.py）
+          # 下成普通文件（local_dir），不进 Hugging Face 缓存：那里的大文件是链接，指向缓存外层的共用目录，单存模型那一层只存得下链接
+          M="$FD_FW_LOCAL/faster-whisper-large-v3-turbo"
+          if [ ! -f "$M/model.bin" ]; then
+            ~/.venvs/fd-whisper/bin/python -c "import sys; from huggingface_hub import snapshot_download; print(snapshot_download('mobiuslabsgmbh/faster-whisper-large-v3-turbo', local_dir=sys.argv[1], allow_patterns=['config.json', 'preprocessor_config.json', 'model.bin', 'tokenizer.json', 'vocabulary.*']))" "$M"
+          fi
+          du -sh "$M"; ls -la "$M"
+
+      - name: 存转写模型缓存
+        if: steps.day.outputs.produce == 'true' && steps.whisper_model.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/fd-whisper
+          key: fd-whisper-turbo-v2
+
+      - name: 装 Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: 装 Playwright（仓库外 ~/fd-node）和 Google Chrome
+        run: |
+          mkdir -p ~/fd-node
+          cp cloud/node/package.json ~/fd-node/
+          npm install --prefix ~/fd-node --no-audit --no-fund
+          # 脚本都用 channel:'chrome'（Google Chrome 正式版）；机器上没有就让 Playwright 装
+          google-chrome --version || ~/fd-node/node_modules/.bin/playwright install --with-deps chrome
+          node -e "console.log('playwright', require(process.env.FD_PLAYWRIGHT + '/package.json').version)"
+
+      - name: 装 Claude Code 命令行
+        if: steps.day.outputs.write == 'true' || (steps.day.outputs.produce == 'true' && steps.day.outputs.review == 'true')
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          claude --version
+
+      - name: 放好原字体（build_v3.py、video3_build.py 从 ~/.cache/frontier-daily/fonts 读）
+        run: |
+          mkdir -p ~/.cache/frontier-daily/fonts
+          cp cloud/fonts/* ~/.cache/frontier-daily/fonts/
+          rm -f ~/.cache/frontier-daily/fonts/README.md
+
+      - name: 体检（./fd doctor，只看不拦）
+        continue-on-error: true
+        env:
+          MIMO_API_KEY: ${{ secrets.MIMO_API_KEY }}
+          MIMO_BASE_URL: ${{ secrets.MIMO_BASE_URL }}
+        run: ./fd doctor
+
+      - name: 云端自检：转写替身、Chrome 软件渲染（只看，计时）
+        if: steps.day.outputs.produce == 'true'
+        continue-on-error: true
+        run: |
+          mkdir -p "$RUNNER_TEMP/selftest"
+          clip=pipeline/assets/voices/参考人声/庚A_2_热点一.flac
+          t0=$(date +%s)
+          HF_HUB_OFFLINE=1 "$FD_WHISPER_BIN" "$clip" --model mlx-community/whisper-large-v3-turbo --language zh \
+            --condition-on-previous-text False --word-timestamps True --output-format json \
+            --output-dir "$RUNNER_TEMP/selftest" --output-name clip --verbose False
+          t1=$(date +%s)
+          python -c "import json,sys; d=json.load(open(sys.argv[1])); w=[x for s in d['segments'] for x in s.get('words',[])]; print('转写：', len(d['text']), '字，', len(w), '个词；开头', d['text'][:40])" "$RUNNER_TEMP/selftest/clip.json"
+          echo "转写 48 秒的样音用了 $((t1-t0)) 秒（含载入模型）"
+          node cloud/selftest_chrome.mjs
+
+      # 2026-11 起文件包在私有仓库的发行版 run-<运行编号> 里（以前是那次运行的产物）：media-日期、issue-日期、state-日期，各一个 .tar.gz
+      - name: 接着跑：取那次运行的整期目录和事件库、账本
+        if: steps.day.outputs.resume == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.STATE_REPO_TOKEN }}
+        run: |
+          REL="run-$IN_FROM_RUN"
+          if ! names=$(gh release view "$REL" -R "$STATE_REPO" --json assets --jq '.assets[].name'); then
+            echo "::error::私有仓库里没有发行版 $REL（运行编号填对了吗？文件包留 14 天，过了会被清掉）"; exit 1
+          fi
+          echo "那次运行的文件包：" $names
+          tmp="$RUNNER_TEMP/from"; mkdir -p "$tmp"
+          # media-日期 是带音频、视频的整份（有就用它）；issue-日期 是收窄后的小份
+          got=""
+          for n in "media-$DAY" "issue-$DAY"; do
+            if echo "$names" | grep -qx "$n.tar.gz"; then
+              gh release download "$REL" -R "$STATE_REPO" -p "$n.tar.gz" -D "$tmp"
+              mkdir -p "$tmp/$n" && tar -xzf "$tmp/$n.tar.gz" -C "$tmp/$n"; got="$n"; break
+            fi
+          done
+          if [ -z "$got" ]; then echo "::error::发行版 $REL 里没有 issue-$DAY 或 media-$DAY（日期填对了吗？）"; exit 1; fi
+          mkdir -p "测试版/$DAY"
+          rsync -a "$tmp/$got/" "测试版/$DAY/"
+          if echo "$names" | grep -qx "state-$DAY.tar.gz"; then
+            gh release download "$REL" -R "$STATE_REPO" -p "state-$DAY.tar.gz" -D "$tmp"
+            mkdir -p "$tmp/state" && tar -xzf "$tmp/state-$DAY.tar.gz" -C "$tmp/state"
+            rsync -a "$tmp/state/" 测试版/
+          fi
+          # 只印每一步的状态，不印"原因／说明"（那里可能有稿子、选题的字）
+          echo "用的是 $got；fd 现在每一步的状态："
+          python cloud/release/steps_brief.py "测试版/$DAY"
+
+      - name: 第 1–3 步：抓取、粗筛归并、入库
+        if: steps.day.outputs.fetch == 'true'
+        run: ./fd run --date "$DAY" --until 3 --budget-usd 0 $OFFLINE_FLAG
+
+      # 从下一步起要用 Claude 额度（之后还有 Gemini 配音）：记一笔，交给最后的 unclaim 一段——这以后出错，认领不放回
+      - name: 记下：第 4 步开始了
+        id: mark4
+        if: steps.day.outputs.write == 'true'
+        run: echo "stage4=started" >> "$GITHUB_OUTPUT"
+
+      - name: 第 4–9 步：选题到改稿（claude -p）
+        if: steps.day.outputs.write == 'true'
+        timeout-minutes: 150
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          FD_WRITE_EFFORT: ${{ vars.FD_WRITE_EFFORT }}   # 空＝xhigh
+          MIMO_API_KEY: ${{ secrets.MIMO_API_KEY }}
+          MIMO_BASE_URL: ${{ secrets.MIMO_BASE_URL }}
+        run: |
+          if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+            echo "::error::仓库 Secrets 里没有 CLAUDE_CODE_OAUTH_TOKEN（用户本人运行 claude setup-token 后填）"; exit 1
+          fi
+          mkdir -p "测试版/$DAY/logs"
+          # 不让 claude -p 能向 GitHub 要身份证明（拿去换 Google 令牌）
+          unset ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
+          PROMPT="你在 GitHub Actions 的云端 Ubuntu 机器上，项目目录就是当前目录（$GITHUB_WORKSPACE）。先完整读 cloud/任务说明_云端.md，然后照它做。本次：DAY=$DAY；你只负责第 4–9 步，第 9 步改稿通过就停；fd 的额外参数：--budget-usd 0 $OFFLINE_FLAG。"
+          set -o pipefail
+          # 官方文档：claude -p 是非交互模式；订阅令牌走 CLAUDE_CODE_OAUTH_TOKEN 环境变量（不能加 --bare，bare 模式不读它）；
+          # 没人点批准，用 bypassPermissions（和 mini 上定时任务一样是跳过确认；这台机器每次用完就清掉）。
+          # 不给 ScheduleWakeup：11-08 运行 42521527443 里主会话给自己定了 30 分钟后"兜底唤醒"，活 21:15 就做完了，
+          # claude -p 却一直等到唤醒那一刻（21:43）才退出，白等 28 分钟。
+          # 思考强度（11-10 用户定：写稿默认 xhigh；仓库变量 FD_WRITE_EFFORT 可改，写 default 就不传、用 claude 自己的默认档）
+          WRITE_EFFORT="${FD_WRITE_EFFORT:-xhigh}"
+          EFFORT_ARGS=(); [ "$WRITE_EFFORT" != "default" ] && EFFORT_ARGS=(--effort "$WRITE_EFFORT")
+          echo "写稿：claude -p --model opus ${EFFORT_ARGS[*]}"
+          claude -p "$PROMPT" \
+            --model opus "${EFFORT_ARGS[@]}" \
+            --permission-mode bypassPermissions \
+            --max-turns 200 \
+            --disallowedTools ScheduleWakeup \
+            --output-format stream-json --verbose \
+            > "测试版/$DAY/logs/云端_claude主会话.jsonl" \
+            2> "测试版/$DAY/logs/云端_claude主会话_stderr.log"
+          # 不在公开日志里印 Claude 最后的总结（里面有选题、稿子的字）：全过程在 logs/云端_claude主会话.jsonl，跟着文件包进私有仓库
+          echo "写稿那一步结束：$(date -u '+%F %T') UTC；第 4–9 步每一步的状态："
+          python cloud/release/steps_brief.py "测试版/$DAY" || true
+
+      # ---- 配图（2026-11 起在私有仓库画）：这边不装 Codex、没有 Codex 登录。
+      #      把画图材料（网页稿、视频分镜，和 06_配图/ 里已经有的图，免得重画）打成小包放进私有仓库发行版 run-<运行编号>（草稿），
+      #      叫私有仓库的"配图"（images.yml）：它照旧用 cloud/web_images.py 画网页图、site/tools/video3_images.py 画视频图，
+      #      查登录失效、额度用完（cloud/codex_login_check.py），把 06_配图/ 和那两个记号文件打成 images-<日期>.tar.gz 放回同一个发行版。
+      #      这边每 30 秒看一眼，最多等约 30 分钟；等不到就照旧用程序封面（第 10–17 步带着 --skip-images），在 logs/ 记一笔。
+      #      测试运行也叫它，但带 test=true：只试画 1 张网页图，其余退回封面（省 Codex 额度）。
+      #      放在 Gemini 取令牌之前，免得等图占掉令牌的一小时。
+      - name: 配图：材料放进私有发行版，叫私有仓库画图
+        id: img_req
+        if: steps.day.outputs.produce == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.STATE_REPO_TOKEN }}
+          IS_TEST: ${{ steps.day.outputs.test }}
+        run: |
+          D="测试版/$DAY"
+          if [ ! -f "$D/04_文稿/claude_网页.json" ]; then echo "没有网页稿，不画图（第 10–17 步用程序封面）"; exit 0; fi
+          M="$RUNNER_TEMP/img-mat"; mkdir -p "$M"
+          parts=(04_文稿/claude_网页.json)
+          for p in 04_文稿/视频v3_分镜.json 06_配图; do [ -e "$D/$p" ] && parts+=("$p"); done
+          tar -czf "$M/materials-$DAY.tar.gz" -C "$D" "${parts[@]}"
+          REL="run-$GITHUB_RUN_ID"
+          retry() { for i in 1 2 3; do "$@" && return 0; echo "没成（第 $i 次），等一会儿再试"; sleep $((i * 10)); done; return 1; }
+          # 草稿发行版：不建标签、不给关注者发通知；重跑同一次运行（编号不变）时沿用已有的那个
+          gh release view "$REL" -R "$STATE_REPO" >/dev/null 2>&1 || retry gh release create "$REL" -R "$STATE_REPO" --draft --target main \
+            --title "$REL（$DAY）" --notes "公开仓库运行 $GITHUB_RUN_ID 的文件包（$DAY）。放行发布流程 14 天后清掉。"
+          retry gh release upload "$REL" -R "$STATE_REPO" --clobber "$M/materials-$DAY.tar.gz"
+          retry gh workflow run images.yml -R "$STATE_REPO" --ref main \
+            -f date="$DAY" -f run_id="$GITHUB_RUN_ID" -f sha="$GITHUB_SHA" -f test="$IS_TEST"
+          echo "started=true" >> "$GITHUB_OUTPUT"
+          echo "已叫私有仓库画图（材料：${parts[*]}；测试：$IS_TEST）"
+
+      - name: 配图：等私有仓库把图放回来（每 30 秒看一次，最多约 30 分钟）
+        if: steps.day.outputs.produce == 'true'
+        continue-on-error: true
+        timeout-minutes: 40
+        env:
+          GH_TOKEN: ${{ secrets.STATE_REPO_TOKEN }}
+          STARTED: ${{ steps.img_req.outputs.started }}
+        run: |
+          D="测试版/$DAY"; mkdir -p "$D/logs"
+          note="$D/logs/配图_私有画图没回来.txt"
+          if [ "$STARTED" != "true" ]; then
+            [ -f "$D/04_文稿/claude_网页.json" ] && echo "没叫成私有仓库的配图（$(date -u '+%F %T') UTC）：这一期配图用程序画的封面。" > "$note"
+            echo "没叫私有仓库画图：用程序封面"; exit 0
+          fi
+          REL="run-$GITHUB_RUN_ID"; A="images-$DAY.tar.gz"
+          t0=$(date +%s); got=false
+          while [ $(( $(date +%s) - t0 )) -lt 1800 ]; do
+            if gh release view "$REL" -R "$STATE_REPO" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx "$A"; then got=true; break; fi
+            sleep 30
+          done
+          if [ "$got" != "true" ]; then
+            echo "私有仓库的配图 30 分钟内没有回来（$(date -u '+%F %T') UTC 不再等）：这一期配图用程序画的封面。" > "$note"
+            echo "::warning::私有仓库的配图 30 分钟内没回来，用程序封面"; exit 0
+          fi
+          d="$RUNNER_TEMP/img-back"; mkdir -p "$d"
+          gh release download "$REL" -R "$STATE_REPO" -p "$A" -D "$d" --clobber
+          tar -xzf "$d/$A" -C "$D"
+          echo "配图回来了：等了 $(( ($(date +%s) - t0) / 60 )) 分钟；网页图 $(find "$D/06_配图" -maxdepth 1 -name '*.png' | wc -l) 张，视频图 $(find "$D/06_配图/视频" -maxdepth 1 -name '*.png' 2>/dev/null | wc -l) 张"
+          for f in codex_登录失效.txt codex_额度用完.txt; do [ -f "$D/logs/$f" ] && echo "私有仓库记了一笔：logs/$f"; done
+          true
+
+      # Gemini 令牌一小时有效，所以这一步紧挨着配音；只有试配、第 10–17 步两步拿得到它（claude -p 那两步没有）
+      - name: Gemini 配音身份：换一小时的令牌（Workload Identity）
+        id: gcp
+        if: steps.day.outputs.produce == 'true' && steps.day.outputs.gemini != 'off'
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          token_format: access_token
+          # 不写凭证文件、不导出环境变量：令牌只经下面两步的 env 传，别的步骤（审片的 claude -p）看不到
+          create_credentials_file: false
+          export_environment_variables: false
+
+      - name: Gemini 最小试配（一句话，验证令牌和 Vertex 能回音频；花费记进当月账本）
+        if: steps.day.outputs.produce == 'true' && steps.day.outputs.gemini == 'trial'
+        continue-on-error: true
+        env:
+          GCP_ACCESS_TOKEN: ${{ steps.gcp.outputs.access_token }}
+        run: ~/.venvs/frontier-daily/bin/python -u cloud/gemini_trial.py --date "$DAY"
+
+      - name: 第 10–17 步：配音、混音、网页、视频、验收、报告（配音按这次是测试还是正式；预览能录就录；详细输出写进 logs/）
+        id: produce
+        if: steps.day.outputs.produce == 'true'
+        continue-on-error: true
+        timeout-minutes: 200
+        env:
+          MIMO_API_KEY: ${{ secrets.MIMO_API_KEY }}
+          MIMO_BASE_URL: ${{ secrets.MIMO_BASE_URL }}
+          # 第 14 步的视频导演（site/tools/video3_director.py）要调 claude -p；它只给导演 Read、Write、Edit、Glob、Grep，没有命令行
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # 导演不新画图（不调任何画图工具，导演也被告知不能新画；要新图时退到已有的图、网页原图或程序封面）。
+          # 2026-11 起正式运行也这样：这边没有 Codex，画图在私有仓库（导演半路远程画图以后再说）
+          FD_DIRECTOR_NO_NEW_IMAGES: "1"
+          # 视频导演的思考强度：默认不设（用 claude 自己的默认档）。11-10 本机对比 xhigh 在现行时限下超时退回；仓库变量 FD_DIRECTOR_EFFORT 可改
+          FD_DIRECTOR_EFFORT: ${{ vars.FD_DIRECTOR_EFFORT }}
+          # 输入 review 关掉时，视频导演也关（只管这一次）；开着时不设，按 fd_开关.json 的"视频导演"（现在是开）
+          FD_DIRECTOR: ${{ steps.day.outputs.review != 'true' && 'off' || '' }}
+          # 只有正式（gemini=default）才给令牌；off、trial 这里是空的，配音程序也带着 --use-backup --budget-usd 0
+          GCP_ACCESS_TOKEN: ${{ steps.day.outputs.gemini == 'default' && steps.gcp.outputs.access_token || '' }}
+          FD_FW_TIMING: "1"
+          # 万一哪里要新画图也只认 Codex（云端没有 agy）；这边没装 Codex，画不了就退回封面
+          FD_IMAGE_BACKENDS: codex
+        run: |
+          unset ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN    # Google 令牌已经换好，这一段用不着再要身份证明
+          # 11-09：接着跑时，起始这一步一定重做（不然上次已经做完的那一步会被当成"做过了"跳过，改了程序也验证不到）；后面几步按 fd 自己的判断
+          FROM=""; [ "$FROM_STEP" -ge 10 ] && FROM="--from $FROM_STEP"; [ -n "$IN_FROM_RUN" ] && [ "$FROM_STEP" -ge 10 ] && FROM="$FROM --redo $FROM_STEP"
+          # fd 的详细输出（会带稿子、旁白、导演的字）写进期目录 logs/，跟着文件包进私有仓库；公开日志里只印状态
+          mkdir -p "测试版/$DAY/logs"
+          L="测试版/$DAY/logs/云端_fd第10到17步.log"
+          t0=$(date +%s)
+          set +e
+          ./fd run --date "$DAY" $FROM --skip-images $VOICE_FLAGS $OFFLINE_FLAG > "$L" 2>&1
+          rc=$?
+          set -e
+          echo "第 10–17 步：退出码 $rc，用了 $(( ($(date +%s) - t0) / 60 )) 分钟；详细输出在 $L"
+          python cloud/release/steps_brief.py "测试版/$DAY" || true
+          exit $rc
+
+      - name: 预览 MP4 没录成时，只出关键帧总览
+        if: always() && steps.day.outputs.produce == 'true'
+        continue-on-error: true
+        run: |
+          v="测试版/$DAY/11_视频v3"
+          if [ ! -f "$v/index.html" ]; then echo "没有视频演示页，跳过"; exit 0; fi
+          if [ -f "$v/预览.mp4" ]; then
+            ffprobe -v error -show_entries format=duration,size -of csv=p=0 "$v/预览.mp4" | sed 's/^/预览.mp4 时长、大小：/'
+          else
+            echo "预览.mp4 没录成，改出关键帧总览"
+            t0=$(date +%s); node site/tools/video3_record.mjs "测试版/$DAY" --sheet; echo "关键帧总览用了 $(( $(date +%s) - t0 )) 秒"
+          fi
+          ls -la "$v" | grep -E "预览|关键帧" || true
+
+      - name: 审片（只读的 claude -p，按 文档/方案/每日审片.md 云端版）
+        id: review
+        if: always() && steps.day.outputs.produce == 'true' && steps.day.outputs.review == 'true' && hashFiles(format('测试版/{0}/logs/fd_state.json', steps.day.outputs.day)) != ''
+        continue-on-error: true
+        timeout-minutes: 60
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          IS_TEST: ${{ steps.day.outputs.test }}
+          GEMINI_MODE: ${{ steps.day.outputs.gemini }}
+        run: |
+          D="测试版/$DAY"
+          # 告诉审片这一期是测试还是正式（11-09 改：原来不分情况一律说"云端测试"，正式那次会让审片按测试的标准放过缺图、换声音）
+          if [ "$GEMINI_MODE" = "default" ]; then
+            VOICE_NOTE="配音按正式用 Gemini 主声音；本月 Gemini 花到上限 90% 时程序会整期改用 MiMo 备用声音，要照实写明这一期实际用的是哪种声音"
+          else
+            VOICE_NOTE="配音按命令行 --use-backup 用 MiMo 备用声音，这是本次设定"
+          fi
+          if [ "$IS_TEST" = "true" ]; then
+            IMG_NOTE="这一期是云端测试：配图只试画 1 张网页图（私有仓库用 Codex 画），其余按 --skip-images 跳过（网页用程序画的封面，视频不带新画的图），视频导演按 FD_DIRECTOR_NO_NEW_IMAGES=1 不新画图，这几项是测试设定"
+          else
+            IMG_NOTE="这一期是云端正式运行：配图由 Codex 先画（在私有仓库画好取回来；网页图 cloud/web_images.py，视频图 site/tools/video3_images.py），画不成的网页图用程序画的主题色封面、视频那一块不带图，缺了哪几张要照实写进审片；视频导演按 FD_DIRECTOR_NO_NEW_IMAGES=1 不新画图（2026-11 起正式运行也这样），这一项不算问题"
+          fi
+          mkdir -p "$RUNNER_TEMP/review"
+          unset ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
+          # 只许写这两个文件：期目录里已有的文件先设成只读（目录不动，好让它新建这两个文件）；审完核对有没有别的文件变了、多了
+          find "$D" -type f ! -name 审片.md ! -name 审片结论.json -exec sha256sum {} + | sort -k2 > "$RUNNER_TEMP/review/before.txt"
+          find "$D" -type f -exec chmod a-w {} +
+          PROMPT="你在 GitHub Actions 的云端 Ubuntu 机器上，项目目录就是当前目录（$GITHUB_WORKSPACE）。先完整读 文档/方案/每日审片.md：开头'云端版'一段和'任务说明'一节，按云端版给 DAY=$DAY 这一期做独立审片。云端的替换：项目目录＝当前目录；Python＝~/.venvs/frontier-daily/bin/python -u；转写用环境变量 FD_WHISPER_BIN 指的 mlx_whisper（Linux 替身，内部是 faster-whisper，参数和输出与 mlx-whisper 一样，模型名照写 mlx-community/whisper-large-v3-turbo，调用时设 HF_HUB_OFFLINE=1）；截帧、截音频等临时文件放 $RUNNER_TEMP/review。这一次只许写两个文件：$D/审片.md 和 $D/审片结论.json（期目录里已有的文件都设成了只读）；F 步那一行日志不写进 测试版/每日运行日志.md，改写在 审片.md 末尾；E 步跳过。$IMG_NOTE；$VOICE_NOTE。不发布、不 git commit、不 git push。"
+          set +e
+          claude -p "$PROMPT" \
+            --model opus \
+            --permission-mode bypassPermissions \
+            --max-turns 150 \
+            --disallowedTools ScheduleWakeup \
+            --output-format stream-json --verbose \
+            > "$RUNNER_TEMP/review/云端_claude审片.jsonl" \
+            2> "$RUNNER_TEMP/review/云端_claude审片_stderr.log"
+          rc=$?
+          set -e
+          find "$D" -type f -exec chmod u+w {} +
+          find "$D" -type f ! -name 审片.md ! -name 审片结论.json -exec sha256sum {} + | sort -k2 > "$RUNNER_TEMP/review/after.txt"
+          if ! diff -q "$RUNNER_TEMP/review/before.txt" "$RUNNER_TEMP/review/after.txt" >/dev/null; then
+            echo "::warning::审片动了别的文件（应该只写 审片.md、审片结论.json）："
+            diff "$RUNNER_TEMP/review/before.txt" "$RUNNER_TEMP/review/after.txt" | head -20
+          fi
+          cp "$RUNNER_TEMP/review/"云端_claude审片* "$D/logs/" || true
+          # 不在公开日志里印审片的总结和 审片结论.json 的开头（里面有稿子的字）：都在期目录里，跟着文件包进私有仓库
+          echo "审片结束：退出码 $rc；审片.md $([ -s "$D/审片.md" ] && echo 写了 || echo 没写)，审片结论.json $([ -s "$D/审片结论.json" ] && echo 写了 || echo 没写)"
+          exit $rc
+
+      # ---------------- 放行判定（只在"跑到第 17 步"时做）。打包、发布、存往期、发邮件在私有仓库的"放行发布"（publish.yml，它再判一遍）----------------
+      # 放行结论.json 的"给人看"会带审片备注里的字，所以只写进期目录（跟着文件包走），公开日志、摘要里只印放没放行、哪几条没满足
+      - name: 出刊了没有（跑完到第 17 步才判放行）
+        id: made
+        if: always() && steps.day.outputs.produce == 'true'
+        run: |
+          mkdir -p "测试版/$DAY/logs"
+          if python cloud/release/gate.py --issue "测试版/$DAY" --check-made > "测试版/$DAY/logs/放行判定.log" 2>&1; then
+            echo "made=true" >> "$GITHUB_OUTPUT"; echo "出刊了（跑完了 17 步）"
+          else
+            echo "made=false" >> "$GITHUB_OUTPUT"; echo "没出刊（原因写在 logs/放行判定.log）"
+          fi
+
+      - name: 放行判定（9 条）
+        id: gate
+        if: always() && steps.made.outputs.made == 'true'
+        run: |
+          set +e
+          python cloud/release/gate.py --issue "测试版/$DAY" >> "测试版/$DAY/logs/放行判定.log" 2>&1
+          rc=$?
+          set -e
+          if [ "$rc" = "0" ]; then echo "release=true" >> "$GITHUB_OUTPUT"; else echo "release=false" >> "$GITHUB_OUTPUT"; fi
+          v=$(python -c "import json,sys; d=json.load(open(sys.argv[1], encoding='utf-8')); print(('放行' if d['放行'] else '不放行') + ('；没满足的条：' + '、'.join(str(x) for x in d['没过']) if d['没过'] else '；9 条都满足'))" "测试版/$DAY/放行结论.json" || echo "放行结论.json 读不出来")
+          echo "放行判定：$v（逐条见 放行结论.json，跟着文件包进私有仓库）"
+          { echo "## 放行判定"; echo "$v"; } >> "$GITHUB_STEP_SUMMARY"
+          # 不放行不算这一步出错：网站不动，私有仓库那边发邮件
+
+      - name: 写摘要（只写每一步的状态，不写调度报告、自检、审片的内容）
+        if: always()
+        run: |
+          {
+            echo "## frontier-daily $DAY（跑到第 $IN_UNTIL 步，从第 $FROM_STEP 步起；认领：${IN_CLAIM_TAG:-不认领}）"
+            echo '```'
+            python cloud/release/steps_brief.py "测试版/$DAY" 2>&1 || true
+            echo '```'
+            echo "### 磁盘"
+            echo '```'
+            df -h / | tail -1
+            du -sh "测试版/$DAY" 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ---- 整期文件包放进私有仓库的发行版 run-<运行编号>（草稿，留 14 天，放行发布流程清理）。以前是三个产物（issue-、media-、state-<日期>），
+      #      公开仓库的产物谁都能下载，所以不再上传产物。三个包的内容和以前的产物一样：
+      #        issue-<日期>.tar.gz  小份（网页、日志、文稿、审片、报告、花费；收窄规则照旧）——一定传
+      #        state-<日期>.tar.gz  跨天状态（往期事件库、月度账本），接着跑、放行发布要用——一定传
+      #        media-<日期>.tar.gz  带音视频的整份：测试时看输入 upload_media；正式运行时没放行就传（以前是"没发布就传"，
+      #                             这边还不知道发布成没成，按放行判定算；放行了但发布出错的那期，小份里的网页照样能手动放行）
+      - name: 收窄、打包整期目录（小份、跨天状态；没放行或测试时另打带音视频的整份）
+        if: always() && steps.day.outputs.day != ''
+        env:
+          WANT_MEDIA: ${{ steps.day.outputs.produce == 'true' && ((steps.day.outputs.test == 'true' && steps.day.outputs.media == 'true') || (steps.day.outputs.test != 'true' && steps.gate.outputs.release != 'true')) }}
+        run: |
+          UP="$RUNNER_TEMP/up"; SMALL="$UP/issue-$DAY"; mkdir -p "$SMALL"
+          if [ -d "测试版/$DAY" ]; then
+            # 网页这一期的 issues/<日期>/ 整个留着（手动放行要拿它发布，约 7 MB，含播客 mp3）；关键帧总览图留着（看画面用）
+            rsync -a --prune-empty-dirs \
+              --exclude '12_视频对比/' \
+              --include "10_网页v3/issues/***" \
+              --include '关键帧总览*.jpg' --include 'logs/云端试画/***' \
+              --exclude '*.wav' --exclude '*.flac' --exclude '*.mp3' --exclude '*.m4a' --exclude '*.aac' --exclude '*.ogg' \
+              --exclude '*.mp4' --exclude '*.webm' --exclude '*.mov' --exclude '*.npy' \
+              --exclude '*.png' --exclude '*.jpg' --exclude '*.jpeg' --exclude '*.webp' --exclude '*.gif' --exclude '*.avif' \
+              "测试版/$DAY/" "$SMALL/"
+          fi
+          tar -czf "$UP/issue-$DAY.tar.gz" -C "$SMALL" .
+          st=(); for x in 往期事件库 月度账本; do [ -e "测试版/$x" ] && st+=("$x"); done
+          [ ${#st[@]} -gt 0 ] && tar -czf "$UP/state-$DAY.tar.gz" -C 测试版 "${st[@]}"
+          if [ "$WANT_MEDIA" = "true" ] && [ -d "测试版/$DAY" ]; then
+            tar -czf "$UP/media-$DAY.tar.gz" -C "测试版/$DAY" --exclude ./12_视频对比 .
+          fi
+          ls -la "$UP"/*.tar.gz
+
+      - name: 整期文件包放进私有仓库的发行版 run-运行编号
+        id: bundles
+        if: always() && steps.day.outputs.day != ''
+        env:
+          GH_TOKEN: ${{ secrets.STATE_REPO_TOKEN }}
+        run: |
+          REL="run-$GITHUB_RUN_ID"
+          retry() { for i in 1 2 3; do "$@" && return 0; echo "没成（第 $i 次），等一会儿再试"; sleep $((i * 10)); done; return 1; }
+          gh release view "$REL" -R "$STATE_REPO" >/dev/null 2>&1 || retry gh release create "$REL" -R "$STATE_REPO" --draft --target main \
+            --title "$REL（$DAY）" --notes "公开仓库运行 $GITHUB_RUN_ID 的文件包（$DAY）。放行发布流程 14 天后清掉。"
+          retry gh release upload "$REL" -R "$STATE_REPO" --clobber "$RUNNER_TEMP"/up/*.tar.gz
+          echo "已放进私有仓库发行版 $REL：$(cd "$RUNNER_TEMP/up" && ls *.tar.gz | tr '\n' ' ')"
+
+      # ---- 跨天状态提交回私有仓库（只在正式运行；测试不提交）----
+      # 下一期要读：事件库（往期已讲、周末汇总）、月度账本（Gemini 月上限）、近 30 天的文字（今日一词去重、往期已讲、补前一天，
+      # 见 cloud/准备报告 A 节）。只加这一天的，更早的不删，git 历史里都在。推送凭证只在这一步临时给。
+      # 11-10 加：这一期的审片、审读、放行、调度报告、自检、花费几份文字记录也存回来（期目录根上，一期合计约 65 KB）。
+      # 周六维护要看这一周每期审片里的"请你耳听"。文件不在就跳过（周六只跑第 1–3 步、半路出错时，后面几份本来就没有）。
+      # 2026-11 起提交进私有仓库（公开仓库不放内容）：重新浅克隆私有仓库（只取 测试版/），把同一批文件拷进去再提交、推送。
+      - name: 提交跨天状态（事件库、账本、这一期的文字，进私有仓库）
+        if: always() && steps.day.outputs.test != 'true' && steps.day.outputs.day != ''
+        continue-on-error: true
+        env:
+          STATE_REPO_TOKEN: ${{ secrets.STATE_REPO_TOKEN }}
+        run: |
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$STATE_REPO_TOKEN" | base64 -w0)"
+          D="测试版/$DAY"
+          files=()
+          for f in 测试版/往期事件库 测试版/月度账本 "$D/02_选题/最终选题.json" "$D/03_事件卡/cards_写稿用.json" \
+                   "$D/04_文稿/claude_网页.json" "$D"/04_文稿/claude_播客_*.md "$D"/04_文稿/claude_对谈_*.md \
+                   "$D/审片.md" "$D/审片结论.json" "$D/放行结论.json" "$D/00_调度报告.md" "$D/自检.md" \
+                   "$D/审读意见.md" "$D"/审读处理*.md "$D/花费.json"; do
+            [ -e "$f" ] && files+=("$f")
+          done
+          [ ${#files[@]} -eq 0 ] && { echo "没有要提交的"; exit 0; }
+          P="$RUNNER_TEMP/private-state"
+          for i in 1 2 3; do
+            rm -rf "$P"
+            git clone -q --depth 1 --filter=blob:none --no-checkout "https://github.com/$STATE_REPO.git" "$P" \
+              && git -C "$P" sparse-checkout set 测试版 && git -C "$P" checkout -q main && break
+            sleep $((i * 10))
+          done
+          [ -d "$P/.git" ] || { echo "::error::私有仓库克隆不下来；这一期的事件库、账本在发行版 run-$GITHUB_RUN_ID 的 state-$DAY.tar.gz 里"; exit 1; }
+          # 原样拷过去（只增、只改，不删私有仓库里已有的文件）
+          rsync -aR "${files[@]}" "$P/"
+          cd "$P"
+          git config user.name "frontier-daily bot"
+          git config user.email "frontier-daily-bot@users.noreply.github.com"
+          git add -- "${files[@]}"
+          git diff --cached --quiet && { echo "跨天状态没变"; exit 0; }
+          git commit -q -m "状态：$DAY（事件库、账本、这一期的文字；公开仓库运行 $GITHUB_RUN_ID）"
+          for i in 1 2 3; do
+            git pull -q --rebase origin main && git push -q origin HEAD:main && { echo "已提交并推到私有仓库 main"; exit 0; }
+            sleep $((i * 10))
+          done
+          echo "::error::跨天状态推不上去（3 次）；这一期的事件库、账本在发行版 run-$GITHUB_RUN_ID 的 state-$DAY.tar.gz 里"; exit 1
+
+      # ---- 最后叫私有仓库的"放行发布"（publish.yml）：它从发行版取文件包，再判一遍放行，打包、发布（看私有仓库的 SITE_DEPLOY_ENABLED，
+      #      测试不发）、存往期、需要时发邮件（没出刊、没放行、放行有事；测试时只打印）。跑到第 17 步的都叫（不管成没成）；
+      #      周六只在出错时叫（发"抓取入库出错"那封）。认领了的，这里算好标签留着（kept：第 4 步已开始）还是放回（released），
+      #      和以前发邮件那一步一样。这一步自己没成时，GitHub 会给你发"运行失败"的通知（看你的 GitHub 通知设置）。
+      - name: 叫私有仓库的放行发布（发布、存往期、发邮件）
+        if: always() && steps.day.outputs.day != '' && (steps.day.outputs.produce == 'true' || (steps.day.outputs.saturday == 'true' && failure()))
+        env:
+          GH_TOKEN: ${{ secrets.STATE_REPO_TOKEN }}
+          IS_TEST: ${{ steps.day.outputs.test }}
+          SATURDAY: ${{ steps.day.outputs.saturday }}
+          STAGE4: ${{ steps.mark4.outputs.stage4 }}
+          BUNDLES: ${{ steps.bundles.outcome }}
+        run: |
+          [ "$BUNDLES" = "success" ] || echo "::warning::文件包没放进发行版（$BUNDLES）：放行发布那边取不到成品，只能发'没出刊'的邮件"
+          claim=""
+          if [ -n "$IN_CLAIM_TAG" ]; then
+            if [ "$STAGE4" = "started" ]; then claim=kept; else claim=released; fi
+          fi
+          for i in 1 2 3; do
+            gh workflow run publish.yml -R "$STATE_REPO" --ref main \
+              -f date="$DAY" -f run_id="$GITHUB_RUN_ID" -f sha="$GITHUB_SHA" -f test="$IS_TEST" \
+              -f saturday="$SATURDAY" -f claim="$claim" -f claim_tag="$IN_CLAIM_TAG" \
+              && { echo "已叫私有仓库的放行发布（测试：$IS_TEST；周六：$SATURDAY；认领：${claim:-无}）"; exit 0; }
+            sleep $((i * 10))
+          done
+          echo "::error::叫不动私有仓库的放行发布（3 次）：这一期没发布、也没发邮件。文件包在私有仓库发行版 run-$GITHUB_RUN_ID，到私有仓库 Actions → 放行发布 手动运行"; exit 1
+
+  # ---- 收尾：认领了、但 issue 那一段没成功时，看第 4 步开始了没有 ----
+  # 没开始（第 1–3 步或装环境出错、排队时被取消）：还没用 Claude、没花钱，把标签删掉，今天下一个时刻再试。
+  # 开始了：标签留着（一天不重复花 Claude 额度和 Gemini 的钱），出错邮件已经在 issue 那一段发了，由人处理。
+  # 依据两样：GitHub 接口里 issue 那一段"第 4–9 步"的状态（cloud/trigger/claim.py started），和 issue 那一段的输出 stage4。认不出来按"开始了"。
+  unclaim:
+    name: 收尾：第 4 步以前出错就放回认领
+    needs: [claim, issue]
+    if: always() && needs.claim.outputs.claimed == 'true' && needs.issue.result != 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 取代码（只要认领程序）
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          sparse-checkout: cloud/trigger
+
+      - name: 看第 4 步开始了没有；没开始就放回认领
+        env:
+          GH_TOKEN: ${{ github.token }}          # 只读这次运行的 job 列表（actions: read）
+          GH_PUSH_TOKEN: ${{ github.token }}     # 删标签（contents: write），只在这一步经 git 的环境变量临时给
+          TAG: ${{ needs.claim.outputs.tag }}
+          TAG_SHA: ${{ needs.claim.outputs.tag_sha }}
+          DAY: ${{ needs.claim.outputs.day }}
+          STAGE4: ${{ needs.issue.outputs.stage4 }}
+          ISSUE_RESULT: ${{ needs.issue.result }}
+        run: |
+          echo "issue 那一段的结果：$ISSUE_RESULT；认领：$TAG"
+          f="$RUNNER_TEMP/jobs.json"; got=false
+          for i in 1 2 3; do
+            if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?filter=latest&per_page=100" > "$f"; then got=true; break; fi
+            sleep $((i * 10))
+          done
+          state=started
+          if [ "$got" = true ]; then state=$(python3 cloud/trigger/claim.py started --jobs-json "$f" --stage4 "$STAGE4") || state=started; fi
+          del="gh api -X DELETE repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG"
+          if [ "$state" != "not-started" ]; then
+            echo "第 4 步已经开始（或认不出来）：认领 $TAG 留着，今天后面的时刻不会再出这一期。"
+            echo "要从头重跑，先删标签：$del"
+            { echo "### 认领 \`$TAG\` 留着"; echo "第 4 步已经开始，出错后不自动重跑（出错邮件里写了怎么接着跑）。要从头重跑先删标签：\`$del\`"; } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_PUSH_TOKEN" | base64 -w0)"
+          set +e
+          python3 cloud/trigger/claim.py release --tag "$TAG" --expect "$TAG_SHA"
+          rc=$?
+          set -e
+          if [ "$rc" = "0" ]; then
+            echo "### 第 4 步以前出错：认领 \`$TAG\` 已放回，今天下一个时刻会再试" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$rc" = "11" ]; then
+            echo "### 认领 \`$TAG\` 已经不是这次运行的那个，没动" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::error::认领 $TAG 放不回去：今天后面的时刻会以为已经出过了。手动删：$del"; exit 1
+          fi

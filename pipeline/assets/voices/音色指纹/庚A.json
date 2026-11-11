@@ -1,0 +1,30 @@
+{
+ "叫法": "庚A",
+ "说明": "庚A 定稿样音的人声版（第五轮 人声_庚A，带抬高那句），11-01 测量的锚点",
+ "声音ID": "voice_7c77bbe9-d6aa-4919-8353-3aae65f71cb7",
+ "块": [
+  {
+   "文件": "pipeline/assets/voices/参考人声/庚A_1_开场.flac",
+   "sha1": "ae4964a85ef8d60fd093ab7ccaa342156c30afb0",
+   "说话秒数": 30.32,
+   "来源": "~/.cache/frontier-daily/tts/chunks/3195a0bf80da7944fb01.wav",
+   "来源sha1": "ab79990105aa85cbc08a95c10efb466d5841a726"
+  },
+  {
+   "文件": "pipeline/assets/voices/参考人声/庚A_2_热点一.flac",
+   "sha1": "1c98dc8818a43643d422ce5772a47043028eace4",
+   "说话秒数": 45.6,
+   "来源": "~/.cache/frontier-daily/tts/chunks/bde8e8e7f69315cc910f.wav",
+   "来源sha1": "32c9cbb6ce54710f9e4343cf090f17a9076a5a15"
+  }
+ ],
+ "块之间相似度": 0.765,
+ "模型": {
+  "名字": "speechbrain/spkrec-ecapa-voxceleb",
+  "speechbrain": "1.1.2",
+  "torch": "2.15.0",
+  "权重sha1": "2f40518a5993c71e1457fe956a1ae7008c71f236"
+ },
+ "生成于": "2026-11-01 18:00",
+ "怎么比": "新配音的相似度＝和这里每一块分别算余弦相似度再平均；整期比的是各块平均后的方向"
+}

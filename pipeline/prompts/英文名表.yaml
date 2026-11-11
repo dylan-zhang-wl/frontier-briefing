@@ -1,0 +1,156 @@
+# 英文名表：网页、视频（以及以后的英文稿）里公司、品牌、机构、媒体的英文写法，一律以这里为准。
+# 网页写稿（写稿_网页.md）、视频（video3_*）和组装程序（site/tools/build_v3.py：参考来源、报道光谱的英文名）都读这一份。
+# 维护：新出现的名字照格式补一条；拿不准的先查官网或官方新闻稿，把依据和查证日期写进 note。
+#
+# 每条：
+#   zh    中文里出现的写法（可以多个；也收旧写法、媒体常见写法）
+#   en    英文正文、数字卡、来源列表里要用的写法（大小写照官方）
+#   kind  media 媒体 / company 公司 / brand 品牌 / org 机构 / feed 抓取源（不是媒体，显示时换成 en）
+#   note  依据
+# 媒体条目会用来把英文页面里残留的中文媒体名换成英文（例如 body_en 里误写的“IT之家”）。
+
+media:
+  - {zh: [IT之家], en: ITHome, kind: media, note: "英文维基 ITHome (website) 的写法（2026-11-01 查）；不要写 IT Home；台湾 iThome（ithome.com.tw）是另一家"}
+  - {zh: [极客公园], en: GeekPark, kind: media, note: "官网 geekpark.net 与活动名 GeekPark IF 的写法（2026-11-01 查）；不要写 Geekpark"}
+  - {zh: [36氪, 36Kr], en: 36Kr, kind: media, note: "官方英文站 36kr.com 的写法"}
+  - {zh: [新浪财经], en: Sina Finance, kind: media, note: "通行译名"}
+  - {zh: [虎嗅], en: Huxiu, kind: media, note: "通行写法（拼音）"}
+  - {zh: [CNMO, 手机中国], en: CNMO, kind: media, note: "站名缩写"}
+  - {zh: [彭博社, 彭博], en: Bloomberg, kind: media}
+  - {zh: [金融时报, 《金融时报》, 英国《金融时报》, FT], en: Financial Times, kind: media}
+  - {zh: [华尔街日报, 《华尔街日报》], en: The Wall Street Journal, kind: media}
+  - {zh: [华盛顿邮报, 《华盛顿邮报》], en: The Washington Post, kind: media}
+  - {zh: [日经亚洲], en: Nikkei Asia, kind: media}
+  - {zh: [南华早报], en: South China Morning Post, kind: media}
+  - {zh: [路透社, 路透], en: Reuters, kind: media}
+  - {zh: [TechCrunch], en: TechCrunch, kind: media}
+  - {zh: [CNBC], en: CNBC, kind: media}
+  - {zh: [The Information], en: The Information, kind: media}
+  - {zh: [The Verge], en: The Verge, kind: media}
+  - {zh: [Ars Technica], en: Ars Technica, kind: media}
+  - {zh: [Semafor], en: Semafor, kind: media}
+  - {zh: [VentureBeat], en: VentureBeat, kind: media}
+  - {zh: [Techmeme], en: Techmeme, kind: media}
+  - {zh: ["Tom's Hardware", "Tom’s Hardware"], en: "Tom’s Hardware", kind: media}
+  - {zh: [QUICK FactSet], en: QUICK FactSet, kind: org, note: "日经旗下数据商"}
+
+  # 11-03 补
+  - {zh: [钛媒体], en: TMTPost, kind: media, note: "官网 tmtpost.com 页脚写 © 2026 TMTPost（2026-11-03 查）"}
+  - {zh: [量子位], en: QbitAI, kind: media, note: "照 11-03 事件卡（E004）英文原文的写法；站点 qbitai.com"}
+  - {zh: [爱范儿], en: ifanr, kind: media, note: "照 11-03 事件卡（E003）英文原文的写法，全小写；站点 ifanr.com"}
+  - {zh: [Slator], en: Slator, kind: media, note: "语言服务业媒体；中英文都写 Slator（11-03 事件卡）"}
+  - {zh: [科创板日报, 《科创板日报》], en: Kechuangban Ribao, kind: media, note: "官网没有英文名；用户 11-03 定不意译（不要写 STAR Market Daily），用拼音，同 Huxiu"}
+
+  # 11-04 补（2026-11-05 查）
+  - {zh: [财联社], en: Cailian Press, kind: media, note: "官方旧域名 cailianpress.com 直接跳到官网 cls.cn（2026-11-05 查）；11-04 事件卡 E004 英文也写 Cailian Press"}
+  - {zh: [智东西], en: Zhidongxi, kind: media, note: "官网 zhidx.com 只有中文刊名（页脚 Copyright ©2014-2026 zhidx.com，2026-11-05 查），没找到官方英文刊名；按规则用拼音，同 Huxiu。域名里的 zhidx 是缩写，不当刊名用"}
+  - {zh: [不客观实验室], en: Bukeguan Shiyanshi, kind: media, note: "微信公众号（11-04 经虎嗅转载）；没查到官方英文名（2026-11-05），按规则用拼音、不意译"}
+  - {zh: [APPSO], en: APPSO, kind: media, note: "爱范儿旗下的应用栏目和公众号；爱范儿官网菜单和公众号二维码写 APPSO（2026-11-05 查）"}
+
+  # 11-06 补
+  - {zh: [澎湃新闻], en: The Paper, kind: media, note: "11-06 事件卡 E019 英文原文写 The Paper；英文维基条目也叫 The Paper (newspaper)（2026-11-06 查）。官网 thepaper.cn 对程序访问返回 403，没能在官网上核对，未经官网核实。英文姊妹刊 Sixth Tone 是另一个刊名，别混。单独的“澎湃”不收（“动力澎湃”这类会误报）"}
+
+feeds:
+  - {zh: [中国 AI 实验室 GitHub 新建仓库], en: GitHub, kind: feed, note: "抓取源分类名，不是媒体；页面上显示 GitHub"}
+
+companies:
+  - {zh: [SK 海力士, SK海力士], en: SK hynix, kind: company, note: "官方写法小写 hynix（2012 年起的公司名 SK hynix Inc.，2026-11-01 查）"}
+  - {zh: [闪迪], en: Sandisk, kind: company, note: "2025 年从西部数据拆分时改用 Sandisk（d 小写），不再写 SanDisk（2026-11-01 查）"}
+  - {zh: [铠侠], en: Kioxia, kind: company}
+  - {zh: [美光], en: Micron, kind: company}
+  - {zh: [三星, 三星电子, 三星集团], en: Samsung, kind: company, note: "三星电子 Samsung Electronics；集团 Samsung Group"}
+  - {zh: [英伟达], en: Nvidia, kind: company}
+  - {zh: [英特尔], en: Intel, kind: company}
+  - {zh: [博通], en: Broadcom, kind: company}
+  - {zh: [黑石, 黑石集团], en: Blackstone, kind: company}
+  - {zh: [鸿海, 富士康], en: Foxconn, kind: company, note: "鸿海精密 Hon Hai Precision；对外品牌 Foxconn"}
+  - {zh: [腾讯], en: Tencent, kind: company}
+  - {zh: [腾讯混元], en: Tencent Hunyuan, kind: brand}
+  - {zh: [微信支付], en: WeChat Pay, kind: brand}
+  - {zh: [7-ELEVEN, 广东 7-ELEVEN], en: 7-Eleven, kind: brand, note: "英文正文用 7-Eleven；中文照报道写 7-ELEVEN"}
+  - {zh: [京东], en: JD.com, kind: company}
+  - {zh: [七鲜咖啡], en: 7Fresh Coffee, kind: brand, note: "京东 App、美团 App 上的品牌英文名（2026-11-01 查）；京东超市品牌写作 7FRESH"}
+  - {zh: [无界动力], en: Wujie Dongli, kind: company, note: "没查到官方英文名（2026-11-01）；按规则用拼音。媒体有 Boundless Dynamics、Boundless Power、Wujie Power 等写法，都未经官方确认，不用"}
+  - {zh: [傅利叶], en: Fourier, kind: company, note: "傅利叶智能 Fourier（官网 fftai.com）"}
+  - {zh: [宁德时代], en: CATL, kind: company}
+  - {zh: [长鑫存储, 长鑫科技, 长鑫], en: CXMT, kind: company, note: "ChangXin Memory Technologies，英文报道通称 CXMT"}
+  - {zh: [中芯国际], en: SMIC, kind: company}
+  - {zh: [中国移动], en: China Mobile, kind: company}
+  - {zh: [中国电信], en: China Telecom, kind: company}
+  - {zh: [中金公司], en: CICC, kind: company}
+  - {zh: [中信证券], en: CITIC Securities, kind: company}
+  - {zh: [中国人寿], en: China Life, kind: company}
+  - {zh: [美团], en: Meituan, kind: company}
+  - {zh: [美的], en: Midea, kind: company}
+  - {zh: [立讯精密], en: Luxshare, kind: company}
+  - {zh: [吉利], en: Geely, kind: company}
+  - {zh: [携程], en: Trip.com, kind: company}
+  - {zh: [小红书], en: Xiaohongshu, kind: company}
+  - {zh: [IDG 资本], en: IDG Capital, kind: company}
+  - {zh: [博裕资本], en: Boyu Capital, kind: company}
+  - {zh: [砺思资本], en: Lishi Capital, kind: company, note: "拼音；未查到官方英文名"}
+  - {zh: [阿里巴巴, 阿里], en: Alibaba, kind: company}
+  - {zh: [阿里云], en: Alibaba Cloud, kind: company}
+  - {zh: [千问, 通义千问], en: Qwen, kind: brand}
+  - {zh: [谷歌], en: Google, kind: company}
+  - {zh: [微软], en: Microsoft, kind: company}
+  - {zh: [亚马逊], en: Amazon, kind: company}
+  - {zh: [苹果], en: Apple, kind: company}
+  - {zh: [标普], en: S&P Global Ratings, kind: company}
+
+  # 11-01 晚周末彩排补
+  - {zh: [Perplexity], en: Perplexity, kind: company, note: "AI 搜索公司；中英文都写 Perplexity"}
+  - {zh: [Andon Labs], en: Andon Labs, kind: org, note: "独立评测机构（Vending-Bench、Blueprint-Bench），照 11-01 事件卡写法"}
+  - {zh: [Kimi], en: Kimi, kind: brand, note: "月之暗面的模型和应用，型号如 Kimi K3、Kimi K3.1 Pro；中英文都写 Kimi"}
+  - {zh: [Gemini 4 Carbon], en: Gemini 4 Carbon, kind: brand, note: "谷歌的模型（11-01 事件卡）；第二次起可只写 Carbon"}
+  - {zh: [Gemini 4 Argon], en: Gemini 4 Argon, kind: brand, note: "谷歌的模型（11-01 事件卡）；第二次起可只写 Argon"}
+
+  # 11-03 补（写法照 11-03 事件卡的英文原文）
+  - {zh: [甲骨文], en: Oracle, kind: company, note: "讲古文字（甲骨文字、数字人文）的新闻里不是这家公司，视频英文名提醒可以不理"}
+  - {zh: [PIMCO, 品浩, 太平洋投资管理公司], en: PIMCO, kind: company, note: "全大写；中文稿第一次写'PIMCO（品浩）'，口播说'PIMCO，中文名品浩'（官方中文名，2026-11-03 查香港中文官网）"}
+  - {zh: [Evercore ISI], en: Evercore ISI, kind: company, note: "投行 Evercore 的研究部门"}
+  - {zh: [Seaport Research Partners], en: Seaport Research Partners, kind: company, note: "美国投资研究机构"}
+  - {zh: [Baird], en: Baird, kind: company, note: "投行"}
+  - {zh: [标普全球市场情报], en: S&P Global Market Intelligence, kind: company, note: "和评级机构「标普」（S&P Global Ratings）是两家，别混"}
+  - {zh: [Daybreak], en: Daybreak, kind: brand, note: "OpenAI 和盟友一起加强网络韧性的项目"}
+
+  # 11-04 补（2026-11-05 查官网）
+  - {zh: [墨芯, 墨芯人工智能], en: Moffett AI, kind: company, note: "官网 moffettai.com 页头标志写 MOFFETT AI，商务、媒体邮箱是 @moffett.ai（2026-11-05 查）；全称墨芯人工智能科技（深圳）有限公司。11-04 事件卡的 Muxin、网页和视频暂用的拼音 Moxin 都不是官方写法；有 Muxin、Moxin 等写法，不用"}
+  - {zh: [凌川科技, 凌川], en: Transtreams, kind: company, note: "官网 transtreams.com（北京凌川科技有限公司）的标志写“凌川科技 Transtreams”，邮箱 Biz@transtreams.com（2026-11-05 查）；快手系 AI 芯片公司。11-04 网页、视频暂用拼音 Lingchuan Technology；有 Lingchuan Technology、Lingchuan 等写法，不用"}
+  - {zh: [安森美, 安森美半导体], en: onsemi, kind: company, note: "官方写法全小写，句首也写 onsemi（官网新闻稿，如 2026-11-02 的 onsemi to Acquire Ferric…；2021 年 8 月由 ON Semiconductor 改名，2026-11-05 查）；中文官网 onsemi.cn 写安森美。不再写 ON Semiconductor"}
+  - {zh: [埃森哲], en: Accenture, kind: company, note: "官网中文页 accenture.com/cn-zh 同时写埃森哲、Accenture（2026-11-05 查）"}
+  - {zh: [币安], en: Binance, kind: company, note: "官网 binance.com 写 Binance（2026-11-05 查）；中文名币安照 11-04 事件卡 E005（官网中文页是动态页，没取到中文名）"}
+
+  # 11-06 补（2026-11-06 查官网）
+  - {zh: [月之暗面], en: Moonshot AI, kind: company, note: "官网 moonshot.ai 页头写 Moonshot AI，页脚“Copyright © 2023-2026 Moonshot AI. All Rights Reserved.”（2026-11-06 查）。11-06 事件卡英文简写成 Moonshot；英文正文第一次写 Moonshot AI。Kimi 是它的模型和应用，见上"}
+  - {zh: [华为], en: Huawei, kind: company, note: "官网 huawei.com/en 正文写 Huawei，页脚“Huawei Technologies Co., Ltd.”（2026-11-06 查）；全大写的 HUAWEI 只是标志、横幅的字样，正文不用"}
+  - {zh: [软银集团, 软银], en: SoftBank, kind: company, note: "官网 group.softbank/en 页脚“Copyright © SoftBank Group Corp.”（2026-11-06 查）；B 大写，集团全称 SoftBank Group Corp.，不写 Softbank"}
+  - {zh: [豆包, 豆包手机助手], en: Doubao, kind: brand, note: "字节跳动的 AI 助手。官网 doubao.com 只有中文（页面标题“豆包 - 字节跳动旗下 AI 智能助手”，2026-11-06 查），没写英文名；字节跳动 Seed 英文官网 seed.bytedance.com/en 的模型名都用 doubao（如 doubao-seed-2-1-pro），11-06 事件卡英文也写 Doubao，所以写拼音 Doubao。网上说海外版另有名字，没核实，不用"}
+
+orgs:
+  - {zh: [国家人工智能产业投资基金], en: National AI Industry Investment Fund, kind: org}
+  - {zh: [达特茅斯学院], en: Dartmouth College, kind: org}
+  - {zh: [南方环境法律中心], en: Southern Environmental Law Center, kind: org}
+  - {zh: [全国有色人种协进会, NAACP], en: NAACP, kind: org}
+  - {zh: [美国白宫科学与技术顾问会议], en: "the White House science and technology advisory council", kind: org, note: "照 11-01 事件卡（IT之家）的说法；全称首次出现时用"}
+  # 11-03 补
+  - {zh: [欧洲央行, 欧洲中央银行], en: European Central Bank, kind: org, note: "11-03 事件卡（E173）写作「欧洲央行（European Central Bank）」"}
+  - {zh: [世界互联网大会], en: World Internet Conference, kind: org, note: "乌镇峰会；照 11-03 事件卡（E049）英文原文"}
+  # 11-06 补
+  - {zh: [中国信通院, 中国信息通信研究院, 信通院], en: CAICT, kind: org, note: "全称 China Academy of Information and Communications Technology（工信部直属的研究机构）。官网英文页 caict.ac.cn/english 2026-11-06 打不开（返回 412），没能在官网上核对；写法照 11-06 事件卡 E019 英文原文和英文媒体、行业组织会员名录的通行写法，未经官网核实"}
+
+hosts:
+  - {zh: [Shirley], en: Shirley, kind: host, note: "本节目女声主播的名字（2026-11-01 晚用户定），中英文都写 Shirley，按英文念；不写雪莉等音译"}
+  - {zh: [Dylan], en: Dylan, kind: host, note: "本节目周日对谈男声搭档的名字（2026-11-01 晚用户定），中英文都写 Dylan，按英文念；不写迪伦等音译"}
+
+people:
+  # 人名的中文音译 → 英文原名（网页英文版、视频英文字照这里写）。只收带"·"的全名音译，免得单独一个姓误伤
+  - {zh: [埃隆·马斯克, 伊隆·马斯克], en: Elon Musk, kind: person}
+  - {zh: [桑达尔·皮查伊, 桑达尔·皮柴], en: Sundar Pichai, kind: person, note: "谷歌 CEO（11-01 事件卡）"}
+  - {zh: [戴密斯·哈萨比斯, 德米斯·哈萨比斯], en: Demis Hassabis, kind: person}
+  - {zh: [阿拉夫·斯里尼瓦斯], en: Arav Srinivas, kind: person, note: "Perplexity CEO；照 11-01 事件卡写法，外面常见写法是 Aravind Srinivas，用前对一下原报道"}
+  - {zh: [迈克·奥弗雷尔], en: Mike Overell, kind: person, note: "Anthropic 负责 Claude 订阅产品（11-01 事件卡）"}
+  - {zh: [圣地亚哥·施内尔, 桑蒂亚哥·施内尔], en: Santiago Schnell, kind: person, note: "达特茅斯学院教务长（10-31 事件卡，已辞职）"}
+  # 11-03 补
+  - {zh: [约翰·特努斯], en: John Ternus, kind: person, note: "苹果 CEO（11-03 事件卡）"}
+  - {zh: [蔡崇信], en: Joe Tsai, kind: person, note: "华人，中文稿写蔡崇信；英文照 11-03 事件卡（E049）写 Joe Tsai"}

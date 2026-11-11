@@ -1,0 +1,19 @@
+# mlx_whisper 替身（云端 Linux 用，faster-whisper 做转写）。装法见 cloud/README.md 或 workflow：
+#   uv venv ~/.venvs/fd-whisper --python 3.12
+#   uv pip install --python ~/.venvs/fd-whisper/bin/python ./cloud/whisper_standin
+[project]
+name = "fd-mlx-whisper-standin"
+version = "0.1.0"
+description = "mlx_whisper 的同名替身：参数和 json 输出一样，内部用 faster-whisper（CPU）"
+requires-python = ">=3.10"
+dependencies = ["faster-whisper==1.2.1", "av==18.0.0"]   # av 19 去掉了 faster-whisper 1.2.1 要用的 metadata_errors 参数（本机实测会报 TypeError），先钉在 18.0.0
+
+[project.scripts]
+mlx_whisper = "mlx_whisper.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["mlx_whisper"]

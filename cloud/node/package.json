@@ -1,0 +1,8 @@
+{
+  "name": "frontier-daily-cloud-node",
+  "private": true,
+  "description": "云端截图、验收、录屏用的 Node 依赖。只有 Playwright（浏览器自动化）。mini 上是 npx 缓存里的 1.65.0-alpha-2026-10-30；这里用 1.x 最新正式版（没测）。脚本都用 channel:'chrome'，要装 Google Chrome 正式版。",
+  "dependencies": {
+    "playwright": "1"
+  }
+}

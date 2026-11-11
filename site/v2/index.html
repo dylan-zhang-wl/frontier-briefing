@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>每日AI科技前沿简报</title>
+<meta name="description" content="每日AI科技前沿简报（Daily AI &amp; Tech Frontier）：日卡、今日数字、视频与播客、头条、要闻、快讯、预告看板、国内外对照、今日一词。">
+<meta name="robots" content="noindex">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230D636D'/%3E%3Cpath d='M6 18h5l3-8 4 13 3-7h5' fill='none' stroke='%23F6F2E9' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="video.css">
+<link rel="stylesheet" href="video2.css">
+<!-- 先按记住的设置定好深浅色和语言，免得页面闪一下 -->
+<script>(function(){try{var d=document.documentElement,t=localStorage.getItem('fd.theme'),l=localStorage.getItem('fd.lang');if(t==='light'||t==='dark')d.setAttribute('data-theme',t);if(l==='en')d.lang='en';}catch(e){}})();</script>
+</head>
+<body>
+<a class="skip" href="#main">跳到正文</a>
+<header class="top" id="top"></header>
+<div class="notice" id="notice" hidden></div>
+<main id="main" tabindex="-1"><p class="boot">正在载入今天的简报…</p></main>
+<footer class="foot" id="foot"></footer>
+<div class="tip" id="tip" role="tooltip" hidden></div>
+<div class="mini console" id="mini" hidden></div>
+<noscript><p class="boot">这个页面需要启用 JavaScript。</p></noscript>
+<!-- 往期目录（日期列表）；每一期的数据在 issues/日期/issue.js，由 app.js 按日期加载 -->
+<script src="issues/index.js"></script>
+<script src="video.js"></script>
+<!-- 视频 v2：GSAP 动画引擎（3.13.0，站内自带）＋ 播放器 -->
+<script src="vendor/gsap.min.js"></script>
+<script src="video2.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

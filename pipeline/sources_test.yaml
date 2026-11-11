@@ -1,0 +1,211 @@
+# frontier-daily 测试版信源清单（2026-10-31）
+#
+# 用途：fetch.py 按这份清单抓取。一个条目就是一个来源；改来源只改这里，不用动代码。
+# 依据：文档/调研/信息源与获取方式.md（10-30 实测），10-31 上午又补测了一轮（见各条 note）。
+#
+# 字段说明
+#   id         来源编号，全清单唯一，写进每条条目的 source_id
+#   name       给人看的名字
+#   type       抓取方式：rss（RSS／Atom 订阅源）、hn（Hacker News 官方接口）、hf_models（Hugging Face 按组织列新模型）、
+#              hf_papers（Hugging Face 每日论文）、github_search（GitHub 搜索接口）、github_org_repos（GitHub 组织新建仓库）、
+#              ainews（AINews，另拆出 X 回顾、Reddit 回顾两类社交信号）
+#   layer      层级：primary_intl 国际一手｜primary_cn 中国一手｜media_intl 国际媒体与商业｜media_cn 中文媒体｜
+#              community 社区信号｜aggregator 二手整合｜lang_edu 语言·翻译·教育｜（social 社交信号，由 ainews 自动产生）
+#   lang       来源主要语言（en / zh）；单条的语言由程序按标题再判一次
+#   region     cn = 中国来源（中国公司官方渠道、中文媒体）；intl = 国际来源。用来判断"中外都有报道"
+#   operator   运营方。同一运营方的多个渠道（如 NVIDIA 博客和 NVIDIA 新闻稿）在热度里只算一个独立来源
+#   ai_focused true = 来源本身专讲 AI，粗筛默认保留；false = 综合科技／商业／教育来源，要命中词表才保留
+#   paywall    true = 付费墙媒体，只用订阅源里的标题和摘要，不抓正文
+#   max_items  每次最多取多少条（按时间倒序），防止大源刷屏
+#   exclude_title  标题命中这个正则就丢弃（如测试版、夜间构建）
+#   title_prefix   给标题加前缀（GitHub 发版标题只有版本号，看不出是什么产品）
+#   roundup    true = 这个来源每条都是多话题汇总（如 TLDR 每期），归并时只记"提及"，不参与合并
+#   note       备注（实测情况、已知问题）
+
+defaults:
+  since_hours_before_run_day: 36     # 不给 --since 时，窗口起点 = 运行日 00:00 UTC 往前 36 小时（10-31 → 10-29T12:00Z）
+  timeout_s: 20                      # 单个请求超时
+  retries: 1                         # 失败（超时、网络错误、429、5xx）最多重试一次
+  retry_wait_s: 3
+  per_host_concurrency: 2            # 同一网站同时最多 2 个请求
+  global_concurrency: 12
+  user_agent: "Mozilla/5.0 frontier-daily/0.1 (+https://wenlongzhang.com)"   # 自报项目名；10-31 实测 Microsoft Research 会拦另一种写法（403）
+  summary_max_chars: 600
+  max_items: 60
+
+sources:
+
+  # ───────────── 国际一手 primary_intl ─────────────
+  - {id: openai, name: "OpenAI 新闻", type: rss, url: "https://openai.com/news/rss.xml",
+     layer: primary_intl, lang: en, region: intl, operator: openai, ai_focused: true,
+     note: "10-30 实测 1340 条；条目不按时间排序，程序自己排"}
+  - {id: anthropic-news, name: "Anthropic 新闻（社区生成源）", type: rss,
+     url: "https://raw.githubusercontent.com/Olshansk/rss-feeds/main/feeds/feed_anthropic_news.xml",
+     layer: primary_intl, lang: en, region: intl, operator: anthropic, ai_focused: true,
+     note: "Anthropic 无官方 RSS；Olshansk/rss-feeds 定时抓网页生成，日期只到天"}
+  - {id: anthropic-claude-blog, name: "Claude 博客（社区生成源）", type: rss,
+     url: "https://raw.githubusercontent.com/Olshansk/rss-feeds/main/feeds/feed_claude.xml",
+     layer: primary_intl, lang: en, region: intl, operator: anthropic, ai_focused: true,
+     note: "产品与套餐更新多在这里；同属 Anthropic，热度只算一个来源"}
+  - {id: google-ai, name: "Google AI 博客", type: rss, url: "https://blog.google/technology/ai/rss/",
+     layer: primary_intl, lang: en, region: intl, operator: google, ai_focused: true}
+  - {id: google-gemini, name: "Google Gemini 产品博客", type: rss, url: "https://blog.google/products/gemini/rss/",
+     layer: primary_intl, lang: en, region: intl, operator: google, ai_focused: true}
+  - {id: deepmind, name: "Google DeepMind 博客", type: rss, url: "https://deepmind.google/blog/rss.xml",
+     layer: primary_intl, lang: en, region: intl, operator: google, ai_focused: true}
+  - {id: google-research, name: "Google Research 博客", type: rss, url: "https://research.google/blog/rss/",
+     layer: primary_intl, lang: en, region: intl, operator: google, ai_focused: true}
+  - {id: msr, name: "Microsoft Research 博客", type: rss, url: "https://www.microsoft.com/en-us/research/feed/",
+     layer: primary_intl, lang: en, region: intl, operator: microsoft, ai_focused: true}
+  - {id: nvidia-blog, name: "NVIDIA 博客", type: rss, url: "https://blogs.nvidia.com/feed/",
+     layer: primary_intl, lang: en, region: intl, operator: nvidia, ai_focused: true}
+  - {id: nvidia-news, name: "NVIDIA 新闻稿", type: rss, url: "https://nvidianews.nvidia.com/releases.xml",
+     layer: primary_intl, lang: en, region: intl, operator: nvidia, ai_focused: true}
+  - {id: apple-ml, name: "Apple 机器学习研究", type: rss, url: "https://machinelearning.apple.com/rss.xml",
+     layer: primary_intl, lang: en, region: intl, operator: apple, ai_focused: true}
+  - {id: mistral, name: "Mistral AI 新闻", type: rss, url: "https://mistral.ai/rss.xml",
+     layer: primary_intl, lang: en, region: intl, operator: mistral, ai_focused: true}
+  - {id: hf-blog, name: "Hugging Face 博客", type: rss, url: "https://huggingface.co/blog/feed.xml",
+     layer: primary_intl, lang: en, region: intl, operator: huggingface, ai_focused: true}
+  - {id: meta-newsroom, name: "Meta 新闻室", type: rss, url: "https://about.fb.com/feed/",
+     layer: primary_intl, lang: en, region: intl, operator: meta, ai_focused: false,
+     note: "Meta AI 博客无 RSS；新闻室含非 AI 产品新闻，按词表粗筛"}
+
+  # ───────────── 中国一手 primary_cn ─────────────
+  # Hugging Face 按组织列新模型：按建库时间倒序取 20 个；同一系列的量化版、不同尺寸合并成一条
+  - {id: hf-deepseek, name: "DeepSeek · Hugging Face 新模型", type: hf_models, author: deepseek-ai,
+     layer: primary_cn, lang: en, region: cn, operator: deepseek, ai_focused: true}
+  - {id: hf-qwen, name: "通义千问 Qwen · Hugging Face 新模型", type: hf_models, author: Qwen,
+     layer: primary_cn, lang: en, region: cn, operator: alibaba-qwen, ai_focused: true}
+  - {id: hf-moonshot, name: "月之暗面 Kimi · Hugging Face 新模型", type: hf_models, author: moonshotai,
+     layer: primary_cn, lang: en, region: cn, operator: moonshot, ai_focused: true}
+  - {id: hf-zhipu, name: "智谱 GLM · Hugging Face 新模型", type: hf_models, author: zai-org,
+     layer: primary_cn, lang: en, region: cn, operator: zhipu, ai_focused: true,
+     note: "原 THUDM，现组织名 zai-org"}
+  - {id: hf-minimax, name: "MiniMax · Hugging Face 新模型", type: hf_models, author: MiniMaxAI,
+     layer: primary_cn, lang: en, region: cn, operator: minimax, ai_focused: true}
+  - {id: hf-stepfun, name: "阶跃星辰 · Hugging Face 新模型", type: hf_models, author: stepfun-ai,
+     layer: primary_cn, lang: en, region: cn, operator: stepfun, ai_focused: true}
+  - {id: hf-seed, name: "字节 Seed · Hugging Face 新模型", type: hf_models, author: ByteDance-Seed,
+     layer: primary_cn, lang: en, region: cn, operator: bytedance, ai_focused: true}
+  - {id: hf-tencent, name: "腾讯（含混元）· Hugging Face 新模型", type: hf_models, author: tencent,
+     layer: primary_cn, lang: en, region: cn, operator: tencent, ai_focused: true,
+     note: "混元新模型现发在 tencent 组织下；Tencent-Hunyuan 组织 2024 年后没有新模型"}
+  - {id: hf-xiaomi, name: "小米 MiMo · Hugging Face 新模型", type: hf_models, author: XiaomiMiMo,
+     layer: primary_cn, lang: en, region: cn, operator: xiaomi, ai_focused: true}
+  - {id: hf-baidu, name: "百度 · Hugging Face 新模型", type: hf_models, author: baidu,
+     layer: primary_cn, lang: en, region: cn, operator: baidu, ai_focused: true}
+  - {id: hf-ant, name: "蚂蚁 inclusionAI · Hugging Face 新模型", type: hf_models, author: inclusionAI,
+     layer: primary_cn, lang: en, region: cn, operator: ant, ai_focused: true}
+  - {id: hf-longcat, name: "美团 LongCat · Hugging Face 新模型", type: hf_models, author: meituan-longcat,
+     layer: primary_cn, lang: en, region: cn, operator: meituan, ai_focused: true}
+  # GitHub：关键产品仓库的发版记录（只留正式版）＋各实验室组织的新建仓库
+  - {id: gh-qwen-code, name: "Qwen Code 发版（GitHub）", type: rss,
+     url: "https://github.com/QwenLM/qwen-code/releases.atom",
+     layer: primary_cn, lang: en, region: cn, operator: alibaba-qwen, ai_focused: true, max_items: 3,
+     title_prefix: "Qwen Code (Alibaba) release",
+     exclude_title: "(?i)(nightly|canary|preview|alpha|beta|-rc|rc\\d)",
+     note: "仓库里还有 cua-driver 等子包的发版，一并保留，粗筛不剔"}
+  - {id: gh-kimi-code, name: "Kimi Code 发版（GitHub）", type: rss,
+     url: "https://github.com/MoonshotAI/kimi-code/releases.atom",
+     layer: primary_cn, lang: en, region: cn, operator: moonshot, ai_focused: true, max_items: 3,
+     title_prefix: "Kimi Code (Moonshot AI) release",
+     exclude_title: "(?i)(nightly|canary|preview|alpha|beta|-rc|rc\\d)",
+     note: "10-30 实测多为 canary 测试版，已用 exclude_title 去掉"}
+  - {id: gh-cn-labs-new-repos, name: "中国 AI 实验室 GitHub 新建仓库", type: github_org_repos,
+     orgs: {deepseek-ai: deepseek, QwenLM: alibaba-qwen, MoonshotAI: moonshot, zai-org: zhipu, MiniMax-AI: minimax,
+            stepfun-ai: stepfun, ByteDance-Seed: bytedance, Tencent-Hunyuan: tencent, XiaomiMiMo: xiaomi, inclusionAI: ant},
+     layer: primary_cn, lang: en, region: cn, operator: per_org, ai_focused: true,
+     note: "GitHub 接口未登录每小时 60 次，这里每次用 10 次；新模型常先建仓库再发布"}
+
+  # ───────────── 国际媒体与商业 media_intl ─────────────
+  - {id: techmeme, name: "Techmeme", type: rss, url: "https://www.techmeme.com/feed.xml",
+     layer: media_intl, lang: en, region: intl, operator: techmeme, ai_focused: false,
+     note: "每次只有最新 15 条；标题末尾括号里是原作者和媒体，程序拆到 extra.via"}
+  - {id: techcrunch-ai, name: "TechCrunch · AI", type: rss, url: "https://techcrunch.com/category/artificial-intelligence/feed/",
+     layer: media_intl, lang: en, region: intl, operator: techcrunch, ai_focused: true}
+  - {id: verge-ai, name: "The Verge · AI", type: rss, url: "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml",
+     layer: media_intl, lang: en, region: intl, operator: theverge, ai_focused: true}
+  - {id: ars-ai, name: "Ars Technica · AI", type: rss, url: "https://arstechnica.com/ai/feed/",
+     layer: media_intl, lang: en, region: intl, operator: arstechnica, ai_focused: false,
+     note: "AI 分类源里也混有航空航天等稿件，按词表粗筛"}
+  - {id: mittr, name: "MIT Technology Review", type: rss, url: "https://www.technologyreview.com/feed/",
+     layer: media_intl, lang: en, region: intl, operator: mittr, ai_focused: false,
+     note: "AI 专题源 10-29 后没更新，改用全站源再粗筛"}
+  - {id: venturebeat, name: "VentureBeat", type: rss, url: "https://venturebeat.com/feed/",
+     layer: media_intl, lang: en, region: intl, operator: venturebeat, ai_focused: false,
+     note: "AI 分类源停在 08-27；全站源每次只有 7 条"}
+  - {id: wsj-tech, name: "华尔街日报 WSJ · 科技", type: rss, url: "https://feeds.content.dowjones.io/public/rss/RSSWSJD",
+     layer: media_intl, lang: en, region: intl, operator: wsj, ai_focused: false, paywall: true,
+     note: "旧地址 feeds.a.dj.com 停在 01-27；10-31 换道琼斯新地址"}
+  - {id: bloomberg-tech, name: "彭博 Bloomberg · 科技", type: rss, url: "https://feeds.bloomberg.com/technology/news.rss",
+     layer: media_intl, lang: en, region: intl, operator: bloomberg, ai_focused: false, paywall: true}
+  - {id: ft-tech, name: "金融时报 FT · 科技", type: rss, url: "https://www.ft.com/technology?format=rss",
+     layer: media_intl, lang: en, region: intl, operator: ft, ai_focused: false, paywall: true}
+  - {id: cnbc-tech, name: "CNBC · 科技", type: rss, url: "https://www.cnbc.com/id/19854910/device/rss/rss.html",
+     layer: media_intl, lang: en, region: intl, operator: cnbc, ai_focused: false}
+  - {id: theinformation, name: "The Information（只有标题和摘要）", type: rss, url: "https://www.theinformation.com/feed",
+     layer: media_intl, lang: en, region: intl, operator: theinformation, ai_focused: false, paywall: true}
+  - {id: scmp-tech, name: "南华早报 SCMP · 科技", type: rss, url: "https://www.scmp.com/rss/36/feed",
+     layer: media_intl, lang: en, region: intl, operator: scmp, ai_focused: false,
+     note: "英文报道中国科技，帮中英文报道接上线"}
+
+  # ───────────── 中文媒体 media_cn ─────────────
+  - {id: qbitai, name: "量子位", type: rss, url: "https://www.qbitai.com/feed",
+     layer: media_cn, lang: zh, region: cn, operator: qbitai, ai_focused: true}
+  - {id: aiera, name: "新智元", type: rss, url: "https://www.aiera.com.cn/feed/",
+     layer: media_cn, lang: zh, region: cn, operator: aiera, ai_focused: true}
+  - {id: 36kr, name: "36氪", type: rss, url: "https://www.36kr.com/feed",
+     layer: media_cn, lang: zh, region: cn, operator: 36kr, ai_focused: false, note: "必须带 www"}
+  - {id: ithome, name: "IT之家", type: rss, url: "https://www.ithome.com/rss/",
+     layer: media_cn, lang: zh, region: cn, operator: ithome, ai_focused: false, note: "量大，导购和数码稿多，靠粗筛"}
+  - {id: geekpark, name: "极客公园", type: rss, url: "https://www.geekpark.net/rss",
+     layer: media_cn, lang: zh, region: cn, operator: geekpark, ai_focused: false}
+  - {id: sspai, name: "少数派", type: rss, url: "https://sspai.com/feed",
+     layer: media_cn, lang: zh, region: cn, operator: sspai, ai_focused: false}
+  - {id: huxiu, name: "虎嗅", type: rss, url: "https://rss.huxiu.com/",
+     layer: media_cn, lang: zh, region: cn, operator: huxiu, ai_focused: false,
+     note: "旧地址 www.huxiu.com/rss/0.xml 从英国超时；rss.huxiu.com 10-31 可用"}
+  - {id: tmtpost, name: "钛媒体", type: rss, url: "https://www.tmtpost.com/rss.xml",
+     layer: media_cn, lang: zh, region: cn, operator: tmtpost, ai_focused: false,
+     note: "财经媒体（界面、第一财经、财新）10-31 都没找到可用 RSS，钛媒体、虎嗅暂代商业视角"}
+
+  # ───────────── 社区信号 community ─────────────
+  - {id: hn, name: "Hacker News（官方接口 top＋best）", type: hn, lists: [topstories, beststories], per_list: 100, min_score: 20,
+     layer: community, lang: en, region: intl, operator: hackernews, ai_focused: false,
+     note: "官方 Firebase 接口；每条带分数和评论数；外链和媒体重复时合并，分数记到 engagement"}
+  - {id: hf-papers, name: "Hugging Face 每日论文", type: hf_papers, per_day: 30,
+     layer: community, lang: en, region: intl, operator: hf-papers, ai_focused: true,
+     note: "按窗口内每一天各取点赞最高的 30 篇；时间用上榜日（submittedOnDailyAt）"}
+  - {id: github-new-stars, name: "GitHub 近 7 天新仓库星数榜（搜索接口）", type: github_search, days: 7, per_page: 50, min_stars: 100,
+     layer: community, lang: en, region: intl, operator: github-trending, ai_focused: false, window_exempt: true,
+     note: "快照型来源：按要求取近 7 天新建、星数最高的仓库，不受时间窗口限制；时效衰减照常按建库时间算"}
+  - {id: producthunt, name: "Product Hunt 新品", type: rss, url: "https://www.producthunt.com/feed",
+     layer: community, lang: en, region: intl, operator: producthunt, ai_focused: false,
+     note: "订阅源不带票数"}
+
+  # ───────────── 二手整合 aggregator ─────────────
+  - {id: ainews, name: "AINews（Latent Space）", type: ainews, url: "https://latent.space/feeds/news.xml",
+     layer: aggregator, lang: en, region: intl, operator: latent-space, ai_focused: true,
+     note: "每期本身记一条；另把 AI Twitter Recap 拆成 X 信号、AI Reddit Recap 拆成 Reddit 信号，layer=social；不直连 X 和 Reddit"}
+  - {id: tldr-ai, name: "TLDR AI", type: rss, url: "https://tldr.tech/api/rss/ai",
+     layer: aggregator, lang: en, region: intl, operator: tldr, ai_focused: true, roundup: true,
+     note: "每期一条，只有标题；一期讲好几件事，归并时只记'提及'，不参与合并"}
+  - {id: rundown, name: "The Rundown AI", type: rss, url: "https://www.therundown.ai/feed",
+     layer: aggregator, lang: en, region: intl, operator: rundown, ai_focused: true}
+  - {id: importai, name: "Import AI（Jack Clark）", type: rss, url: "https://importai.substack.com/feed",
+     layer: aggregator, lang: en, region: intl, operator: importai, ai_focused: true, note: "周更"}
+  - {id: bensbites, name: "Ben's Bites", type: rss, url: "https://www.bensbites.com/feed",
+     layer: aggregator, lang: en, region: intl, operator: bensbites, ai_focused: true}
+
+  # ───────────── 语言·翻译·教育 lang_edu ─────────────
+  - {id: slator, name: "Slator（语言服务业）", type: rss, url: "https://slator.com/feed/",
+     layer: lang_edu, lang: en, region: intl, operator: slator, ai_focused: true,
+     note: "源里只放最新 4 条；内容多是 AI 翻译、本地化行业，默认保留"}
+  - {id: deepl-blog, name: "DeepL 博客", type: rss, url: "https://www.deepl.com/en/blog/rss.xml",
+     layer: lang_edu, lang: en, region: intl, operator: deepl, ai_focused: true, note: "更新慢（最新 10-06）"}
+  - {id: edsurge, name: "EdSurge（教育科技）", type: rss, url: "https://www.edsurge.com/articles_rss",
+     layer: lang_edu, lang: en, region: intl, operator: edsurge, ai_focused: false}
+  - {id: insidehighered, name: "Inside Higher Ed（高教）", type: rss, url: "https://www.insidehighered.com/rss.xml",
+     layer: lang_edu, lang: en, region: intl, operator: insidehighered, ai_focused: false,
+     note: "AI 专题源 /feed/596 已 404，用全站源粗筛"}

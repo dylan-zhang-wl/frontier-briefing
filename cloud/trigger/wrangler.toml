@@ -1,0 +1,23 @@
+# 每日AI科技前沿简报的"保底触发器"（Cloudflare Worker frontier-daily-trigger）。说明见 src/index.js 开头。
+# 不要在这个文件夹里直接运行 wrangler：用 cloud/trigger/run_wrangler.py，它把这里复制到仓库以外的运行目录
+# （本机 ~/.cache/frontier-daily-cloud/trigger-run/，Actions 里 $RUNNER_TEMP/frontier-trigger-run/）再运行，wrangler 的临时文件不进仓库。
+# 部署、写机密变量、核对，用 GitHub 上只能手动运行的流程"保底触发器"（.github/workflows/trigger-deploy.yml）。
+name = "frontier-daily-trigger"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+workers_dev = false      # 没有 *.workers.dev 网址
+preview_urls = false     # 也没有预览网址
+# 不挂路由（没有 routes）：这个 Worker 谁也访问不到，只靠下面的定时运行。
+
+# 定时（UTC）。04:17 是主力：GitHub 自己的定时（.github/workflows/frontier-daily.yml 的 04:17、05:11）11-10 实测从没准点触发过，
+# 所以 11-10 起由这里在 04:17 叫；04:43、06:47 是保底，最后一个是晚补。GitHub 那两个定时留着，来了也因为认领跳过。
+# 免费版每个账号最多 5 个定时（https://developers.cloudflare.com/workers/platform/limits/ ，按账号算，所有 Worker 加起来），
+# 部署流程会先数一遍账号里别的 Worker 已经占了几个，加上这三个超了就不部署。改了要等最多 15 分钟才生效。
+[triggers]
+crons = ["17 4 * * *", "43 4 * * *", "47 6 * * *"]
+
+# 日志：只记定时这一个 Worker 自己的运行（它没有网址，没有访客），在 Cloudflare 网页上看最近几天每次叫成没成。
+[observability]
+enabled = true
+
+# 机密变量 GH_DISPATCH_TOKEN 不写在这里：由部署流程用 wrangler secret put 从仓库 Secret 经标准输入写进去。

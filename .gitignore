@@ -1,0 +1,56 @@
+# 密钥和登录凭证：一律不进仓库（云端从 GitHub Secrets 读）
+.env
+.env.*
+*.pem
+*.key
+auth.json
+credentials*.json
+*service-account*.json
+
+# Python / Node 缓存与环境
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+node_modules/
+
+# macOS 元数据
+.DS_Store
+
+# 本机资料：成品库（cloud/取回成品.py 每天取回的期目录）、本机试验、归档。只在本机，靠 iCloud 同步，不上传 GitHub（11-09 晚定）
+本机资料/
+
+# 锁、临时文件
+*.lock
+.tmp_*
+*.tmp
+*.bak
+
+# 公开仓库只放程序：每期内容（测试版/）和音乐（许可没核前）只在私有仓库 dylan-zhang-wl/frontier-daily，
+# 云端运行时从私有仓库取来（.github/workflows/frontier-daily.yml），不进这个仓库
+测试版/
+pipeline/assets/music/
+# 往期内容（旧期网页配置、测试用的旧期数据、旧样期、11-06 检查报告）也只在私有仓库
+文档/调研/1106_检查报告/
+site/mock/
+site/tools/v3_issues/
+site/tools/fixtures/
+
+# 每期成品里的大文件和中间产物（云端整期目录作为文件包放进私有仓库的发行版，不进仓库）
+测试版/*/05_配音/
+测试版/*/06_配图/
+测试版/*/10_网页v3/
+测试版/*/11_视频v3/
+测试版/*/12_视频对比/
+测试版/*/12_视频对比_*/
+测试版/*/11_视频v3_导演/
+测试版/*/01_获取/
+测试版/*/logs/
+*.mp4
+*.webm
+*.m4a.part
+
+# 转写替身装包时 setuptools 在源目录里生成的中间文件
+cloud/whisper_standin/build/
+*.egg-info/

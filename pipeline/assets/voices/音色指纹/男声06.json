@@ -1,0 +1,31 @@
+{
+ "叫法": "男声06",
+ "说明": "第七轮 06 MiMo·温和知性（MM-A）单人版人声，变速之前的原声",
+ "参考音": "pipeline/assets/voices/男声06_MiMo参考音.wav",
+ "参考音sha1": "857e2a6921ba2b20bc8e188a62ea42d0e596942f",
+ "块": [
+  {
+   "文件": "pipeline/assets/voices/参考人声/男声06_1_开场.flac",
+   "sha1": "27ee2f3ce2ae8465bf374bbdedeaf8b99512cbbc",
+   "说话秒数": 32.16,
+   "来源": "~/.cache/frontier-daily/tts/chunks/ac499804d931261d853d.wav",
+   "来源sha1": "1b2b590b686966116fa872679cba59ccdf740896"
+  },
+  {
+   "文件": "pipeline/assets/voices/参考人声/男声06_2_热点一.flac",
+   "sha1": "60c211f3af83ca20de9f2986dad338f6eb1fd3a2",
+   "说话秒数": 47.54,
+   "来源": "~/.cache/frontier-daily/tts/chunks/aaf1e2737beed2a5be30.wav",
+   "来源sha1": "93b31d2feb1e7f6252b9b3722c21ac01bc644d78"
+  }
+ ],
+ "块之间相似度": 0.944,
+ "模型": {
+  "名字": "speechbrain/spkrec-ecapa-voxceleb",
+  "speechbrain": "1.1.2",
+  "torch": "2.15.0",
+  "权重sha1": "2f40518a5993c71e1457fe956a1ae7008c71f236"
+ },
+ "生成于": "2026-11-01 18:00",
+ "怎么比": "新配音的相似度＝和这里每一块分别算余弦相似度再平均；整期比的是各块平均后的方向"
+}

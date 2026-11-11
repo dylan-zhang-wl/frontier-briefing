@@ -1,0 +1,31 @@
+{
+ "叫法": "乙稍快",
+ "说明": "乙稍快 备用样音的人声版，加快之前的原声（第五轮 人声_乙稍快）",
+ "参考音": "pipeline/assets/voices/乙_MiMo参考音.wav",
+ "参考音sha1": "f2a6972d2e77557ef7cd0e6e8557694235a0b77b",
+ "块": [
+  {
+   "文件": "pipeline/assets/voices/参考人声/乙稍快_1_开场.flac",
+   "sha1": "dc4f7d1d4cddaddf9d7adb02ebe7cbb66c7855b8",
+   "说话秒数": 34.46,
+   "来源": "~/.cache/frontier-daily/tts/chunks/061581897a25c980d8a1.wav",
+   "来源sha1": "9ff2b79b6300e3b52e0ddee5975b99082cbb0565"
+  },
+  {
+   "文件": "pipeline/assets/voices/参考人声/乙稍快_2_热点一.flac",
+   "sha1": "ed22f991859c8d1a9078a2b40ee98e8b2875f76c",
+   "说话秒数": 54.86,
+   "来源": "~/.cache/frontier-daily/tts/chunks/a162ef4e8855d8830bde.wav",
+   "来源sha1": "cf09aaa5eb8873b572cfb336d4d69611dbfaec56"
+  }
+ ],
+ "块之间相似度": 0.956,
+ "模型": {
+  "名字": "speechbrain/spkrec-ecapa-voxceleb",
+  "speechbrain": "1.1.2",
+  "torch": "2.15.0",
+  "权重sha1": "2f40518a5993c71e1457fe956a1ae7008c71f236"
+ },
+ "生成于": "2026-11-01 18:00",
+ "怎么比": "新配音的相似度＝和这里每一块分别算余弦相似度再平均；整期比的是各块平均后的方向"
+}
