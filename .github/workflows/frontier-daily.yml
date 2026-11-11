@@ -314,10 +314,25 @@ jobs:
           df -h / | tail -1; nproc; free -g | head -2
 
       - name: 装系统软件（ffmpeg、中文字体）
+        timeout-minutes: 15
         run: |
-          sudo apt-get update -qq
           # fonts-noto-cjk：Ubuntu 默认没有中文字体，网页截图、视频里界面字（-apple-system、PingFang 等找不到时）要靠它，不然是方框
-          sudo apt-get install -y -qq ffmpeg fonts-noto-cjk rsync
+          # 11-11 试跑（运行 43055268821）：那台云端机器查不到 security.ubuntu.com 的地址，apt 一个包一个包地等，卡了 46 分钟才失败
+          # （平时 20 秒）。所以每次连不上 20 秒就放弃、更新最多 2 分钟、安装最多 5 分钟，试 2 次；还不成就让这次运行失败——
+          # 这时还没到第 4 步，认领会放回，保底触发器下一个时刻（04:43、06:47 UTC）换一台机器再来。
+          APT=(-o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20)
+          ok=false
+          for i in 1 2; do
+            if sudo timeout 120 apt-get "${APT[@]}" update -qq \
+               && sudo DEBIAN_FRONTEND=noninteractive timeout 300 apt-get "${APT[@]}" install -y -qq ffmpeg fonts-noto-cjk rsync; then
+              ok=true; break
+            fi
+            echo "装系统软件没成（第 $i 次）"
+            [ "$i" = 1 ] && { sudo dpkg --configure -a || true; sleep 20; }    # 万一装到一半被打断，先把装了一半的包收拾好
+          done
+          if [ "$ok" != "true" ]; then
+            echo "::error::装系统软件试了 2 次都没成（多半是这台云端机器的网络或域名解析出了问题），这次运行停下，下一个时刻换机器再来"; exit 1
+          fi
           fc-list :lang=zh family | head -3
           ffmpeg -version | head -1
 
