@@ -19,6 +19,7 @@ agy 的记录在 log_<id>.agy.json，Codex 原始输出在 log_<id>.png.txt；
 
 生图后端（2026-11-03 起）：默认先 agy（Antigravity CLI，Google AI Pro 订阅，经 site/tools/agy_image.py），没成再 Codex（ChatGPT 订阅）；
 两家都不另花钱。顺序只在 IMAGE_BACKENDS_DEFAULT 一处改，或临时用环境变量：FD_IMAGE_BACKENDS=codex 恢复旧做法（只用 Codex）。
+FD_IMAGE_BACKENDS=remote（11-11 加，只在公开仓库的云端流程里设）：这一批不在本机画，整批送去私有仓库用 Codex 画（cloud/remote_images.py）。
 agy 开画前查一次登录和额度；额度用完 / 没登录 / 没装（agy_image 退出码 3、4、7）就整轮不再试 agy；超时、没拿到图、其他错误（5、6、1）只这一张改走 Codex；
 竖图（portrait 4:5）agy 画不了，直接 Codex。每张约 1 分钟，最多同时 4 张。后端都没成：版式和时间轴不变，那一块就不带图。
 """
@@ -135,7 +136,9 @@ def existing(d, rid):
 # ---------------------------------------------------------------- 生成（先 agy，再 Codex）
 def image_backends():
     raw = os.environ.get("FD_IMAGE_BACKENDS", IMAGE_BACKENDS_DEFAULT)
-    out = [b for b in (x.strip().lower() for x in raw.split(",")) if b in TOOL_NAME]
+    out = [b for b in (x.strip().lower() for x in raw.split(",")) if b in TOOL_NAME or b == "remote"]
+    if "remote" in out:
+        return ["remote"]           # 11-11 加：公开仓库里叫私有仓库画（cloud/remote_images.py），不和别的后端混用
     return list(dict.fromkeys(out)) or ["codex"]
 
 
@@ -335,8 +338,15 @@ def ensure(issue, reqs, accent, gen=True, redo=()):
             agy_ready()                                        # 先查一次登录和额度（不花额度），不能用就整轮直接 Codex
         res_p = d / "results.json"
         results = json.loads(res_p.read_text(encoding="utf-8")) if res_p.exists() else {}
-        with ThreadPoolExecutor(max_workers=4) as ex:
-            outs = list(ex.map(lambda r: (r, gen_one(d, r, accent)), todo_gen))
+        if order == ["remote"]:
+            # 公开仓库里没有 Codex 登录：这一批整个送去私有仓库画（一次叫一回，不是一张叫一回），见 cloud/remote_images.py
+            if str(ROOT / "cloud") not in sys.path:
+                sys.path.insert(0, str(ROOT / "cloud"))
+            import remote_images
+            outs = remote_images.draw(d, todo_gen, accent)
+        else:
+            with ThreadPoolExecutor(max_workers=4) as ex:
+                outs = list(ex.map(lambda r: (r, gen_one(d, r, accent)), todo_gen))
         log = d / "提示词记录.md"
         if not log.exists():
             log.write_text("# %s 视频配图 · 提示词记录\n\n每张一行：时间、文件、放在哪、画面（英文提示词的 Subject 一段）、哪个后端画的、用时。完整提示词和每次尝试在 results.json，"

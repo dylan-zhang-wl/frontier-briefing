@@ -4,7 +4,8 @@
 #   这里跑认领、第 1–17 步、审片、放行判定；开头用 STATE_REPO_TOKEN（只对私有仓库有效的细粒度令牌）从私有仓库取 测试版/ 和音乐，
 #   结尾把和以前同一批文字提交回私有仓库的 测试版/。整期文件包不再上传成产物，放进私有仓库的发行版 run-<运行编号>（草稿，不发通知）。
 #   画图：把网页稿、分镜打成小包放进同一个发行版，叫私有仓库的"配图"（images.yml，Codex 在那边画），最多等约 30 分钟，等不到用程序封面；
-#   这边正式运行的视频导演也不新画图（FD_DIRECTOR_NO_NEW_IMAGES=1）。没有 Codex、没有 Codex 登录。
+#   第 14 步视频导演半路要新图时，也叫私有仓库画（cloud/remote_images.py：要图单子放进同一个发行版，叫"配图"mode=director，
+#   最多等 12 分钟，没回来那一块不带图；测试运行最多远程画 1 张）。这边没有 Codex、没有 Codex 登录。
 #   发布、存往期、发邮件：最后叫私有仓库的"放行发布"（publish.yml）。Cloudflare、邮件、Codex 的钥匙都只在私有仓库。
 #   日志和运行摘要只印状态（第几步、成没成、用了几分钟），不印稿子、审片、调度报告的内容；fd 第 10–17 步、放行判定的详细输出
 #   写进期目录 logs/，跟着文件包进私有仓库。
@@ -34,8 +35,10 @@
 #
 # 密钥只给用得着的那几步：MiMo 给体检、第 4–9 步、第 10–17 步；Claude 令牌给第 4–9 步和审片；
 #   Gemini 令牌（Workload Identity 换的，一小时）只给试配和第 10–17 步；STATE_REPO_TOKEN 只给取内容、传文件包、叫配图、等配图、
-#   提交回私有仓库、叫放行发布这几步（经环境变量临时给，不写进 .git/config）。claude -p 那几步的环境里没有 Gemini 令牌和
-#   STATE_REPO_TOKEN，也推不了代码。这个仓库里没有 Cloudflare、邮件、Codex 的钥匙。
+#   第 10–17 步（只交给远程画图的 gh 子进程，叫私有仓库画导演要的图）、提交回私有仓库、叫放行发布这几步（经环境变量临时给，
+#   不写进 .git/config）。第 4–9 步、审片的 claude -p 环境里没有 Gemini 令牌和 STATE_REPO_TOKEN；第 14 步视频导演的 claude -p
+#   由 video3_director.run_claude 去掉 MiMo、Gemini、STATE_REPO_TOKEN（它只有读写文件的工具，没有命令行）。
+#   这个仓库里没有 Cloudflare、邮件、Codex 的钥匙。
 # Gemini 三档（输入 gemini）：off 测试默认，不用；trial 只试配一句；default 正式，程序默认每期 $0.6、月上限 $8。
 
 name: frontier-daily
@@ -608,9 +611,12 @@ jobs:
           MIMO_BASE_URL: ${{ secrets.MIMO_BASE_URL }}
           # 第 14 步的视频导演（site/tools/video3_director.py）要调 claude -p；它只给导演 Read、Write、Edit、Glob、Grep，没有命令行
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # 导演不新画图（不调任何画图工具，导演也被告知不能新画；要新图时退到已有的图、网页原图或程序封面）。
-          # 2026-11 起正式运行也这样：这边没有 Codex，画图在私有仓库（导演半路远程画图以后再说）
-          FD_DIRECTOR_NO_NEW_IMAGES: "1"
+          # 导演半路要新图：整批送去私有仓库用 Codex 画（cloud/remote_images.py，FD_IMAGE_BACKENDS=remote），最多等 12 分钟，
+          # 没回来那一块不带图。令牌只交给 gh 子进程；导演的 claude -p 拿不到（video3_director.run_claude 去掉了）。
+          # 测试运行最多远程画 1 张（省 Codex 额度）。仓库变量 FD_DIRECTOR_REMOTE_IMAGES 写 off：导演不新画图（退回 11-11 的做法）
+          FD_DIRECTOR_NO_NEW_IMAGES: ${{ vars.FD_DIRECTOR_REMOTE_IMAGES == 'off' && '1' || '' }}
+          FD_REMOTE_IMAGES_TOKEN: ${{ secrets.STATE_REPO_TOKEN }}
+          FD_REMOTE_IMAGES_MAX: ${{ steps.day.outputs.test == 'true' && '1' || '' }}
           # 视频导演的思考强度：默认不设（用 claude 自己的默认档）。11-10 本机对比 xhigh 在现行时限下超时退回；仓库变量 FD_DIRECTOR_EFFORT 可改
           FD_DIRECTOR_EFFORT: ${{ vars.FD_DIRECTOR_EFFORT }}
           # 输入 review 关掉时，视频导演也关（只管这一次）；开着时不设，按 fd_开关.json 的"视频导演"（现在是开）
@@ -618,8 +624,8 @@ jobs:
           # 只有正式（gemini=default）才给令牌；off、trial 这里是空的，配音程序也带着 --use-backup --budget-usd 0
           GCP_ACCESS_TOKEN: ${{ steps.day.outputs.gemini == 'default' && steps.gcp.outputs.access_token || '' }}
           FD_FW_TIMING: "1"
-          # 万一哪里要新画图也只认 Codex（云端没有 agy）；这边没装 Codex，画不了就退回封面
-          FD_IMAGE_BACKENDS: codex
+          # 第 10–17 步里只有导演会新画图（--skip-images 时组装不画）；remote＝叫私有仓库画（这边没有 Codex、没有 agy）
+          FD_IMAGE_BACKENDS: remote
         run: |
           unset ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN    # Google 令牌已经换好，这一段用不着再要身份证明
           # 11-09：接着跑时，起始这一步一定重做（不然上次已经做完的那一步会被当成"做过了"跳过，改了程序也验证不到）；后面几步按 fd 自己的判断
@@ -668,9 +674,9 @@ jobs:
             VOICE_NOTE="配音按命令行 --use-backup 用 MiMo 备用声音，这是本次设定"
           fi
           if [ "$IS_TEST" = "true" ]; then
-            IMG_NOTE="这一期是云端测试：配图只试画 1 张网页图（私有仓库用 Codex 画），其余按 --skip-images 跳过（网页用程序画的封面，视频不带新画的图），视频导演按 FD_DIRECTOR_NO_NEW_IMAGES=1 不新画图，这几项是测试设定"
+            IMG_NOTE="这一期是云端测试：配图只试画 1 张网页图（私有仓库用 Codex 画），其余按 --skip-images 跳过（网页用程序画的封面，视频不带新画的图），视频导演要新图时叫私有仓库画、最多画 1 张，其余那几块不带图，这几项是测试设定"
           else
-            IMG_NOTE="这一期是云端正式运行：配图由 Codex 先画（在私有仓库画好取回来；网页图 cloud/web_images.py，视频图 site/tools/video3_images.py），画不成的网页图用程序画的主题色封面、视频那一块不带图，缺了哪几张要照实写进审片；视频导演按 FD_DIRECTOR_NO_NEW_IMAGES=1 不新画图（2026-11 起正式运行也这样），这一项不算问题"
+            IMG_NOTE="这一期是云端正式运行：配图由 Codex 先画（在私有仓库画好取回来；网页图 cloud/web_images.py，视频图 site/tools/video3_images.py），画不成的网页图用程序画的主题色封面、视频那一块不带图，缺了哪几张要照实写进审片；视频导演可以新画图（叫私有仓库用 Codex 画，最多等 12 分钟，没回来的那一块不带图，也要照实写）"
           fi
           mkdir -p "$RUNNER_TEMP/review"
           unset ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN

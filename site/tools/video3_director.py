@@ -395,6 +395,9 @@ def run_claude(D, prompt, timeout, tag):
     env = dict(os.environ)
     if os.environ.get("FD_DIRECTOR_ALLOW_API_KEY") != "1":
         env.pop("ANTHROPIC_API_KEY", None)          # 走订阅登录，不走按量付费的密钥
+    # 导演只读写自己的文件夹，用不着别的钥匙（11-11 加：公开仓库第 10–17 步的环境里有配音和远程画图的钥匙，不往导演那里带）
+    for k in ("MIMO_API_KEY", "MIMO_BASE_URL", "GCP_ACCESS_TOKEN", "FD_REMOTE_IMAGES_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
+        env.pop(k, None)
     model = os.environ.get("FD_DIRECTOR_MODEL") or "opus"
     effort = director_effort()
     cmd = [exe, "-p", prompt, "--model", model] + (["--effort", effort] if effort else []) + ["--add-dir", str(D),
