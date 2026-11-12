@@ -235,6 +235,18 @@ def align(narrations, words, audio=None, duration=None, bounds=None):
         times[k][1] = max(times[k][1], x + 0.05)
         if k > 0:
             times[k - 1][1] = min(times[k - 1][1], x)
+    # 场景开头不止一个字被 Whisper 放进了分界之前（章间停顿里）：上面只挪得动第一个字，这里把剩下的整串推到分界之后，先后不乱
+    if bounds:
+        for k in range(len(A)):
+            si = pos[k][0]
+            if si >= len(bounds) or times[k][0] >= bounds[si] - 1e-6:
+                continue
+            same = k > 0 and pos[k - 1][0] == si
+            lo = max(bounds[si], times[k - 1][0] + 0.05) if same else bounds[si]
+            times[k][0] = lo
+            times[k][1] = max(times[k][1], lo + 0.05)
+            if same:
+                times[k - 1][1] = lo
     for t in times:
         t[0], t[1] = round(t[0], 3), round(t[1], 3)
     errs.sort()
