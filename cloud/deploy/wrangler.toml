@@ -1,5 +1,4 @@
 # 每日AI科技前沿简报网站（https://wenlongzhang.com/frontier/）的 Cloudflare Worker 配置。说明见同目录 README.md 和 src/index.js 开头。
-# 照期刊网站 journals-observatory（期刊监控仓库 site/deploy/wrangler.toml）的写法。
 # 不要在这个文件夹里直接运行 wrangler：用 cloud/deploy/run_wrangler.py，它把这里复制到仓库以外的运行目录
 # （本机 ~/.cache/frontier-daily-cloud/worker-run/，Actions 里 $RUNNER_TEMP/frontier-worker-run/），
 # 把下面的 __ASSETS_DIR__ 换成上线包目录（cloud/deploy/assemble.py 做的，里面是 frontier/…）再运行，wrangler 的临时文件不进仓库。
@@ -9,7 +8,7 @@ compatibility_date = "2026-10-01"
 workers_dev = false      # 不开 *.workers.dev 地址（国内常打不开，也少一个入口）
 preview_urls = false
 
-# 网址：https://wenlongzhang.com/frontier/ 。主域名本身是知识库 Worker translatio-library 的，/memory 是另一个网站的，/journals 是期刊网站的；
+# 网址：https://wenlongzhang.com/frontier/ 。主域名和同一域名下的其他路径归别的 Worker；
 # 这两条只把 /frontier 开头的地址交给本 Worker，别的路径不受影响（Cloudflare 按最具体的路由匹配）。
 # 路由挂在已有的 wenlongzhang.com 上，所以不用建子域名、不用改 DNS。
 routes = [
@@ -24,7 +23,7 @@ run_worker_first = true        # 每个请求先过 Worker：补响应头、定�
 html_handling = "none"         # 文件路径原样对应，目录由 Worker 补 index.html
 not_found_handling = "none"
 
-# 匿名访问统计（2026-11-10 加，照期刊网站 journals-observatory）：D1 数据库 frontier-visits（免费版），Worker 里叫 VISITS。
+# 匿名访问统计（2026-11-10 加）：D1 数据库 frontier-visits（免费版），Worker 里叫 VISITS。
 # database_id 是数据库编号，不是机密。表结构在 migrations/（run_wrangler.py d1 migrations apply frontier-visits --remote 执行，
 # 见 README.md“访问统计”一节）。只停用统计、不停用网站：删掉下面这一节再发布（页面照常，统计不再记录）。
 # 开放程度（11-10 加，src/access.js）的档位和访问口令也存在这个数据库的 site_settings 表（migrations/0002_settings.sql）：

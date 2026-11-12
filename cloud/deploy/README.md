@@ -2,7 +2,7 @@
 
 网址：**https://wenlongzhang.com/frontier/** 。不让搜索引擎收录：每个页面有 `noindex, nofollow` 标签，每个响应带 `X-Robots-Tag: noindex, nofollow`。默认不设口令，就是“不公开，但谁拿到网址都能打开”；11-10 起站长可以在设置页把网站切成“凭口令”（要输访问口令）或“只有我”（别人只看到“测试中”），见下面“开放程度”。
 
-照期刊网站 `journals-observatory`（期刊监控仓库 `site/deploy/`）的做法：一个**独立的 Worker**，路由只截 `wenlongzhang.com/frontier` 和 `wenlongzhang.com/frontier/*`。主域名 wenlongzhang.com 是知识库（Worker `translatio-library`）的，`/memory` 是另一个网站的，`/journals` 是期刊网站的，都不受影响（Cloudflare 按最具体的路由匹配）。
+做法是一个**独立的 Worker**，路由只截 `wenlongzhang.com/frontier` 和 `wenlongzhang.com/frontier/*`。主域名和同一域名下的其他网站都不受影响（Cloudflare 按最具体的路由匹配）。
 
 **不用建子域名，也不用改 DNS（域名解析）**：路由挂在已有的 wenlongzhang.com 上，发布时 wrangler 自己把两条路由登记好。
 
@@ -56,9 +56,9 @@
 - 机密变量由手动流程“读者反馈设置”（`.github/workflows/feedback-setup.yml`）写入；以后每次 `wrangler deploy` 都不会删它（[官方](https://developers.cloudflare.com/workers/wrangler/configuration/)：“Wrangler will not delete your secrets … unless you run `wrangler secret delete <key>`”）。
 - 整条链路、后台在哪看、周六怎么处理、怎么停用：`cloud/feedback/README.md`。
 
-## 访问统计（11-10 加，照期刊网站）
+## 访问统计（11-10 加）
 
-照期刊网站 `wenlongzhang.com/journals` 的那套（期刊监控仓库 `site/deploy/` 的 `src/visits.js`、`src/stats.js`、`README.md`“访问统计”一节）。不用任何第三方统计工具，数据只在你自己的 Cloudflare 账号里。
+不用任何第三方统计工具，数据只在你自己的 Cloudflare 账号里。
 
 **记什么**：三种，每次一行。
 
@@ -98,12 +98,12 @@
 
 - 打开 `https://wenlongzhang.com/frontier/?k=<钥匙>`：指纹对上就发站长 Cookie（一年），再跳回不带钥匙的网址。每台要看统计的设备（电脑、手机）各打开一次就行。浏览器历史里会留一条带钥匙的网址，介意的话在历史记录里删掉这一条。
 - 钥匙不对：照常显示页面，不提示。**指纹没设时**：统计照记，统计页一律 404。
-- 可以**沿用期刊网站那把钥匙**（记得它的话），也可以**新设一把**；两种做法下面的命令一样，只是第 1 步不同。沿用的话，两个网站的指纹相同，但 Cookie 分开存（`/journals` 和 `/frontier` 各一张），所以在 `/frontier/?k=` 也要打开一次。
+- 可以**沿用你另一个网站的那把钥匙**（记得它的话），也可以**新设一把**；两种做法下面的命令一样，只是第 1 步不同。沿用的话，两个网站的指纹相同，但 Cookie 按网址路径分开存（每个网站各一张），所以在 `/frontier/?k=` 也要打开一次。
 
 **设钥匙：你在 Mac 终端里做**（钥匙不显示在屏幕上、不写进任何文件、不进命令历史；`printf` 是终端自带的命令，值不会出现在进程列表里）。要先把本分支合进 `main`，第 4 步的流程才能运行。
 
 1. 准备钥匙，二选一：
-   - 沿用期刊网站那把：直接到第 2 步，粘贴它。
+   - 沿用另一个网站那把：直接到第 2 步，粘贴它。
    - 新设一把：运行下面这行，生成一把随机钥匙（32 个字符）直接放进剪贴板，屏幕上不显示；先把它粘进你的密码管理器存好，再做第 2 步。
      ```bash
      openssl rand -hex 16 | tr -d '\n' | pbcopy
@@ -138,7 +138,7 @@ python3 cloud/deploy/run_wrangler.py d1 execute frontier-visits --remote --comma
 python3 cloud/deploy/run_wrangler.py d1 execute frontier-visits --remote --command "DELETE FROM visits WHERE day < '2026-12-01'"   # 删某天以前的（不可恢复，先导出 CSV）
 ```
 
-**发布**：每天的发布（`frontier-daily.yml`、`release.yml` 里的 `run_wrangler.py ... deploy`）照旧，`wrangler.toml` 里的 D1 绑定会跟着带上去，流程文件不用改。发布用的令牌（`CLOUDFLARE_API_TOKEN`，Edit Cloudflare Workers 模板）不用加 D1 权限：期刊网站 10-17 实测，这种令牌在 Actions 里发布绑定了 D1 的 Worker 能成功；只有在 Actions 里建表、查数据库才要加。本站第一次带绑定发布后看一眼发布那一步成没成；万一报错并提到 D1：Cloudflare 网页 → My Profile → API Tokens → “frontier-daily 发布”右边 ⋯ → Edit → + Add more → Account / D1 / Edit → Continue to summary → Update token（令牌值不变，GitHub Secrets 不用改）。
+**发布**：每天的发布（`frontier-daily.yml`、`release.yml` 里的 `run_wrangler.py ... deploy`）照旧，`wrangler.toml` 里的 D1 绑定会跟着带上去，流程文件不用改。发布用的令牌（`CLOUDFLARE_API_TOKEN`，Edit Cloudflare Workers 模板）不用加 D1 权限：同一账号的另一个网站 10-17 实测，这种令牌在 Actions 里发布绑定了 D1 的 Worker 能成功；只有在 Actions 里建表、查数据库才要加。本站第一次带绑定发布后看一眼发布那一步成没成；万一报错并提到 D1：Cloudflare 网页 → My Profile → API Tokens → “frontier-daily 发布”右边 ⋯ → Edit → + Add more → Account / D1 / Edit → Continue to summary → Update token（令牌值不变，GitHub Secrets 不用改）。
 
 **只停用统计、不停用网站**：把 `wrangler.toml` 的 `[[d1_databases]]` 一节删掉再发布，页面和音频照常，统计不再记录，也不再发访客 Cookie（统计页显示“还没有连上统计数据库”）。数据库留着不动，想恢复把那一节加回来再发布。**注意（11-10 起）**：开放程度也存在这个数据库里，删掉这一节后网站一律按“公开”处理，设置页显示“没连上数据库，开放设置用不了”。
 
@@ -240,8 +240,8 @@ python3 cloud/deploy/run_wrangler.py --assets /tmp/fd-pkg deploy --dry-run --out
    - Account Resources：Include · *wenlongzhang.com 所在的那个账号*
    - Zone Resources：Include · Specific zone · *wenlongzhang.com*
    - Continue to summary → Create Token → 复制令牌（只显示一次）。
-   - 想收窄权限，可以改用 Custom token，只给三项：Account · **Workers Scripts · Edit**；Account · **Account Settings · Read**；Zone（wenlongzhang.com）· **Workers Routes · Edit**（和期刊网站一样）。
-   - 建议单独建一个，名字写 `frontier-daily Actions`，以后要停可以单独作废，不影响期刊网站。
+   - 想收窄权限，可以改用 Custom token，只给三项：Account · **Workers Scripts · Edit**；Account · **Account Settings · Read**；Zone（wenlongzhang.com）· **Workers Routes · Edit**。
+   - 建议单独建一个，名字写 `frontier-daily Actions`，以后要停可以单独作废，不影响别的网站。
 2. 在 Mac 的终端里运行（会提示你粘贴，粘贴时屏幕上不显示）：
    ```bash
    gh secret set CLOUDFLARE_API_TOKEN -R dylan-zhang-wl/frontier-daily
@@ -260,9 +260,8 @@ gh variable set SITE_DEPLOY_ENABLED -R dylan-zhang-wl/frontier-daily --body true
 ```bash
 curl -sI https://wenlongzhang.com/frontier | head -3                                  # 301 → /frontier/
 curl -sI https://wenlongzhang.com/frontier/ | grep -i -E "x-robots|cache-control"    # noindex, nofollow；no-cache
-curl -s -o /dev/null -w "%{http_code}\n" https://wenlongzhang.com/                    # 知识库照常
-curl -s -o /dev/null -w "%{http_code}\n" https://wenlongzhang.com/memory/             # 另一个网站照常
-curl -s -o /dev/null -w "%{http_code}\n" https://wenlongzhang.com/journals/           # 期刊网站照常
+curl -s -o /dev/null -w "%{http_code}\n" https://wenlongzhang.com/                    # 主域名照常
+# 同一域名下要是还有别的网站，也照上一行各查一次
 ```
 再用手机（最好也用国内网络）打开最新一期和往期页，播客拖动一下进度条。
 
@@ -270,4 +269,4 @@ curl -s -o /dev/null -w "%{http_code}\n" https://wenlongzhang.com/journals/     
 
 - **回到上一个版本**：`python3 cloud/deploy/run_wrangler.py rollback`（只影响本 Worker）。看历史：`run_wrangler.py deployments list`。
 - **暂停自动发布**：仓库变量 `SITE_DEPLOY_ENABLED` 改成 `false`（或删掉）。
-- **让网站下线**：Cloudflare 网页 → Workers & Pages → `frontier-daily` → Settings → Domains & Routes，删掉两条 `/frontier` 路由（之后 `/frontier` 交回知识库处理）；或 `run_wrangler.py delete` 删掉整个 Worker。都不影响知识库和同一域名下的另外两个网站。
+- **让网站下线**：Cloudflare 网页 → Workers & Pages → `frontier-daily` → Settings → Domains & Routes，删掉两条 `/frontier` 路由（之后 `/frontier` 交回主域名的 Worker 处理）；或 `run_wrangler.py delete` 删掉整个 Worker。都不影响主域名和同一域名下的其他网站。

@@ -1,5 +1,5 @@
 // 站长的访问统计页 /frontier/_visits（只有带有效 fd_pass Cookie 的浏览器能看，判断在 index.js 里）。
-// 照期刊网站（期刊监控仓库 site/deploy/src/stats.js）：服务端用 SQL 汇总后直接输出一页 HTML：内联样式、亮暗两种配色跟随系统、手机可看，
+// 服务端用 SQL 汇总后直接输出一页 HTML：内联样式、亮暗两种配色跟随系统、手机可看，
 // 不引用任何外部资源，图表是内联 SVG。多了“期号”和每期的“开始听”“开始看”。
 // 参数：r = 7／30／90／all（时间范围，默认 30）；tz = uk／cn（明细用英国时间或北京时间，默认英国）；format=csv 导出 CSV。
 // 按天的统计一律按英国时间的日期（记录时写进 day 一栏）。
@@ -198,7 +198,7 @@ function perIssueTable(rows) {
   return `<div class="scroll"><table><thead><tr><th>期号</th><th class="n">打开</th><th class="n">开始听<br><small>播客</small></th><th class="n">开始看<br><small>视频</small></th></tr></thead><tbody>${tr}</tbody></table></div>`;
 }
 
-// 横轴日期标签抽稀（照期刊网站）：标签“月-日”约 44 个画布单位宽，相邻两个之间至少留 10 个单位；最后一个放不下就右对齐。返回要显示标签的下标。
+// 横轴日期标签抽稀：标签“月-日”约 44 个画布单位宽，相邻两个之间至少留 10 个单位；最后一个放不下就右对齐。返回要显示标签的下标。
 export const AXIS_LABEL_W = 44, AXIS_LABEL_GAP = 10;
 export function axisLabelIndices(n, step, lastEnd = true, labelW = AXIS_LABEL_W, gap = AXIS_LABEL_GAP) {
   if (n <= 0) return [];

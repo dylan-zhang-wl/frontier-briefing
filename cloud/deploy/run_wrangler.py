@@ -1,5 +1,4 @@
 """运行 Cloudflare 的命令行工具 wrangler（每日AI科技前沿简报网站的 Worker `frontier-daily`）。
-照期刊监控仓库 site/deploy/run_wrangler.py 的写法。
 
 Worker 的源码在 cloud/deploy/；运行时先复制到仓库以外的运行目录（本机 ~/.cache/frontier-daily-cloud/worker-run/，
 Actions 里 $RUNNER_TEMP/frontier-worker-run/），把 wrangler.toml 里的 __ASSETS_DIR__ 换成上线包目录再运行——

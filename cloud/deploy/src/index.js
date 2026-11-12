@@ -1,7 +1,7 @@
 // 每日AI科技前沿简报网站的 Cloudflare Worker：网址 https://wenlongzhang.com/frontier/ ，不设口令，但不让搜索引擎收录。
-// 照期刊网站 journals-observatory（期刊监控仓库 site/deploy/src/index.js）的写法（站长钥匙和访问统计 11-10 照那边加上，见本文件开头最后两条）。
+// 站长钥匙和访问统计是 11-10 加的，见本文件开头最后两条。
 //
-// · 网址：wrangler.toml 的 routes 只截 wenlongzhang.com/frontier 与 /frontier/*；主域名其余部分（知识库、/memory、/journals）不受影响。
+// · 网址：wrangler.toml 的 routes 只截 wenlongzhang.com/frontier 与 /frontier/*；主域名其余部分（同一域名下的其他网站）不受影响。
 //   万一有别的路径被路由进来，一律 404，不处理。
 // · 文件：上线包（cloud/deploy/assemble.py 做的）是 Worker 自带的静态文件，目录结构就是 frontier/…，网址路径与文件路径一一对应。
 //   /frontier 跳到 /frontier/（页面里的地址都是相对的，要以 / 结尾才对）；以 / 结尾的目录请求给该目录的 index.html。
@@ -163,7 +163,7 @@ async function rangeResponse(req, res, h) {
   return new Response(body, { status: 206, headers: h });
 }
 
-// ===================== 站长钥匙（11-10 加，照期刊网站）=====================
+// ===================== 站长钥匙（11-10 加）=====================
 // sha256hex、cookieValue、逐字比较 same()（两个字符串是否相同，逐字比完、不因为早早对不上就提前返回）
 // 11-10 加开放程度时挪进了 src/access.js，访问口令、口令 Cookie 也用它们；这里从那边引入，写法一字没改。
 

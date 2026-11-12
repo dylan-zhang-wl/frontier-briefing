@@ -1,4 +1,4 @@
-// 匿名访问统计（11-10 加，照期刊网站 journals-observatory 的 site/deploy/src/visits.js）：判断一次请求要不要记、记哪些字段，
+// 匿名访问统计（11-10 加）：判断一次请求要不要记、记哪些字段，
 // 写进 D1 数据库（绑定名 VISITS）。表结构见 migrations/0001_visits.sql。
 //
 // · 记三种：
