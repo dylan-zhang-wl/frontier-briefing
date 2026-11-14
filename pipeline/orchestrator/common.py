@@ -573,11 +573,20 @@ def tail(text, n=6):
     return rows[-n:]
 
 
+_KEY = re.compile(r"✗|错误|Error|Exception|Traceback|失败|超出|停|没过|对不上|找不到|注意|提醒|!|⚠")
+_NOTICE = re.compile(r"^[-*•·\s]*(提醒|注意|⚠)")      # 只是提醒的行：程序照常往下，不是出错的原因
+
+
 def key_lines(text, n=8):
-    """日志里要紧的几行：报错、没过、提醒。"""
-    pat = re.compile(r"✗|错误|Error|Traceback|失败|超出|停|没过|对不上|注意|提醒|!|⚠")
-    rows = [x.strip() for x in (text or "").splitlines() if pat.search(x)]
-    return rows[-n:]
+    """日志里要紧的几行：报错、没过、提醒。
+
+    11-14 改：先挑真正的报错行（✗、错误、Error、Traceback、找不到……），"提醒：""注意：""⚠" 开头的
+    只提醒行跳过；一行报错都没有时才退回老办法（提醒行也算）。11-13 第 14 步视频真正的原因是
+    "旁白里找不到这些触发词：close.map（接下来看）"，老办法取最后 3 行要紧的，挑到的是它前面的
+    "提醒：读音表里还没有：…"，把真原因埋掉了。"""
+    rows = [x.strip() for x in (text or "").splitlines() if _KEY.search(x)]
+    hard = [x for x in rows if not _NOTICE.match(x)]
+    return (hard or rows)[-n:]
 
 
 def today_utc():

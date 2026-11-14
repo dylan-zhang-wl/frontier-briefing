@@ -13,6 +13,8 @@
   · 11-09 晚加 Ternus（Weston）、Thurrock（Sorrock、FAROC……），例句取自 11-09 云端那期播客的转写；
     当晚试配的同音写法（Turnus、Ternes、Thorak、The Rock……）不算误读；
   · 11-10 加特朗普（川普）、GR00T（GR002、G2002），例句取自 11-10 云端那期的转写；当天试配的转写不算误读。
+  · 11-14 加微软（美软、梅华），例句取自 11-13 云端那期播客第 8 块的转写和 11-14 整块试配的转写；那块原来因为挑条只看音高留了
+    错的第 3 条，加了这一条以后它判要重录，挑条留字对的那条。
 
 用法（在项目根运行）：
     ~/.venvs/frontier-daily/bin/python -m unittest pipeline/test_tts_qc_names.py
@@ -100,6 +102,36 @@ class Today(unittest.TestCase):
         self.assertEqual(names(ref, "龙芯中科董事长兼总裁胡伟乌在业绩说明会上说"), [("总经理", "总裁", 1)])
         self.assertEqual(names(ref, "龙芯中科董事长总经理胡伟武在业绩说明会上说"), [])
         self.assertEqual(names("这家公司的总裁兼总经理表示，", "这家公司的总裁兼总经理表示"), [])
+
+    # 11-13 云端那期播客第 8 块（要闻）的原稿和转写（本机资料/成品/2026-11-13/05_配音/播客_v3/qc.json，截取）
+    REF_1113 = ("据 IT之家转述彭博社十一月十二日的报道，微软会设法在不依赖政府补贴、不增加其他电力用户成本的前提下，给自己的 AI 数据中心供电。"
+                "微软云运营与创新总裁 Noelle Walsh，在休斯顿的彭博新能源财经会议上说，微软不希望其他客户为它的增长买单，会自己承担费用。")
+    HYP_1113_TAKE3 = ("据IT之家转述彭博社11月12日的报道美软会设法在不依赖政府补贴不增加其他电力用户成本的前提下给自己的AI数据中心供电"
+                      "美软云运营与创新总裁Noel Walsh在休斯顿的彭博新能源财经会议上说美软不希望其他客户为它的增长买单会自己承担费")
+    HYP_1113_TAKE1 = HYP_1113_TAKE3.replace("美软", "微软")
+
+    def test_microsoft_1114(self):
+        """11-14 加：11-13 播客第 8 块选用的第 3 条 6 处"微软"转写成"美软"（用户耳听确认）；11-14 整块试配一条 6 处转写成"梅华"。
+        转写成"微软"的不报；原稿本来写着"梅华"（人名）的不算。"""
+        self.assertEqual(names(self.REF_1113, self.HYP_1113_TAKE3), [("微软", "美软", 3)])
+        self.assertEqual(names(self.REF_1113, self.HYP_1113_TAKE3.replace("美软", "梅华")), [("微软", "梅华", 3)])
+        self.assertEqual(names(self.REF_1113, self.HYP_1113_TAKE1), [])
+        self.assertEqual(names("梅华说，微软会自己承担费用。", "梅华说微软会自己承担费用"), [])
+        self.assertEqual(names("这一段不提那家公司。", "这一段不提那家公司美软"), [])         # 原稿没有"微软"：不查
+        r = Q.check(self.REF_1113, self.HYP_1113_TAKE3)
+        self.assertTrue(r["需重录"])
+        self.assertLess(r["字错率"], Q.CER_LIMIT)               # 字错率没到线：没有这一条时对稿会算通过（11-13 就是这样）
+        self.assertTrue(any(x.startswith("专名读音：微软 转写成了 美软（3 处）") for x in r["原因"]), r["原因"])
+
+    def test_microsoft_1113_pick(self):
+        """11-13 第 8 块：第 1、2 条字都对、音高超出（+2.38、+2.46 个半音），第 3 条音高合格（+0.28）却念成"美软"。
+        原来对稿三条都算通过，挑条只看音高，留了第 3 条；加了这一条以后第 3 条判要重录，留第 1 条（音高偏高，字对）。"""
+        import tts
+        takes = []
+        for n, (hyp, dev) in enumerate([(self.HYP_1113_TAKE1, 2.38), (self.HYP_1113_TAKE1, 2.46), (self.HYP_1113_TAKE3, 0.28)], 1):
+            takes.append({"take": n, "qc": Q.check(self.REF_1113, hyp), "音高": {"偏差半音": dev, "超出": dev > 1.5}})
+        self.assertEqual([x["qc"]["需重录"] for x in takes], [False, False, True])
+        self.assertEqual(tts.pick_take(takes)["take"], 1)
 
     def test_check_flags_retake(self):
         r = Q.check("这些时间点都出自 Gurman 的消息。", "这些时间点都出自German的消息")

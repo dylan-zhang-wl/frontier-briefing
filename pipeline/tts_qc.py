@@ -81,6 +81,8 @@ RUN_LIMIT = 8          # 一处连续多出（或少掉）这么多个字/词，
 RUN_GAP = 2            # 两处差异之间只隔 ≤2 个对得上的字，合并成一处（防止被零星巧合切碎）
 CER_LIMIT = 0.20       # 整块字错率超过两成，说明整体对不上
 DURATION_RANGE = (0.5, 2.0)   # 实际时长 / 估计时长 超出这个范围也重录
+OVERLONG_RATIO = 2.0          # 实际时长超过按字数估计的这么多倍，
+OVERLONG_MIN_EXTRA_S = 30     # 而且至少多出这么多秒：当废条丢掉重录，不转写（11-14 加，见 overlong()）
 NAMES = Path(__file__).resolve().parent / "prompts" / "专名读音.yaml"   # 专名读音清单（11-09 加）
 
 # ==============================================================
@@ -715,8 +717,30 @@ def check(ref_text, hyp_text, seconds=None, est_seconds=None):
 
 
 def badness(result):
-    """两条都不完美时挑哪条：先看是否需重录，再看最大的一处多念/漏念，最后看字错率。"""
-    return (result["需重录"], max(result["最长多出"], result["最长少掉"]), result["字错率"])
+    """两条都不完美时挑哪条：先看是否需重录，再看最大的一处多念/漏念，最后看字错率（没转写的废条字错率记作最差）。"""
+    cer = result.get("字错率")
+    return (result["需重录"], max(result["最长多出"], result["最长少掉"]), cer if cer is not None else float("inf"))
+
+
+def overlong(seconds, est_seconds):
+    """这一条明显跑飞了（11-14 加，经验库第 71 件①）：实际时长超过按字数估计的 OVERLONG_RATIO（2）倍、而且至少多出
+    OVERLONG_MIN_EXTRA_S（30）秒，返回一句说明；不是就返回 None。
+    为什么：11-11 播客块 1 为音高重录的第 2 条，Gemini 多念了 612 个字，181 秒（估计 55 秒）；照旧整条转写，云端转写
+    约 1 秒音频 1 秒，白花 3 分钟才判出"多念""时长异常"。这种不用听也知道不能用，配完量了时长就丢，直接重录。
+    只多一点（短块 2 倍出头、多不到 30 秒）的照旧转写，由 check() 的"时长异常"判。"""
+    if not seconds or not est_seconds:
+        return None
+    if seconds > OVERLONG_RATIO * est_seconds and seconds - est_seconds >= OVERLONG_MIN_EXTRA_S:
+        return (f"时长异常：实际 {seconds:.0f} 秒，估计 {est_seconds:.0f} 秒（超过 {OVERLONG_RATIO:g} 倍、多 "
+                f"{seconds - est_seconds:.0f} 秒），当废条丢掉重录，没转写")
+    return None
+
+
+def discarded(seconds, est_seconds, why):
+    """废条（overlong）的对稿结果：字段和 check() 一样，需重录，没转写；挑条时排在转写过的各条后面（tts.pick_take 看"废条"）。"""
+    return {"字错率": None, "拼音错误率": None, "原稿字数": 0, "转写字数": 0, "替换": 0, "少掉": 0, "多出": 0,
+            "最长多出": 0, "最长少掉": 0, "时长比": round(seconds / est_seconds, 2) if est_seconds else None,
+            "需重录": True, "原因": [why], "废条": True, "没转写": True, "差异": [], "转写": ""}
 
 
 # ---------------------------------------------------------------- 音高、语速把关（2026-11-01 加）

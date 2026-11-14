@@ -98,6 +98,33 @@ class Lexicon(unittest.TestCase):
         self.assertEqual(e[0].get("配音写法（待启用）"), "Klawd")
         self.assertNotIn("配音写法", e[0])
 
+    def test_bytedance_chuanqi_active(self):
+        """11-14 用户耳听试配后启用：字节跳动 → 自节跳动、传奇 → 船奇（11-13 播客念成"智节跳动""禅奇"）。
+        只换送去配音的字；单说"字节"的不换；微软的"威软"仍只记在待启用（11-14 用户定先不动）。"""
+        import yaml
+        active = {f: t for f, t, _ in tts.voice_forms()}
+        self.assertEqual(active.get("字节跳动"), "自节跳动")
+        self.assertEqual(active.get("传奇"), "船奇")
+        self.assertNotIn("微软", active)
+        s = "据报，字节跳动的豆包更新了；字节的另一个团队说，这次是传奇接替传奇。"
+        out, subs = tts.voice_text(s)
+        self.assertEqual(out, "据报，自节跳动的豆包更新了；字节的另一个团队说，这次是船奇接替船奇。")
+        self.assertEqual(sorted((x["写法"], x["处数"]) for x in subs), [("传奇", 2), ("字节跳动", 1)])
+        self.assertEqual(say("微软和 Claude"), "微软和 Claude")
+        d = yaml.safe_load(tts.LEXICON.read_text(encoding="utf-8"))
+        rows = {x["写法"]: x for x in d["其他"] if isinstance(x, dict)}
+        for w in ("字节跳动", "传奇"):
+            self.assertNotIn("配音写法（待启用）", rows[w])
+            self.assertIn("11-14 用户耳听", rows[w]["备注"])
+
+    def test_bytedance_chuanqi_check_uses_script(self):
+        """对稿比的是原稿：转写写成"字节跳动""传奇"的（11-14 试配就是这样）照样通过，送去模型的才是"自节跳动""船奇"。"""
+        import tts_qc as Q
+        s = "据报，字节跳动的豆包更新了，这次是传奇接替传奇。"
+        res = Q.check(tts.spoken(s), s)
+        self.assertFalse(res["需重录"], res["原因"])
+        self.assertEqual(res["字错率"], 0.0)
+
     def test_ternus_thurrock_not_active(self):
         """11-09 晚实测：Ternus、Thurrock 原写法这次都没念错，候选没显出更好，都没启用（Ternus 的 Tur-nus 记在单列一条的
         "配音写法（待启用）"，Thurrock 没定配音写法）：配音照原写法，送去模型的字一个不动。"""

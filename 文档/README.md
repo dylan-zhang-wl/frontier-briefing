@@ -67,7 +67,7 @@
 | `README.md` | `cloud/` 一页说明：仓库在哪、怎么触发、测试和正式的区别、产物在哪、目录里有什么 | 现行（11-09 重写，晚上按搬家改过） |
 | `取回成品.py` | 在本机把某一天的成品拼成完整的期目录，放进 `本机资料/成品/<日期>/`；满 7 天、已发布的期移进废纸篓 | 现行 |
 | `web_images.py` | 正式运行时照网页稿的画面描述调 Codex 画网页图 | 现行 |
-| `codex_login_check.py` | 判 Codex 登录有没有失效（有图没画成、日志里又有 401／refresh 失败才算） | 现行 |
+| `codex_login_check.py` | 判 Codex 登录有没有失效（有图没画成、日志里又有 401／refresh 失败才算）；11-14 起也判额度用完（有图没画成、日志里有 Codex 额度用完的原话），写 `logs/codex_额度用完.txt` | 现行 |
 | `gemini_trial.py`、`selftest_chrome.mjs` | 只试配一句 Gemini；只测云端 Chrome 软件渲染能不能画三维 | 现行（附加试验、云端自检用） |
 | `tests/` | `取回成品.py`、`codex_login_check.py` 的测试 | 现行 |
 | `deploy/` | 网站：Worker（`wrangler.toml`、`src/index.js`）、上线包 `assemble.py`、往期存档 `archive.py`、`run_wrangler.py`、测试；说明在 `deploy/README.md` | 现行 |

@@ -213,6 +213,23 @@ class GateTest(unittest.TestCase):
         self.assertFalse(gate.listen_classified({"判断": "较可能念错"}))
         self.assertTrue(gate.listen_classified({"判断": "多半真念错"}))
 
+    def test_请你耳听分拣_拿不准和语速(self):
+        self.assertEqual(gate.listen_kind({"判断": "拿不准"}), gate.LISTEN_UNSURE)
+        self.assertEqual(gate.listen_kind({"判断": "多半真念错", "说明": "（语速指标）5.14 字／秒"}), gate.LISTEN_UNSURE)
+        self.assertEqual(gate.listen_kind({"类": "请你耳听", "说明": "视频 4–17 秒：（语速指标）慢约 14%"}), gate.LISTEN_UNSURE)
+        self.assertEqual(gate.listen_kind({"判断": "多半转写听错", "说明": "语速"}), gate.LISTEN_ASR)
+        self.assertTrue(gate.listen_classified({"判断": "拿不准"}))
+        tell, quiet = gate.split_notes([{"类": "请你耳听", "说明": "a", "判断": "拿不准"}, {"类": "请你耳听", "说明": "b", "判断": "多半真念错"}])
+        self.assertEqual([n["说明"] for n in tell], ["b"])
+        self.assertEqual(gate.quiet_text(quiet), "1 处拿不准（英文名、英文词、语速）")
+
+    def test_关乎事实_原样带进备注(self):
+        n = gate.listen_note({"位置": "播客 4:48", "说明": "x", "判断": "多半真念错", "依据": "y", "关乎事实": True})
+        self.assertIs(n["关乎事实"], True)
+        self.assertNotIn("关乎事实", gate.listen_note({"位置": "p", "说明": "x", "关乎事实": "是"}))
+        self.assertTrue(gate.listen_fact({"依据": "两次转写一样，版本号 3.8 成了 3.0"}))
+        self.assertFalse(gate.listen_fact({"依据": "版本号", "关乎事实": False}))
+
     def test_split_notes_各类备注怎么分(self):
         notes = [{"类": "配图退回", "说明": "a"}, {"类": "其他", "说明": "放宽"}, {"类": "请你耳听", "说明": "旧"},
                  {"类": "请你耳听", "说明": "真", "判断": "多半真念错"}, {"类": "请你耳听", "说明": "转", "判断": "多半转写听错"},

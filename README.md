@@ -73,7 +73,7 @@
 
 | 用在哪 | 用什么 | 记在谁账上 | 不行时 |
 |---|---|---|---|
-| 选题、写稿、审读、改稿、视频导演、审片 | Claude Opus 5.5（`claude -p --model opus`）；写稿（第 4–9 步）思考强度用 xhigh（11-10 起，仓库变量 `FD_WRITE_EFFORT` 可改，写 `default` 回到默认档）；视频导演、审片、读者反馈初看用默认档（11-10 本机对比：导演设 xhigh 在现行时限下第一轮超时退回，`FD_DIRECTOR_EFFORT` 可改） | 用户的 Claude 订阅 | 这一期停在选题前、发邮件 |
+| 选题、写稿、审读、改稿、视频导演、审片 | Claude Opus 5.5（`claude -p --model opus`）；写稿（第 4–9 步）思考强度用 xhigh（11-10 起；11-14 看了三天定保留；仓库变量 `FD_WRITE_EFFORT` 可改，写 `default` 回到默认档）；视频导演、审片、读者反馈初看用默认档（11-10 本机对比：导演设 xhigh 在现行时限下第一轮超时退回，`FD_DIRECTOR_EFFORT` 可改） | 用户的 Claude 订阅 | 这一期停在选题前、发邮件 |
 | 事件卡 | MiMo `mimo-v2.6-pro` | 用户的 MiMo 包月套餐（和期刊监控共用） | 再跑一次；改用 Claude 订阅做事件卡（待做） |
 | 配图 | Codex | 用户的 ChatGPT 订阅（云端单独一份登录） | 网页原图、原文截图、程序封面 |
 | 配音 | Gemini 3.8 Flash TTS，走 Vertex；Shirley 用声音"庚A"，Dylan 用"男声03" | Google 主账号订阅的每月赠金（Google Cloud 项目 frontier-daily） | MiMo 复刻的备用声音 → 只出不带播客的"数据版" |
@@ -118,13 +118,13 @@
 
 **开放程度**（11-10 加）：同一把站长钥匙登录过的浏览器打开 https://wenlongzhang.com/frontier/_access ，三个大按钮切"公开／凭口令／只有我"，"凭口令"要先设访问口令；改动最多 15 秒内生效，你自己任何一档都照常看。操作步骤、已知限制见 `cloud/deploy/README.md`"开放程度"一节。
 
-**出错邮件**：有事才发（11-10 改，原来是有备注就发）。正常发布、没有别的事、"请你耳听"全是"多半转写听错"的日子不发信：
+**出错邮件**：有事才发（11-10 改，原来是有备注就发）。正常发布、没有别的事、"请你耳听"全是"多半转写听错"或"拿不准"的日子不发信：
 1. 没出刊：写卡在第几步、`00_调度报告.md` 开头；
 2. 没放行：写没满足哪几条、`审片.md` 开头、怎么手动放行；
 3. 放行了但发布出错，或者发布开关没开；
-4. 发了但有事：备用声音、配图退回封面、Codex 要重新登录，或者有审片判断"多半真念错"的"请你耳听"。
+4. 发了但有事：备用声音、配图退回封面、Codex 要重新登录、Codex 额度用完（11-14 加），或者有审片判断"多半真念错"的"请你耳听"。
 
-审片给每一处"请你耳听"写一个"判断"（`多半真念错` 或 `多半转写听错`）和一句依据，怎么判见 `文档/方案/每日审片.md` B2 步。邮件里只列多半真念错的那几处，末尾一行写"另有 N 处多半是转写听错，记在这一期的 审片.md（仓库 测试版/<日期>/审片.md）"。旧格式没写判断、写的认不出，当多半真念错照发。分拣只管发不发邮件，"请你耳听"照旧不挡放行。哪些要告诉你由 `cloud/release/gate.py` 的 `split_notes` 定，放行结论的"给人看"和邮件用同一个判断。
+审片给每一处"请你耳听"写一个"判断"（`多半真念错`、`多半转写听错`，或 11-14 加的 `拿不准`：英文名拼法、语速）和一句依据，怎么判见 `文档/方案/每日审片.md` B2 步（11-14 起同音字按不带声调的拼音比，`pipeline/listen_pinyin.py`）。邮件里只列多半真念错的那几处，按时间排（先视频、后播客），关乎事实的（数字、版本号、公司名、模型名、人名）行首加【事实】；末尾一行写"另有 N 处多半是转写听错、M 处拿不准，记在这一期的 审片.md（仓库 测试版/<日期>/审片.md）"。旧格式没写判断、写的认不出，当多半真念错照发。分拣只管发不发邮件，"请你耳听"照旧不挡放行。哪些要告诉你由 `cloud/release/gate.py` 的 `split_notes` 定，放行结论的"给人看"和邮件用同一个判断。
 
 **存在哪**：
 - 发布了的期：网页文件存进本仓库的 `site-archive` 分支（`cloud/deploy/archive.py`），网站每次发布都带上全部往期。
@@ -163,7 +163,7 @@ $PY site/tools/test_video3_director.py                          # site/tools/ �
 python3 -m unittest discover -s cloud/release/tests -v          # 放行、邮件
 python3 -m unittest discover -s cloud/deploy/tests -v           # 上线包、往期存档
 python3 -m unittest discover -s cloud/trigger/tests -v          # 认领（同一天只出一期）
-python3 -m unittest discover -s cloud/tests -v                  # 本机取回成品（cloud/取回成品.py）、Codex 登录失效判定（cloud/codex_login_check.py）
+python3 -m unittest discover -s cloud/tests -v                  # 本机取回成品（cloud/取回成品.py）、Codex 登录失效、额度用完判定（cloud/codex_login_check.py）
 cd cloud/deploy && node --test tests/worker.test.js             # 网站 Worker
 cd cloud/trigger && node --test tests/worker.test.js            # 保底触发器 Worker
 ```
@@ -207,7 +207,7 @@ cd cloud/trigger && node --test tests/worker.test.js            # 保底触发�
 | 成品有什么毛病 | `审片.md`（给人看）、`审片结论.json`（程序读） |
 | 为什么没发布 | `放行结论.json`：每条过没过、证据在哪个文件 |
 | 云端这次运行 | 公开仓库 Actions 运行页面的摘要（只有状态）；内容在私有仓库发行版 `run-<运行编号>` 的整期文件包里，fd 第 10–17 步的详细输出在期目录 `logs/云端_fd第10到17步.log` |
-| 钥匙丢了、过期了 | `cloud/密钥与重置手册.md`（Cloudflare 令牌 2027-11-08 到期；Claude 令牌约一年，原文待核；Codex 登录失效时邮件会提醒） |
+| 钥匙丢了、过期了 | `cloud/密钥与重置手册.md`（Cloudflare 令牌 2027-11-08 到期；Claude 令牌约一年，原文待核；Codex 登录失效时邮件会提醒；额度用完不用动钥匙，邮件会单独说） |
 | 网站回退、暂停、下线 | `cloud/deploy/README.md` 最后一节 |
 | 以前踩过的坑 | `文档/经验/问题与解决办法.md` 第三部分 |
 

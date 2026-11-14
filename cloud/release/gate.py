@@ -32,6 +32,9 @@
 “请你耳听”的分拣（11-10 加，用户同意）：审片给每条写“判断”（多半真念错／多半转写听错）和一句“依据”，原样记进备注。
 它只管发不发邮件，不管放不放行。哪些备注要告诉你（listen_kind、split_notes）写在这里，notify.py 也用这两个函数，两边一样：
 备用声音、配图退回、不是“多半转写听错”的请你耳听要告诉你；旧格式没写“判断”、写的认不出，一律当“多半真念错”（宁可多发）。
+11-14 维护加（经验库第 67 件）：“判断”多了第三种“拿不准”（英文名、英文词拼法对不上，语速指标），和“多半转写听错”一样不发信、
+只报个数；说明里是语速指标的，审片写成“多半真念错”也按“拿不准”算（语速不进念错一栏）。审片可以给一处写“关乎事实”: true
+（数字、版本号、单位、公司名、模型名、人名、机构名），邮件在那一行行首加【事实】；请你耳听按时间排：先视频、后播客，各自按时间先后。
 """
 import argparse
 import json
@@ -60,35 +63,85 @@ TITLES = {1: "17 步全部做完（配图退回程序封面除外）", 2: "第 1
           6: "版别和星期几对得上", 7: "视频不超过 180 秒，播客时长在区间里", 8: "这一期、这个月的花费没超",
           9: "审片跑完了，结论是放行，“立即”为空"}
 LISTEN = "请你耳听"
-LISTEN_REAL, LISTEN_ASR = "多半真念错", "多半转写听错"
+LISTEN_REAL, LISTEN_ASR, LISTEN_UNSURE = "多半真念错", "多半转写听错", "拿不准"
+QUIET = (LISTEN_ASR, LISTEN_UNSURE)                 # 这两类请你耳听不发信，只报个数（11-14 加“拿不准”）
+SPEED = re.compile(r"语速")                          # 说明里是语速指标的：不进“念错”一栏（11-14，经验库第 67 件 ③）
+FACT_HINT = re.compile(r"版本号|数字|数量级|单位|人名|公司名|模型名|机构名")   # 审片没写“关乎事实”时，从依据里认
 MAIL_KINDS = ("备用声音", "配图退回", LISTEN)      # 已放行的那期有这几类备注才发邮件；“其他”（软规则放宽）不发
 
 
 def listen_kind(x):
     """一条“请你耳听”（审片结论里的一项，或放行结论“备注”里的一条）算哪一类：
-    “判断”写的是“多半转写听错”才算转写的毛病；没写（旧格式）、写错、不是字典，一律当“多半真念错”。"""
-    j = x.get("判断") if isinstance(x, dict) else None
-    return LISTEN_ASR if isinstance(j, str) and j.strip() == LISTEN_ASR else LISTEN_REAL
+    “判断”写“多半转写听错”“拿不准”就是那一类；说明里是语速指标的一律算“拿不准”；
+    没写（旧格式）、写错、不是字典，一律当“多半真念错”。"""
+    if not isinstance(x, dict):
+        return LISTEN_REAL
+    j = x.get("判断")
+    j = j.strip() if isinstance(j, str) else None
+    if j == LISTEN_ASR:
+        return LISTEN_ASR
+    if j == LISTEN_UNSURE or SPEED.search("%s %s" % (x.get("位置", ""), x.get("说明", ""))):
+        return LISTEN_UNSURE
+    return LISTEN_REAL
 
 
 def listen_classified(x):
-    """审片写了认得出的“判断”没有（旧格式没写、写的不是那两种，都返回 False）。"""
+    """审片写了认得出的“判断”没有（旧格式没写、写的不是那三种，都返回 False）。"""
     j = x.get("判断") if isinstance(x, dict) else None
-    return isinstance(j, str) and j.strip() in (LISTEN_REAL, LISTEN_ASR)
+    return isinstance(j, str) and j.strip() in (LISTEN_REAL, LISTEN_ASR, LISTEN_UNSURE)
+
+
+def listen_fact(x):
+    """这一处关乎事实吗（数字、版本号、公司名、模型名、人名……）：审片写了“关乎事实”就照它；没写就看依据里有没有这些字眼。"""
+    if not isinstance(x, dict):
+        return False
+    f = x.get("关乎事实")
+    if isinstance(f, bool):
+        return f
+    return bool(FACT_HINT.search(str(x.get("依据", ""))))
+
+
+_POS = re.compile(r"\s*(视频|播客)[^0-9:：]*?(\d+)(?:[:：](\d+))?")
+
+
+def listen_order(x):
+    """请你耳听的先后（11-14 用户定）：先视频、后播客，各自按时间先后；认不出时间的排在那一类最后，认不出是哪个的排最后。"""
+    s = (x.get("位置") or x.get("说明", "")) if isinstance(x, dict) else str(x)
+    m = _POS.match(str(s))
+    if not m:
+        return (2, 0)
+    secs = int(m.group(2)) * 60 + int(m.group(3)) if m.group(3) else int(m.group(2))
+    return (0 if m.group(1) == "视频" else 1, secs)
+
+
+def sort_listen(notes):
+    """只给请你耳听排先后（稳定排序），别的备注原地不动、排在前面。"""
+    other = [n for n in notes if not (isinstance(n, dict) and n.get("类") == LISTEN)]
+    listen = [n for n in notes if isinstance(n, dict) and n.get("类") == LISTEN]
+    return other + sorted(listen, key=listen_order)
 
 
 def split_notes(notes):
-    """把放行结论的“备注”分成 (要告诉你的, 多半转写听错的请你耳听)。
-    要告诉你的：备用声音、配图退回，加上不是“多半转写听错”的请你耳听（旧格式没写判断的也算）；“其他”两边都不进。
+    """把放行结论的“备注”分成 (要告诉你的, 不发信的请你耳听)。
+    要告诉你的：备用声音、配图退回，加上“多半真念错”的请你耳听（旧格式没写判断的也算）；
+    不发信的：“多半转写听错”“拿不准”的请你耳听（11-14 加“拿不准”）；“其他”两边都不进。
     “给人看”那段话和 notify.py 的邮件都按这个分。"""
-    tell, asr = [], []
+    tell, quiet = [], []
     for n in notes or []:
         k = n.get("类") if isinstance(n, dict) else None
-        if k == LISTEN and listen_kind(n) == LISTEN_ASR:
-            asr.append(n)
+        if k == LISTEN and listen_kind(n) in QUIET:
+            quiet.append(n)
         elif k in MAIL_KINDS:
             tell.append(n)
-    return tell, asr
+    return tell, quiet
+
+
+def quiet_text(quiet):
+    """不发信的那几处怎么说：“3 处多半是转写听错、2 处拿不准（英文名、语速）”。"""
+    a = sum(1 for n in quiet if listen_kind(n) == LISTEN_ASR)
+    u = len(quiet) - a
+    parts = (["%d 处多半是转写听错" % a] if a else []) + (["%d 处拿不准（英文名、英文词、语速）" % u] if u else [])
+    return "、".join(parts)
 
 
 def listen_note(x):
@@ -99,6 +152,8 @@ def listen_note(x):
     for k in ("判断", "依据"):
         if x.get(k) not in (None, ""):
             n[k] = str(x[k]).strip()
+    if isinstance(x.get("关乎事实"), bool):
+        n["关乎事实"] = x["关乎事实"]
     return n
 
 
@@ -369,10 +424,12 @@ class Gate:
         if bad:
             return self.add(9, False, "；".join(bad), ev, notes)
         asr = sum(1 for x in listen if listen_kind(x) == LISTEN_ASR)
+        uns = sum(1 for x in listen if listen_kind(x) == LISTEN_UNSURE)
         if not listen:
             more = ""
-        elif asr:
-            more = "；有 %d 处请你耳听（%s %d 处、%s %d 处）" % (len(listen), LISTEN_REAL, len(listen) - asr, LISTEN_ASR, asr)
+        elif asr or uns:
+            more = "；有 %d 处请你耳听（%s %d 处、%s %d 处%s）" % (len(listen), LISTEN_REAL, len(listen) - asr - uns, LISTEN_ASR, asr,
+                                                       "、%s %d 处" % (LISTEN_UNSURE, uns) if uns else "")
         else:
             more = "；有 %d 处请你耳听" % len(listen)
         self.add(9, True, "审片结论放行（过 %s、不过 %s、查不了 %s；%s 写）%s" % (
@@ -400,11 +457,15 @@ def human_text(day, ok, results, notes, manual):
     lines = [head]
     for r in failed:
         lines.append("第 %d 条（%s）没满足：%s" % (r["编号"], r["条件"], r["说明"]))
-    show, asr = split_notes(notes)          # 和邮件一样：多半转写听错的请你耳听只报个数
+    show, quiet = split_notes(notes)        # 和邮件一样：多半转写听错、拿不准的请你耳听只报个数
     if show:
-        lines.append("备注：" + "；".join(n["说明"] for n in show))
-    if asr:
-        lines.append("另有 %d 处请你耳听多半是转写听错，记在这一期的 审片.md" % len(asr))
+        lines.append("备注：" + "；".join(("【事实】" if n.get("类") == LISTEN and listen_fact(n) else "") + n["说明"]
+                                         for n in sort_listen(show)))
+    if quiet:
+        if all(listen_kind(n) == LISTEN_ASR for n in quiet):
+            lines.append("另有 %d 处请你耳听多半是转写听错，记在这一期的 审片.md" % len(quiet))
+        else:
+            lines.append("另有请你耳听 %s，记在这一期的 审片.md" % quiet_text(quiet))
     return "\n".join(lines)
 
 

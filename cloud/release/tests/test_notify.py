@@ -61,6 +61,44 @@ class NotifyTest(unittest.TestCase):
     def listen(self, items):
         edit_json(self.issue / "审片结论.json", lambda d: d.update({"请你耳听": items}))
 
+    # ---------------- 11-14：拿不准、语速、按时间排、【事实】记号（经验库第 67 件） ----------------
+    def test_拿不准和语速_不发信_只报个数(self):
+        self.listen([{"位置": "播客 7:04", "说明": "原稿“Cerebras”，两次转写都是 Cerebra", "判断": "拿不准", "依据": "英文名"},
+                     {"位置": "视频 4–17 秒（开场）", "说明": "（语速指标）3.87 字／秒，参考 4.48，慢约 14%", "判断": "多半真念错", "依据": "超过允许值"},
+                     self.ASR1])
+        res = write_verdict(self.issue, self.root)
+        self.assertTrue(res["放行"])
+        self.assertIn("另有请你耳听 1 处多半是转写听错、2 处拿不准", res["给人看"])
+        need, subject, body = notify.build(self.issue, published="yes")
+        self.assertFalse(need)
+        self.assertIn("1 处多半是转写听错、2 处拿不准", body)
+
+    def test_按时间排_先视频后播客_事实行首加记号(self):
+        self.listen([
+            {"位置": "播客 8:37–9:25（共 6 处）", "说明": "原稿“微软”，转写“美软”", "判断": "多半真念错", "依据": "微和美不同音", "关乎事实": True},
+            {"位置": "播客 2:55", "说明": "原稿“随后”，转写“最后”", "判断": "多半真念错", "依据": "换了说法", "关乎事实": False},
+            {"位置": "播客多处", "说明": "原稿“它”", "判断": "多半真念错", "依据": "x"},
+            {"位置": "视频 101 秒", "说明": "原稿“上线了”，转写“上下了”", "判断": "多半真念错", "依据": "不同音"},
+            {"位置": "播客 4:48", "说明": "原稿“Gemini 3.8”，转写“3.0”", "判断": "多半真念错", "依据": "版本号 3.8 成了 3.0"},
+            {"位置": "视频 22 秒", "说明": "原稿“梳理”", "判断": "多半真念错", "依据": "y"}])
+        write_verdict(self.issue, self.root)
+        need, subject, body = notify.build(self.issue, published="yes")
+        self.assertTrue(need)
+        rows = [l for l in body.splitlines() if l.startswith("- ")]
+        self.assertEqual([r.split("：")[1] for r in rows],
+                         ["视频 22 秒", "视频 101 秒", "播客 2:55", "播客 4:48", "播客 8:37–9:25（共 6 处）", "播客多处"])
+        self.assertTrue(rows[3].startswith("- 【事实】请你耳听：播客 4:48"))      # 依据里有“版本号”
+        self.assertTrue(rows[4].startswith("- 【事实】请你耳听：播客 8:37"))      # 审片写了关乎事实
+        self.assertFalse(rows[2].startswith("- 【事实】"))                      # 审片写了 false 就不加
+        self.assertIn("行首带【事实】的是", body)
+
+    def test_listen_order_认得出的写法(self):
+        self.assertEqual(gate.listen_order({"位置": "视频 4–17 秒（开场）"}), (0, 4))
+        self.assertEqual(gate.listen_order({"位置": "播客 10:24"}), (1, 624))
+        self.assertEqual(gate.listen_order({"说明": "播客 7:04（另 7:25）：原稿"}), (1, 424))
+        self.assertEqual(gate.listen_order({"位置": "整集"}), (2, 0))
+        self.assertEqual(gate.listen_order("坏的"), (2, 0))
+
     def test_只有多半转写听错_正常发布_不发(self):
         self.listen([self.ASR1, self.ASR2])
         write_verdict(self.issue, self.root)
@@ -79,7 +117,7 @@ class NotifyTest(unittest.TestCase):
         need, subject, body = notify.build(self.issue, published="yes")
         self.assertTrue(need)
         self.assertEqual(subject, "【前沿简报】%s 已发布，有备注（请你耳听 1 处）" % GOOD_DAY)
-        self.assertIn("- 请你耳听：播客 3:02：原稿“5.5”，两次转写都是“5.2”（审片的依据：两次转写一样，版本号不同）", body)
+        self.assertIn("- 【事实】请你耳听：播客 3:02：原稿“5.5”，两次转写都是“5.2”（审片的依据：两次转写一样，版本号不同）", body)
         self.assertNotIn("7A3000", body)
         self.assertNotIn("点赞订阅", body)
         self.assertIn("审片判断这几处多半是配音真念错了", body)
@@ -169,6 +207,58 @@ class NotifyTest(unittest.TestCase):
         self.assertIn("Codex 云端登录要重新登录", body)
         self.assertLess(body.index("Codex 云端登录"), body.index("—— 这封邮件"))
 
+    # ---------------- 11-14：Codex 额度用完（logs/codex_额度用完.txt，cloud/codex_login_check.py 写；经验库第 76 件②） ----------------
+    QUOTA = ("Codex 额度用完（……）：3 张没画成（网页 2 张、视频 1 张），第一次在 05:02 UTC：card.png（hit your usage limit）\n"
+             "网页=2\n视频=1\n第一次=2026-11-12 05:02\n依据=原话\n")
+
+    def test_Codex额度用完_光这一条也发_写清张数时间和用量页(self):
+        (self.issue / "logs" / "codex_额度用完.txt").write_text(self.QUOTA, encoding="utf-8")
+        write_verdict(self.issue, self.root)
+        need, subject, body = notify.build(self.issue, published="yes")
+        self.assertTrue(need)
+        self.assertEqual(subject, "【前沿简报】%s 已发布，有备注（Codex 额度用完）" % GOOD_DAY)
+        self.assertIn("配图：Codex 额度用完，这一期画不成的图已退回程序封面（共 3 张：网页 2 张、视频 1 张；第一次在 05:02 UTC）；"
+                      "额度会自动恢复，见 chatgpt.com/codex/settings/usage 。不用重新登录，这一期照常发布。", body)
+        self.assertNotIn("Codex 云端登录要重新登录", body)          # 不和登录失效混在一起
+        self.assertNotIn("多半", body.split("配图：")[1].split("\n")[0])
+        self.assertLess(body.index("配图：Codex 额度用完"), body.index("—— 这封邮件"))
+
+    def test_Codex额度用完_没放行时不说照常发布(self):
+        (self.issue / "logs" / "codex_额度用完.txt").write_text(self.QUOTA, encoding="utf-8")
+        (self.issue / "审片结论.json").rename(self.issue / "审片结论_旧.json")
+        write_verdict(self.issue, self.root)
+        need, subject, body = notify.build(self.issue)
+        self.assertIn("没放行", subject)
+        self.assertIn("配图：Codex 额度用完", body)
+        self.assertNotIn("照常发布", body)
+
+    def test_Codex额度和登录失效都有_只说登录失效(self):
+        (self.issue / "logs" / "codex_额度用完.txt").write_text(self.QUOTA, encoding="utf-8")
+        (self.issue / "logs" / "codex_登录失效.txt").write_text("401", encoding="utf-8")
+        write_verdict(self.issue, self.root)
+        need, subject, body = notify.build(self.issue, published="yes")
+        self.assertEqual(subject, "【前沿简报】%s 已发布，有备注（Codex 要重新登录）" % GOOD_DAY)
+        self.assertNotIn("额度", body)
+
+    def test_Codex额度只是宽认_写多半(self):
+        (self.issue / "logs" / "codex_额度用完.txt").write_text(
+            self.QUOTA.replace("依据=原话", "依据=宽认"), encoding="utf-8")
+        write_verdict(self.issue, self.root)
+        need, subject, body = notify.build(self.issue, published="yes")
+        self.assertTrue(need)
+        self.assertIn("配图：Codex 多半是额度用完或被限流（", body)
+        self.assertIn("待核", body)
+        self.assertIn("chatgpt.com/codex/settings/usage", body)
+
+    def test_Codex额度记号读不出数_照样发(self):
+        (self.issue / "logs" / "codex_额度用完.txt").write_text("旧格式，只有一句话\n", encoding="utf-8")
+        write_verdict(self.issue, self.root)
+        need, subject, body = notify.build(self.issue, published="yes")
+        self.assertTrue(need)
+        self.assertIn("Codex 额度用完", subject)
+        self.assertIn("这一期画不成的图已退回程序封面；额度会自动恢复，见 chatgpt.com/codex/settings/usage 。", body)
+        self.assertEqual(notify.quota_info(self.issue), {"网页": None, "视频": None, "第一次": None, "依据": None})
+
     def test_没出刊和没放行_也带Codex那句(self):
         (self.issue / "logs" / "codex_登录失效.txt").write_text("401", encoding="utf-8")
         need, subject, body = notify.build(self.issue)              # 还没有放行结论＝没出刊
@@ -179,47 +269,6 @@ class NotifyTest(unittest.TestCase):
         need, subject, body = notify.build(self.issue)
         self.assertIn("没放行", subject)
         self.assertIn("Codex 云端登录要重新登录", body)
-
-    # ---------------- 11-11：Codex 额度用完（logs/codex_额度用完.txt，cloud/codex_login_check.py 写） ----------------
-    QUOTA = "Codex 多半是额度用完（……）：3 张没画成（网页 2 张、视频 1 张），第一次在 05:02 UTC：card.png（usage limit）\n网页=2\n视频=1\n第一次=2026-11-12 05:02\n"
-
-    def test_Codex额度用完_光这一条也发_写清张数和时间(self):
-        (self.issue / "logs" / "codex_额度用完.txt").write_text(self.QUOTA, encoding="utf-8")
-        write_verdict(self.issue, self.root)
-        need, subject, body = notify.build(self.issue, published="yes")
-        self.assertTrue(need)
-        self.assertEqual(subject, "【前沿简报】%s 已发布，有备注（Codex 额度用完）" % GOOD_DAY)
-        self.assertIn("配图：这一期有 3 张没画成（网页 2 张、视频 1 张），多半是 ChatGPT Plus 的 Codex 额度用完了", body)
-        self.assertIn("第一次在 05:02 UTC", body)
-        self.assertIn("这一期照常发布", body)
-        self.assertIn("chatgpt.com/codex/settings/usage", body)
-        self.assertIn("经验库第 76 件", body)
-        self.assertNotIn("Codex 云端登录要重新登录", body)
-        self.assertLess(body.index("配图："), body.index("—— 这封邮件"))
-
-    def test_Codex额度用完_没放行时不说照常发布(self):
-        (self.issue / "logs" / "codex_额度用完.txt").write_text(self.QUOTA, encoding="utf-8")
-        (self.issue / "审片结论.json").rename(self.issue / "审片结论_旧.json")
-        write_verdict(self.issue, self.root)
-        need, subject, body = notify.build(self.issue)
-        self.assertIn("没放行", subject)
-        self.assertIn("多半是 ChatGPT Plus 的 Codex 额度用完了", body)
-        self.assertNotIn("照常发布", body)
-
-    def test_Codex额度和登录失效都有_只说登录失效(self):
-        (self.issue / "logs" / "codex_额度用完.txt").write_text(self.QUOTA, encoding="utf-8")
-        (self.issue / "logs" / "codex_登录失效.txt").write_text("401", encoding="utf-8")
-        write_verdict(self.issue, self.root)
-        need, subject, body = notify.build(self.issue, published="yes")
-        self.assertEqual(subject, "【前沿简报】%s 已发布，有备注（Codex 要重新登录）" % GOOD_DAY)
-        self.assertNotIn("额度用完", body)
-
-    def test_Codex额度记号读不出数_照样发(self):
-        (self.issue / "logs" / "codex_额度用完.txt").write_text("旧格式，只有一句话\n", encoding="utf-8")
-        write_verdict(self.issue, self.root)
-        need, subject, body = notify.build(self.issue, published="yes")
-        self.assertTrue(need)
-        self.assertIn("这一期有几张没画成，多半是", body)
 
     def test_拆仓库以后_运行链接和接着跑指公开仓库那次运行_文件包在私有发行版(self):
         edit_json(self.issue / "logs" / "fd_state.json", lambda d: d["步骤"]["voice"].update({"状态": "失败", "说明": "Vertex 回 500"}))

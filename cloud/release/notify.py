@@ -9,6 +9,11 @@
              （旧格式没写判断的也算）；发布出错或发布开关没开也发。
 哪些备注要告诉你，用 gate.py 的 split_notes（和放行结论“给人看”那段话同一个判断）。邮件里只列要告诉你的那几条；
 “多半转写听错”的不列，末尾只写一行“另有 N 处多半是转写听错，记在这一期的 审片.md（仓库 测试版/<日期>/审片.md）”。
+11-14 加（经验库第 76 件②；做法同公开仓库 frontier-briefing 11-11 那版）：期目录里有 logs/codex_额度用完.txt
+（cloud/codex_login_check.py 写的）就加一段“Codex 额度用完，这一期画不成的图已退回程序封面；额度会自动恢复，见
+chatgpt.com/codex/settings/usage”（11-14 定的说法），标题里写“Codex 额度用完”，放行了的那期光这一条也发；
+记号里依据是“宽认”（日志里只有 rate limit／429 一类、没有 Codex 的原话）时写“多半是额度用完或被限流”。
+同时有登录失效的记号时只说登录失效（那个要你动手），两件不混在一句里。
 用法（在仓库根目录）：
     python cloud/release/notify.py --issue 测试版/2026-11-09 [--kind auto|没出刊|没放行|放行] [--published yes|no|failed] [--dry-run]
                                    [--claim released|kept --claim-tag issue/2026-11-09] [--saturday]
@@ -112,36 +117,6 @@ def bundle_where(day):
         rid, day, day, KEEP_DAYS)
 
 
-def quota_info(issue):
-    """logs/codex_额度用完.txt → {"网页": a, "视频": b, "第一次": "2026-11-12 05:02"}；没有这个文件返回 None。读不出数的写 None。"""
-    try:
-        text = (Path(issue) / QUOTA_MARK).read_text(encoding="utf-8")
-    except OSError:
-        return None
-    info = {"网页": None, "视频": None, "第一次": None}
-    for k in info:
-        m = re.search(r"^%s=(.+)$" % k, text, re.M)
-        if m:
-            v = m.group(1).strip()
-            info[k] = int(v) if k != "第一次" and v.isdigit() else (v if k == "第一次" else None)
-    return info
-
-
-def quota_line(q, published_ok):
-    """邮件里那一段（11-11 定的写法；办法见经验库第五部分第 76 件）。"""
-    web, vid = q.get("网页"), q.get("视频")
-    if web is not None and vid is not None:
-        count = "这一期有 %d 张没画成（网页 %d 张、视频 %d 张）" % (web + vid, web, vid)
-    else:
-        count = "这一期有几张没画成"
-    when = q.get("第一次")
-    when = "，第一次在 %s UTC" % when.split(" ")[-1] if when else ""
-    return ("配图：%s，多半是 ChatGPT Plus 的 Codex 额度用完了（画图日志里有额度用完的提示%s）。已用程序画的封面顶上%s。"
-            "不用重新登录；5 小时额度过几个小时自己恢复，每周额度要等到下周。看用了多少：%s 。"
-            "连着几天都这样，见经验库第 76 件的办法（换更省额度的模型、减张数、买额外额度）。") % (
-        count, when, "，这一期照常发布" if published_ok else "", QUOTA_URL)
-
-
 def actions_url():
     s, r = os.environ.get("GITHUB_SERVER_URL"), os.environ.get("GITHUB_REPOSITORY")
     return "%s/%s/actions" % (s, r) if s and r else "GitHub 仓库的 Actions 页"
@@ -189,19 +164,26 @@ def claim_lines(day, claim, tag, stuck_no):
 
 
 def note_lines(day, notes, head):
-    """备注那一段：只列要告诉你的（gate.split_notes），多半转写听错的请你耳听末尾只报个数。
-    返回 (几行字, 要告诉你的备注, 多半转写听错的个数)。"""
-    tell, asr = gate.split_notes(notes)
+    """备注那一段：只列要告诉你的（gate.split_notes），多半转写听错、拿不准的请你耳听末尾只报个数。
+    请你耳听按时间排（11-14 用户定）：先视频、后播客，各自按时间先后；关乎事实的（数字、版本号、公司名、模型名、人名）行首加【事实】。
+    返回 (几行字, 要告诉你的备注, 不发信的请你耳听个数)。"""
+    tell, quiet = gate.split_notes(notes)
     lines = []
     if tell:
         lines += ["", head]
         order = {k: i for i, k in enumerate(NOTE_KINDS)}
-        for n in sorted(tell, key=lambda n: order.get(n["类"], 9)):      # 同一类保持审片写的先后
-            s = "- %s：%s" % (n["类"], n["说明"])
+        listen_sorted = sorted([n for n in tell if n["类"] == gate.LISTEN], key=gate.listen_order)
+        rest = sorted([n for n in tell if n["类"] != gate.LISTEN], key=lambda n: order.get(n["类"], 9))
+        facts = 0
+        for n in rest + listen_sorted:
+            mark = ""
+            if n["类"] == gate.LISTEN and gate.listen_fact(n):
+                mark, facts = "【事实】", facts + 1
+            s = "- %s%s：%s" % (mark, n["类"], n["说明"])
             if n["类"] == gate.LISTEN and gate.listen_classified(n) and n.get("依据"):
                 s += "（审片的依据：%s）" % n["依据"]
             lines.append(s)
-        listen = [n for n in tell if n["类"] == gate.LISTEN]
+        listen = listen_sorted
         raw = [n for n in listen if not gate.listen_classified(n)]
         if raw:
             who = "这几处" if len(raw) == len(listen) else "其中 %d 处" % len(raw)
@@ -211,9 +193,40 @@ def note_lines(day, notes, head):
             lines += ["", "审片判断这几处多半是配音真念错了%s，但还没人耳听过，不一定对；" % (
                 "（括号里是审片的依据）" if any(n.get("依据") for n in listen) else "")
                       + "打开网页上的播客或视频，拖到那个时间听一下。"]
-    if asr:
-        lines += ["", "另有 %d 处多半是转写听错，记在这一期的 审片.md（仓库 测试版/%s/审片.md）" % (len(asr), day)]
-    return lines, tell, len(asr)
+        if listen:
+            lines += ["请你耳听按时间排：先视频、后播客。" + ("行首带【事实】的是数字、版本号、公司名、模型名、人名这类关乎事实的，先听这几处。" if facts else "")]
+    if quiet:
+        lines += ["", "另有 %s，记在这一期的 审片.md（仓库 测试版/%s/审片.md）" % (gate.quiet_text(quiet), day)]
+    return lines, tell, len(quiet)
+
+
+def quota_info(issue):
+    """logs/codex_额度用完.txt → {"网页": a, "视频": b, "第一次": "2026-11-12 05:02", "依据": "原话"}；没有这个文件返回 None。
+    读不出的项写 None（旧格式没有"依据"一行，按"宽认"说"多半"）。"""
+    try:
+        text = (Path(issue) / QUOTA_MARK).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    info = {"网页": None, "视频": None, "第一次": None, "依据": None}
+    for k in info:
+        m = re.search(r"^%s=(.+)$" % k, text, re.M)
+        if m:
+            v = m.group(1).strip()
+            info[k] = (int(v) if v.isdigit() else None) if k in ("网页", "视频") else v
+    return info
+
+
+def quota_line(q, published_ok):
+    """邮件里那一段（11-14 定的说法；办法见经验库第五部分第 76 件）。不说重新登录：额度用完和登录失效是两回事。"""
+    web, vid = q.get("网页"), q.get("视频")
+    count = "共 %d 张：网页 %d 张、视频 %d 张" % (web + vid, web, vid) if web is not None and vid is not None else ""
+    when = q.get("第一次")
+    when = "第一次在 %s UTC" % when.split(" ")[-1] if when else ""
+    detail = "（%s）" % "；".join(x for x in (count, when) if x) if (count or when) else ""
+    head = "Codex 额度用完" if q.get("依据") == "原话" else \
+        "Codex 多半是额度用完或被限流（画图日志的报错行里只有 rate limit／429 一类的字样，没有 Codex 额度用完的原话，待核）"
+    return "配图：%s，这一期画不成的图已退回程序封面%s；额度会自动恢复，见 %s 。不用重新登录%s。" % (
+        head, detail, QUOTA_URL, "，这一期照常发布" if published_ok else "")
 
 
 def kinds_of(tell, codex=False, quota=False):
@@ -245,7 +258,7 @@ def build(issue, kind="auto", published=None, claim=None, claim_tag=None, saturd
     codex = (issue / CODEX_MARK).exists()
     if codex:
         tail = ["", CODEX_LINE] + tail
-    # Codex 额度用完（11-11 加；codex_login_check.py 写的记号）：和登录失效同时有时只说登录失效
+    # Codex 额度用完（11-14 加；codex_login_check.py 写的记号）：和登录失效同时有时只说登录失效
     quota = None if codex else quota_info(issue)
     if quota is not None:
         verdict_ok = kind == "放行" and published in (None, "yes")
@@ -293,7 +306,11 @@ def build(issue, kind="auto", published=None, claim=None, claim_tag=None, saturd
     nlines, tell, asr = note_lines(day, v.get("备注"), "有几处要你知道：")
     if not tell and not codex and quota is None and published in (None, "yes"):
         if asr:
-            return False, "", "%s 正常放行，只有 %d 处请你耳听多半是转写听错（记在 测试版/%s/审片.md），不发邮件。" % (day, asr, day)
+            quiet = gate.split_notes(v.get("备注"))[1]
+            if all(gate.listen_kind(n) == gate.LISTEN_ASR for n in quiet):
+                return False, "", "%s 正常放行，只有 %d 处请你耳听多半是转写听错（记在 测试版/%s/审片.md），不发邮件。" % (day, asr, day)
+            return False, "", "%s 正常放行，只有 %d 处请你耳听不用发信（%s，记在 测试版/%s/审片.md），不发邮件。" % (
+                day, asr, gate.quiet_text(quiet), day)
         return False, "", "%s 正常放行、没有备注，不发邮件。" % day
     link = "%s?date=%s" % (SITE, day)
     if published == "failed":

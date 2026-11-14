@@ -282,6 +282,7 @@ html.js:not(.static) .rv:not(.in) { opacity: 0; transform: translate3d(0, 18px, 
 /* ===================== 引用上标：前面插一个看不见的“连字符”（U+2060），和前一个字粘在一起，不会单独掉到下一行 ===================== */
 sup.cite { font: 500 .62em/0 var(--font-ui); vertical-align: .62em; margin-left: 1px; letter-spacing: 0; white-space: nowrap; }
 sup.cite::before { content: "\2060"; }
+fd-nobr { white-space: nowrap; }   /* 上标连同前面最后一段（app.js 的 glueCites）：一块比整行还宽时也不让上标单独掉行 */
 .cn-src { white-space: nowrap; }   /* "出处"和后面的上标不拆行 */
 sup.cite a { color: var(--accent); text-decoration: none; padding: 0 1px; border-radius: 4px; cursor: pointer; transition: background-color .25s var(--ease); }
 sup.cite a:hover, sup.cite a.on { background: rgb(var(--accent-rgb) / .14); }

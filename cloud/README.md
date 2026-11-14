@@ -50,7 +50,7 @@
 | `trigger/` | 认领程序 `claim.py`（同一天只出一期）；保底触发器 Worker（`src/index.js`、`wrangler.toml`）、工具 `tools.mjs`（核对令牌、测试触发、数定时、停用）、`run_wrangler.py` |
 | `whisper_standin/` | 转写的替身：命令名和 mlx-whisper 一样，里面是能在 Linux 上跑的 faster-whisper |
 | `web_images.py` | 正式运行时照网页稿的画面描述调 Codex 画网页图 |
-| `codex_login_check.py`（测试在 `tests/`） | 查 Codex 登录有没有失效：有图没画成、它的日志里又有 401／refresh 失败才记一笔（11-09 改，原来会误报） |
+| `codex_login_check.py`（测试在 `tests/`） | 查 Codex 登录有没有失效：有图没画成、它的日志里又有 401／refresh 失败才记一笔（11-09 改，原来会误报）；11-14 起也查额度用完（有图没画成、日志里有 "You’ve hit your usage limit" 一类的原话），另记 `logs/codex_额度用完.txt`，邮件单独说 |
 | `取回成品.py`（测试在 `tests/`） | 在本机把某一天的成品拼成完整的期目录，放进成品库 `本机资料/成品/<日期>/`；满 7 天、已发布的期移进废纸篓 |
 | `gemini_trial.py`、`selftest_chrome.mjs` | 只试配一句 Gemini、只测 Chrome 能不能画三维 |
 | `fonts/`、`node/` | 云端用的字体、Node 依赖清单 |

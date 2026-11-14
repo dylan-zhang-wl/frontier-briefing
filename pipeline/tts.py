@@ -62,6 +62,9 @@ MiMo 的行内标记（如"（轻笑）""（温柔 活泼）"，括号里只有�
       少了或换了（11-09 晚加，"34 亿美元"转写成"34 亿元"）也算要重录；重录后还在，qc.json 那一块另写
       "专名读音（请你耳听）""数字单位（请你耳听）"。读音表里的英文名整个没念出来（11-10 加，"Claude Fable 5.2"
       念成"Claude 5.2"）也一样，重录后还在写"英文名漏念（请你耳听）"。
+      废条（11-14 加，tts_qc.overlong）：配出来的一条比按字数估计的长 2 倍以上、而且多出 30 秒以上（11-11 有一条 181 秒、
+      估计 55 秒，多念了 612 个字），不转写、不量音高音色，直接当"需重录"丢掉重录，算进现有的重录次数
+      （先占对稿的 retakes，把关时再占"最多再录"），各条记"废条""没转写"；全是废条时才补量一次选中的那条、标需人工复听。
 音高把关（11-01 加，命令行默认开）：同一个声音每次合成的音高会漂。每块配完量音高中位数，和声音档案
       （voice_profile.json 各声音的"参考"）里的参考音高比，差超过 1.5 个半音就重录，最多再录 2 次，挑最接近的；
       语速和参考差超过一成在 qc.json 里标出来。阈值在档案的"音高把关"里；--pitch-ref off 关掉、给数字就用那个 Hz。
@@ -1015,7 +1018,11 @@ class _Taker:
                      + (f"，约 ${usage['cost_usd']:.4f}" if cfg.engine in GEMINI_ENGINES else ""))
         self.calls.append(dict(usage, 块=block, 第几条=t + 1))
         seconds = usage["seconds_audio"]
-        if self.qc:
+        waste = Q.overlong(seconds, est) if self.qc else None
+        if waste:            # 11-14：时长超过估计 2 倍、多 30 秒以上的废条，不转写、不量音高音色，直接重录（经验库第 71 件①）
+            res = Q.discarded(seconds, est, waste)
+            self.log(f"    对稿：{waste}")
+        elif self.qc:
             wdir = CACHE / "whisper" / key
             done = wdir / f"{raw.stem}_whisper.json"      # tts_qc.transcribe 的输出名
             # 这条音频是复用缓存的、上次也转写过，就直接读上次的转写，不再跑一遍 Whisper
@@ -1033,7 +1040,9 @@ class _Taker:
         else:
             res = {"需重录": False, "字错率": None, "原因": [], "最长多出": 0, "最长少掉": 0}
         tk = {"take": t + 1, "raw": raw, "seconds": seconds, "qc": res, "finish": usage.get("finish_reason"), "key": key}
-        if measure:
+        if waste:
+            tk["废条"] = True
+        if measure and not waste:
             tk.update(measure(tk))
             p = tk.get("音高") or {}
             if p.get("偏差半音") is not None and p.get("音高中位数Hz") and p.get("参考Hz"):
@@ -1052,11 +1061,13 @@ class _Taker:
     def series(self, cfg, text, est, tag, block, measure=None):
         """先配 1 条；对稿不过就重录（最多 retakes 次）；给了 measure（量音高和／或音色）就再把关：
         挑出来的那条音高超出允许范围、或音色掉到重录线下，就再录——两道共用 gate["最多再录"] 次和预算——
-        挑法见 pick_take。返回 (各条, 选中的, 把关记录)。"""
+        挑法见 pick_take。返回 (各条, 选中的, 把关记录)。
+        废条（11-14 加，tts_qc.overlong：时长超过估计 2 倍、多 30 秒以上）不转写、不量，当"需重录"：先占对稿的重录次数；
+        把关时挑出来的还是废条（各条都是废条），再占"最多再录"重录（记"为废条再录"）。都用完了还是废条，才补量一次、照旧标需人工复听。"""
         takes = [self.one(cfg, text, est, 0, tag, block, measure)]
         while takes[-1]["qc"].get("需重录") and len(takes) < 1 + self.retakes:
             takes.append(self.one(cfg, text, est, len(takes), tag, block, measure))
-        info = None
+        info, best = None, None
         if measure:
             info = {"为音高再录": 0}
             timbre = any(x.get("音色") for x in takes)
@@ -1064,9 +1075,13 @@ class _Taker:
                 info["为音色再录"] = 0
             if any(x.get("语速判") for x in takes):
                 info["为语速再录"] = 0
-            while info["为音高再录"] + info.get("为音色再录", 0) + info.get("为语速再录", 0) < self.gate["最多再录"]:
+            while (info["为音高再录"] + info.get("为音色再录", 0) + info.get("为语速再录", 0) + info.get("为废条再录", 0)
+                   < self.gate["最多再录"]):
                 b = self.pick(takes)
-                if (b.get("音高") or {}).get("超出"):
+                if b.get("废条"):
+                    why = "为废条再录"
+                    self.log("    各条都是废条（时长超过估计 2 倍）：再录")
+                elif (b.get("音高") or {}).get("超出"):
                     why = "为音高再录"
                     self.log(f"    音高{b['音高'].get('说明', '超出')}：为音高重录")
                 elif timbre_failed(b):
@@ -1085,6 +1100,11 @@ class _Taker:
                 takes.append(tk)
                 info[why] = info.get(why, 0) + 1
             best = self.pick(takes)
+            if best.get("废条"):            # 重录次数用完了还是废条：补量一次（整段合成要靠它切章），照旧标需人工复听
+                best.update(measure(best))
+                note = f"录了 {len(takes)} 条都是废条（时长超过估计 2 倍），先用第 {best['take']} 条，需人工听"
+                info["说明"] = (info["说明"] + "；" if info.get("说明") else "") + note
+                self.log("    ⚠ " + note)
             if (best.get("音高") or {}).get("超出"):
                 note = (f"录了 {len(takes)} 条都超出，用最接近的第 {best['take']} 条" if len(takes) > 1
                         else "只有这一条，音高超出，先用它")
@@ -1094,7 +1114,7 @@ class _Taker:
                 note = f"录了 {len(takes)} 条音色都在重录线下，用最像的第 {best['take']} 条，需人工听"
                 info["说明"] = (info["说明"] + "；" if info.get("说明") else "") + note
                 self.log("    ⚠ " + note)
-        return takes, self.pick(takes), info
+        return takes, best if best is not None else self.pick(takes), info
 
 
 def timbre_failed(x):
@@ -1111,8 +1131,9 @@ def pick_take(takes, qc=True, extra=None):
     """几条里挑一条（tts.py、dialog_tts.py 共用）。先看对稿（需不需要重录）；再看 extra(x)（dialog_tts 的 MiMo 跑偏，没有就跳过）；
     再看音色：有音色过线的，就只在过线的里挑，取音高离参考最近的（音高过线的自然排在前面），再看最大一处多念／漏念、字错率；
     一条音色都没过线，就取音色相似度最高的（调用方标"音色需人工听"）。没有音高、音色把关时和原来的挑法完全一样。"""
-    any_ok = any(not timbre_failed(x) for x in takes)
+    any_ok = any(not timbre_failed(x) for x in takes if not x.get("废条"))
     has_rate = any(x.get("语速判") for x in takes)      # 第十轮：量了语速才多看两样——音高有没有超出、语速要不要重录（没量时和原来一样）
+    # 11-14：废条（时长超过估计 2 倍、没转写、没量）紧跟在"需不需要重录"后面，排在所有转写过的条后面；没有废条时这一位都是 False，挑法和原来一样
 
     def k(x):
         b = Q.badness(x["qc"]) if qc else (False, 0, 0)
@@ -1120,9 +1141,10 @@ def pick_take(takes, qc=True, extra=None):
         dev = abs(dev) if dev is not None else 0.0
         e = (extra(x),) if extra else ()
         r = (bool((x.get("音高") or {}).get("超出")), rate_failed(x)) if has_rate else ()
+        w = (bool(x.get("废条")),)
         if any_ok:
-            return (b[0],) + e + (timbre_failed(x),) + r + (dev, b[1], b[2])
-        return (b[0],) + e + (-((x.get("音色") or {}).get("相似度") or 0.0),) + r + (dev, b[1], b[2])
+            return (b[0],) + w + e + (timbre_failed(x),) + r + (dev, b[1], b[2])
+        return (b[0],) + w + e + (-((x.get("音色") or {}).get("相似度") or 0.0),) + r + (dev, b[1], b[2])
     return min(takes, key=k)
 
 
@@ -1189,9 +1211,11 @@ def _gate_fields(best, info, ref):
     out = {}
     if info is None:
         return out
+    if info.get("为废条再录"):
+        out["为废条再录"] = info["为废条再录"]
     if best.get("音高"):
         out["音高"] = best["音高"]
-        out["音高把关"] = dict({k: v for k, v in info.items() if k not in ("为音色再录", "为语速再录")}, 参考=ref)
+        out["音高把关"] = dict({k: v for k, v in info.items() if k not in ("为音色再录", "为语速再录", "为废条再录")}, 参考=ref)
     if best.get("音色"):
         out["音色"] = best["音色"]
         out["音色把关"] = {"为音色再录": info.get("为音色再录", 0)}

@@ -1089,6 +1089,26 @@
     var list = ISSUE.sources.slice().sort(function (a, b) { return order[a.id] - order[b.id]; });
     CITE = { order: order, count: count, list: list };
   }
+  /* 上标和前面那个词粘成一块（11-14 加）：CSS 的 U+2060 只管正常换行；一块（如手机上“CloudRobo-WM1.2[19]”）比一整行还宽时，
+   * overflow-wrap: anywhere 会随处断开，偏偏断在上标前面，上标单独掉到下一行（11-13 测试期第 16 步）。
+   * 这里把上标前面最后一段连同紧跟的几个上标包进不换行的 <fd-nobr>：西文、数字连成的一串（最多 12 个字，到空格、连字符、U+2060、中文为止），
+   * 前面是中文、标点时不包（11-14 回归：单包最后一个字会让这个字的抗锯齿差一两个像素，而中文词组有 keep-all 管着）。这一段里本来就没有换行点，放得下时排版和原来一样；放不下时只会在这一段前面断开
+   * （“CloudRobo-”留上一行，“WM1.2[19]”一起到下一行）。用自定义标签不用 span，免得 .kn-i span 之类的样式套上来。
+   * 周末来源行（.dl-src）的上标之间本来就允许折行，前面也没有正文，不处理。 */
+  function glueCites() {
+    $$('#c-main sup.cite').forEach(function (s) {
+      var prev = s.previousSibling;
+      if (!prev || prev.nodeType !== 3 || s.parentNode.nodeName === 'FD-NOBR' || s.closest('.dl-src')) return;
+      var m = /[A-Za-z0-9\u00c0-\u024f.,%_'\u2019+#&]{1,12}$/.exec(prev.data);
+      if (!m) return;
+      var tail = prev.splitText(m.index);
+      var g = document.createElement('fd-nobr');
+      s.parentNode.insertBefore(g, tail);
+      g.appendChild(tail);
+      var n = s, nx;
+      while (n && n.nodeType === 1 && n.matches('sup.cite')) { nx = n.nextSibling; g.appendChild(n); n = nx; }
+    });
+  }
   function topIds() {
     return CITE.list.slice().sort(function (a, b) { return (CITE.count[b.id] || 0) - (CITE.count[a.id] || 0) || CITE.order[a.id] - CITE.order[b.id]; })
       .slice(0, 5).map(function (s) { return s.id; });
@@ -1605,6 +1625,7 @@
       } else slot.parentNode.replaceChild(fresh, slot);
     }
     numberCites();
+    glueCites();
     renderSources();
     mountPagers();
     bindTermCard();

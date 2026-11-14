@@ -62,7 +62,9 @@ ANNOUNCE = ["上半场", "下半场", "上半部分", "下半部分", "第一部
 AI_CLAIM = [r"由\s*AI\s*生成", r"AI\s*辅助生成", r"合成语音", r"AI\s*合成", r"我们是\s*AI", r"作为\s*AI", r"真人主播"]
 EXPERIENCE = [r"我们(昨天|今天|刚才)?(亲自)?(试了|试用|测了|测试了|体验了|采访|问了|用了)"]
 STRONG_UNITS = ("美元", "元", "美分", "小时", "分钟", "名", "项", "倍", "个百分点", "token")
-# 这些词里的数字不是数字（"三星"是公司，"一样""统一"是常用词），先遮住再找数字
+# 这些词里的数字不是数字（"三星"是公司，"一样""统一"是常用词），先遮住再找数字。
+# "之一"只遮"其中之一""最大的之一"这种：前面是"分"的（百分之一百五十、百分之一点五、三分之一）是百分数、分数，不遮
+# （11-14 修，经验库第 69 件：原来一律遮掉，"百分之一百……"成了"百分□□150"，100%–199% 全被当成事件卡里找不到）
 NOT_NUMBERS = ["三星", "千问", "百度", "一些", "一样", "一起", "一直", "统一", "唯一", "一般", "一定",
                "万一", "一旦", "一度", "一切", "一致", "进一步", "一边", "一方面", "一口气", "一下",
                "一番", "一并", "一同", "一时", "之一", "一体", "一系列", "十足", "一手", "一眼"]
@@ -111,7 +113,10 @@ def prepare(s):
     s = unicodedata.normalize("NFKC", s)
     s = WEEKDAY.sub(lambda m: "□" * len(m.group(0)), s)
     for w in NOT_NUMBERS:
-        s = s.replace(w, "□" * len(w))
+        if w == "之一":
+            s = re.sub(r"(?<!分)之一", "□□", s)
+        else:
+            s = s.replace(w, "□" * len(w))
     s = re.sub(r"一点(?![零〇一二两三四五六七八九\d])", "□□", s)     # "快一点"不是 1 点
     s = _spoken_forms(s)
     s = cn_numbers_to_arabic(s)
@@ -224,7 +229,11 @@ class Evidence:
 
     def has_number(self, x):
         k = x["种类"]
-        if k in ("分数", "序数", "版本"):
+        if k == "分数":                   # 三分之一：事件卡里写"三分之一"或"1/3"都算（11-14 加）
+            m = re.fullmatch(r"(\d+)分之(\d+(?:\.\d+)?)", x["值"])
+            return x["值"] in self.flat or bool(m and re.search(
+                r"(?<![\d.])%s/%s(?![\d.])" % (re.escape(m.group(2)), re.escape(m.group(1))), self.flat))
+        if k in ("序数", "版本"):
             return x["值"] in self.flat
         if k in self.vals and x["值"] in self.vals[k]:
             return True
