@@ -100,22 +100,39 @@ class Lexicon(unittest.TestCase):
 
     def test_bytedance_chuanqi_active(self):
         """11-14 用户耳听试配后启用：字节跳动 → 自节跳动、传奇 → 船奇（11-13 播客念成"智节跳动""禅奇"）。
-        只换送去配音的字；单说"字节"的不换；微软的"威软"仍只记在待启用（11-14 用户定先不动）。"""
+        只换送去配音的字；单说"字节"的不换。微软的"威软"同日稍晚另行启用，见下一项。"""
         import yaml
         active = {f: t for f, t, _ in tts.voice_forms()}
         self.assertEqual(active.get("字节跳动"), "自节跳动")
         self.assertEqual(active.get("传奇"), "船奇")
-        self.assertNotIn("微软", active)
         s = "据报，字节跳动的豆包更新了；字节的另一个团队说，这次是传奇接替传奇。"
         out, subs = tts.voice_text(s)
         self.assertEqual(out, "据报，自节跳动的豆包更新了；字节的另一个团队说，这次是船奇接替船奇。")
         self.assertEqual(sorted((x["写法"], x["处数"]) for x in subs), [("传奇", 2), ("字节跳动", 1)])
-        self.assertEqual(say("微软和 Claude"), "微软和 Claude")
+        self.assertEqual(say("微软和 Claude"), "威软和 Claude")   # Claude 的 Klawd 仍不生效
         d = yaml.safe_load(tts.LEXICON.read_text(encoding="utf-8"))
         rows = {x["写法"]: x for x in d["其他"] if isinstance(x, dict)}
         for w in ("字节跳动", "传奇"):
             self.assertNotIn("配音写法（待启用）", rows[w])
             self.assertIn("11-14 用户耳听", rows[w]["备注"])
+
+    def test_weiruan_active(self):
+        """11-14 用户耳听 11-13 第 8 块整块试配（原写法 1/2 条 6 处念成"梅华"，"威软"2 条 12 处都对），说"威软"自然，启用。
+        只换送去配音的字；对稿比原稿，转写写成"微软"的照样通过；"美软""梅华"那道自动重录保险不动。"""
+        import yaml
+        import tts_qc as Q
+        active = {f: t for f, t, _ in tts.voice_forms()}
+        self.assertEqual(active.get("微软"), "威软")
+        s = "报道说，微软今年计划投入更多资金；微软的发言人没有回应。"
+        out, subs = tts.voice_text(s)
+        self.assertEqual(out, "报道说，威软今年计划投入更多资金；威软的发言人没有回应。")
+        self.assertEqual([(x["写法"], x["处数"]) for x in subs], [("微软", 2)])
+        res = Q.check(tts.spoken(s), s)
+        self.assertFalse(res["需重录"], res["原因"])
+        d = yaml.safe_load(tts.LEXICON.read_text(encoding="utf-8"))
+        rows = {x["写法"]: x for x in d["公司"] if isinstance(x, dict)}
+        self.assertNotIn("配音写法（待启用）", rows["微软"])
+        self.assertIn("11-14 用户耳听整块试配", rows["微软"]["备注"])
 
     def test_bytedance_chuanqi_check_uses_script(self):
         """对稿比的是原稿：转写写成"字节跳动""传奇"的（11-14 试配就是这样）照样通过，送去模型的才是"自节跳动""船奇"。"""
