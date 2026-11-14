@@ -5,6 +5,11 @@ const { chromium } = require(process.env.PW);
 const fs = require('fs');
 const path = require('path');
 const base = process.argv[2], outDir = process.argv[3], reportPath = process.argv[4];
+// 11-14：云端没有显卡、Chrome 用 SwiftShader 软件渲染（FD_CHROME_ARGS），截图时读视频播放器的 3D 画面（WebGL），
+// Chrome 会报一条性能警告："GL Driver Message (OpenGL, Performance, …): GPU stall due to ReadPixels"。
+// 这是浏览器自己说"读像素慢"，页面没出错、画面正常（11-14 本机同一组参数复现，截图核过）。
+// 这类"OpenGL 性能"警告记进 gpuNotes 当提醒，不算页面报错；别的警告、OpenGL 报错照旧算页面报错。
+const GPU_PERF_NOTE = /GL Driver Message \(OpenGL, Performance,/;
 
 async function settle(page) {
   await page.evaluate(async () => { await document.fonts.ready; });
@@ -88,7 +93,11 @@ async function fullShot(page, file, dpr) {
     const page = await ctx.newPage();
     const errs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e)));
-    page.on('console', m => { if (m.type() === 'error' || m.type() === 'warning') errs.push(m.type() + ': ' + m.text()); });
+    const gpuNotes = [];
+    page.on('console', m => {
+      if (m.type() === 'warning' && GPU_PERF_NOTE.test(m.text())) { gpuNotes.push(m.text()); return; }
+      if (m.type() === 'error' || m.type() === 'warning') errs.push(m.type() + ': ' + m.text());
+    });
     page.on('requestfailed', r => { const f = r.failure(); if (!(f && /ERR_ABORTED/.test(f.errorText) && /\.mp3$/.test(r.url()))) errs.push('failed: ' + r.url().split('/').slice(-2).join('/') + ' ' + (f && f.errorText)); });
     await page.goto(`${base}?${s.q}`, { waitUntil: 'load' });
     await settle(page);
@@ -100,7 +109,7 @@ async function fullShot(page, file, dpr) {
     }));
     const glyphs = await glyphCheck(page);
     await fullShot(page, path.join(outDir, s.name), s.dpr);
-    report[s.name] = Object.assign(info, { glyphs, errors: errs });
+    report[s.name] = Object.assign(info, { glyphs, errors: errs }, gpuNotes.length ? { gpuNotes } : {});
     console.log(s.name, JSON.stringify(report[s.name]));
     await ctx.close();
   }

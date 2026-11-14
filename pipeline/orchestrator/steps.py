@@ -1527,6 +1527,8 @@ class Accept(Step):
                     continue
                 if v.get("errors"):
                     probs.append("%s：页面报错 %d 处（%s）" % (k, len(v["errors"]), str(v["errors"][0])[:80]))
+                if v.get("gpuNotes"):          # 11-14：云端软件渲染读 3D 画面时 Chrome 的性能提示，不算页面报错（见 shoot_v3.js 开头）
+                    warns.append("%s：截图时浏览器报了 %d 条显卡性能提示（云端软件渲染读 3D 画面，页面没出错）" % (k, len(v["gpuNotes"])))
                 if v.get("overflowX"):
                     probs.append("%s：横向滚动 %s 像素" % (k, v["overflowX"]))
                 if ((v.get("glyphs") or {}).get("fallbackCount")):
