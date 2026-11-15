@@ -45,6 +45,8 @@
        存缓存，再跑一字没改的轮不花钱。
     3. 对稿：本机 Whisper 转写回来和原稿比（tts_qc.py，一次进程转完一集），多念、漏念、字错率过高就重录一次；
        两条都不理想时留较好的一条，标"需人工复听"。≤8 个字的短句按拼音比（短句里一个同音字就是两成错误率）。
+       11-15 加：数字不符、第二个听写模型复核判念错的轮最多重录 2 次（一批一起复核；预算不够的不录、不报错），
+       重录后还在写"数字不符（请你耳听）""复核念错（请你耳听）"（fd_开关.json 两个开关，规则见 tts_qc.py 文件头）。
        音高把关：每轮量音高中位数，和这个人自己的参考音高比，差超过 1.5 个半音就重录（profile"音高把关"）；
        短问句（整轮不超过 4 秒、问号结尾，句尾上扬）只量、只标，不重录。
        MiMo 另有"跑偏"把关：时长超过估计的 1.5 倍、或音高离参考差 3 个半音以上，就再录（免费，最多 3 次）。
@@ -583,6 +585,13 @@ def _synth_one(run, unit, take):
     return {"key": key, "raw": raw, "take": take, "usage": dict(usage, 本次新调用=True)}
 
 
+def _retake_cost(run, u, t):
+    """再录第 t 条估计花多少（缓存里已经有的那条不花钱）。"""
+    if not run.fresh and all(x.exists() for x in _paths(tts._key(u["cfg"], u["text"], t))):
+        return 0.0
+    return _est_cost(u["cfg"], u)
+
+
 def synth_batch(run, jobs):
     """jobs：[(unit, 第几条)]。同样的文字＋配置只配一次。返回 {(unit 序号, 第几条): 记录}。"""
     by_key = {}
@@ -663,6 +672,10 @@ def qc_batch(run, recs, units_by_index):
     for (ui, t), rec in recs.items():
         u = units_by_index[ui]
         rec["qc"] = judge(u, hyps[rec["key"]], rec["usage"]["seconds_audio"])
+    # 11-15：数字不符、可疑处交给第二个听写模型复核（开关关着、没有可疑处时什么也不做），一批一起听
+    Q.confirm([(rec["qc"], tts.spoken(units_by_index[ui]["text"]), rec["raw"],
+                CACHE / "whisper" / rec["key"] / f"{rec['raw'].stem}_whisper.json")
+               for (ui, t), rec in recs.items()], log=run.log)
 
 
 # ---------------------------------------------------------------- 后期
@@ -1077,6 +1090,8 @@ def make_dialog(script, out_dir, profile=PROFILE, title=None, ledger=None, fresh
     work = CACHE / "runs" / f"dialog_{tts._safe_name(out_dir.name)}_{tag}"
     work.mkdir(parents=True, exist_ok=True)
     run = _Run(ledger, fresh, log)
+    if qc:
+        tts._asr2_note(log)          # 11-15：对稿两个新开关写进日志；第二个听写模型开着就先在后台载入
     gate = Q.gate_settings(profile)
     tst = tts.tempo_settings(profile)
     dur_rec = {}
@@ -1132,14 +1147,28 @@ def make_dialog(script, out_dir, profile=PROFILE, title=None, ledger=None, fresh
                 qc_batch(run, recs, by_index)
             for (ui, _), rec in recs.items():
                 takes[ui].append(rec)
-            jobs = []
+            jobs, hard_est, later = [], 0.0, []
             for (ui, t), rec in recs.items():
                 if qc and rec["qc"]["需重录"]:
                     u = by_index[ui]
-                    log(f"    ✗ {u['speaker']} 第{ui + 1}轮第{t + 1}条：{'；'.join(rec['qc']['原因'])}"
-                        + ("，重录" if t < retakes else ""))
-                    if t < retakes:
+                    q = rec["qc"]
+                    if t < retakes and not Q.misread_only(q):
+                        hard_est += _retake_cost(run, u, t + 1)
+                        log(f"    ✗ {u['speaker']} 第{ui + 1}轮第{t + 1}条：{'；'.join(q['原因'])}，重录")
                         jobs.append((u, t + 1))
+                    elif Q.misread(q) and t < max(retakes, Q.MISREAD_RETAKES):
+                        later.append((u, t, q))
+                    else:
+                        log(f"    ✗ {u['speaker']} 第{ui + 1}轮第{t + 1}条：{'；'.join(q['原因'])}")
+            acc = 0.0
+            for u, t, q in later:       # 11-15：数字不符、复核念错最多重录 2 次；预算够几条录几条，不够的不录、不报错
+                est = _retake_cost(run, u, t + 1)
+                if est and ledger.spent + hard_est + acc + est > ledger.budget:
+                    log(f"    ✗ {u['speaker']} 第{u['index'] + 1}轮第{t + 1}条：{'；'.join(q['原因'])}；预算不够，没重录")
+                    continue
+                acc += est
+                log(f"    ✗ {u['speaker']} 第{u['index'] + 1}轮第{t + 1}条：{'；'.join(q['原因'])}，重录")
+                jobs.append((u, t + 1))
 
         # —— 1b) 音高把关（各人按自己的参考音高）＋ 音色把关（各人对自己的档案）＋ MiMo 跑偏把关：挑出来的那条不行就再录 ——
         refs = {u["index"]: speakers[u["speaker"]].ref for u in units}
@@ -1292,6 +1321,7 @@ def make_dialog(script, out_dir, profile=PROFILE, title=None, ledger=None, fresh
                      **({"专名读音（请你耳听）": best["qc"]["专名读音"]} if qc and best["qc"].get("专名读音") else {}),
                      **({"数字单位（请你耳听）": best["qc"]["数字单位"]} if qc and best["qc"].get("数字单位") else {}),
                      **({"英文名漏念（请你耳听）": best["qc"]["英文名漏念"]} if qc and best["qc"].get("英文名漏念") else {}),
+                     **(Q.listen_fields(best["qc"]) if qc else {}),
                      "秒数": round(len(y) / SR, 2), "中间最长停顿秒（缩之前）": inner,
                      **({"缩短的句中停顿": [{"原来秒数": s, "位置秒": at} for s, at in capped]} if capped else {}),
                      "_head": head, "_tail": tail,

@@ -256,6 +256,23 @@ class Doctor:
             "" if (not don or has) else "装 Claude Code 并登录订阅，或把 fd_开关.json 的“视频导演”改成“关”")
         zon, zwhy = zh_wrap_switch()           # 11-09 晚加：视频中文整词换行开关（断行工具 budoux、jieba 在上面的软件检查里）
         self.add(OK, "视频中文整词换行（开关）", "%s（%s）%s" % ("开" if zon else "关", zwhy, "" if zon else "：视频文字按加开关以前的办法换行"))
+        self.qc_switches()
+
+    def qc_switches(self):
+        """11-15 加：对稿的数字整数比对、第二个听写模型（pipeline/tts_qc.py）。只报开没开；第二个听写模型开着时看环境和模型在不在
+        （只查文件，不载入模型）。没装好不挡出刊：对稿照旧，数字不符照常重录。"""
+        if str(PIPE) not in sys.path:
+            sys.path.insert(0, str(PIPE))
+        import tts_qc as Q                     # noqa: E402
+        non, nwhy = Q.numbers_switch()
+        self.add(OK, "对稿数字整数比对（开关）", "%s（%s）" % ("开" if non else "关", nwhy))
+        aon, awhy = Q.asr2_switch()
+        py, models, _ = Q._asr2_paths()
+        have = py.exists() and (models / "SenseVoiceSmall" / "model.pt").exists() and (models / "paraformer-zh" / "model.pt").exists()
+        self.add(OK if (not aon or have) else WARN, "对稿第二个听写模型（开关）", "%s（%s）%s" % (
+            "开" if aon else "关", awhy, ("；环境和两个模型都在" if have else "；没装好（%s、%s），这一期不复核" % (py, models)) if aon else ""),
+            "" if (not aon or have) else "照 cloud/asr2_requirements.txt 开头装 ~/.venvs/fd-asr2，模型下进 ~/.cache/fd-asr2（见 .github/workflows/frontier-daily.yml"
+                                         "“装第二个听写模型”）；或把 fd_开关.json 的“对稿第二个听写模型”改成“关”")
 
     def disk(self):
         u = shutil.disk_usage(str(Path.home()))
