@@ -344,6 +344,38 @@ def synthetic(g):
     check(g["para_times"](blk, ps) == [(0.0, 0.5, "估算"), (10.0, 0.5, "估算")],
           "8. 没有对齐数据 → 按字数比例（%s）" % (g["para_times"](blk, ps),))
 
+    # 11. 11-15 加：网页和播客的热点顺序不同（11-12 网页第二条百度、第三条台积电，播客热点二讲台积电、热点三讲百度，
+    #     原来按排第几跳，两个按钮对调了）。文字是编的（两家虚构的公司）。热点跳章开头。
+    A_POD = "国内这边，远帆科技在年度大会上发布了新一代办公助手，创始人说下一步是让数字员工进入销售和客服环节。"
+    A_WEB = "远帆科技发布新一代办公助手远帆科技创始人在年度大会上说，下一步要让数字员工进入销售、客服各个环节。"
+    B_POD = "说到芯片，星河半导体这周准备入股两家模型公司，各投一笔数额不大的钱。"
+    B_WEB = "星河半导体准备入股两家模型公司星河半导体这周计划分别投资两家模型公司，金额不大。"
+    H = g["head_chapter"].__globals__        # runpy 返回的是全局变量的副本；开关要改函数真正读的那一份
+    moved0 = len(H["LISTEN_HEAD_MOVED"])
+    setup({"热点二": [B_POD], "热点三": [A_POD]})
+    t = g["listen_at"]("headline", A_WEB, 1)
+    check(t == 300.0, "11a. 网页第 2 条、播客在热点三讲 → 跳热点三开头（%s，应为 300.0）" % t)
+    t = g["listen_at"]("headline", B_WEB, 2)
+    check(t == 200.0, "11b. 网页第 3 条、播客在热点二讲 → 跳热点二开头（%s，应为 200.0）" % t)
+    check([m[1:] for m in H["LISTEN_HEAD_MOVED"][moved0:]] == [("热点二", "热点三"), ("热点三", "热点二")],
+          "11c. 改了章的两条都记下来，组装时报出（%s）" % (H["LISTEN_HEAD_MOVED"][moved0:],))
+    setup({"热点二": [A_POD], "热点三": [B_POD]})
+    t = g["listen_at"]("headline", A_WEB, 1)
+    check(t == 200.0, "11d. 顺序一致 → 照旧按排第几（%s，应为 200.0）" % t)
+    setup({"热点二": [B_POD, "远帆科技也在年度大会上发布了办公助手，数字员工要进入销售和客服。"], "热点三": [A_POD]})
+    t = g["listen_at"]("headline", A_WEB, 1)
+    check(t == 200.0, "11e. 排第几那一章也正经讲了它 → 照旧按排第几（%s，应为 200.0）" % t)
+    setup({"热点二": [B_POD]})
+    t = g["listen_at"]("headline", A_WEB, 1)
+    check(t == 200.0, "11f. 哪个热点章都没讲它 → 照旧按排第几（%s，应为 200.0）" % t)
+    setup({"热点二": [B_POD], "热点三": [A_POD]})
+    H["LISTEN_HEADLINE"] = False
+    try:
+        t = g["listen_at"]("headline", A_WEB, 1)
+    finally:
+        H["LISTEN_HEADLINE"] = True
+    check(t == 200.0, "11g. FD_LISTEN_HEADLINE=off → 和改之前一样按排第几（%s，应为 200.0）" % t)
+
     g["PARAS"][:], g["chapters"][:] = real_paras, real_ch
     mid_turn(g)
 

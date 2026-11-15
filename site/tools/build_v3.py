@@ -887,18 +887,40 @@ def main_talk(text):
     return first, top_
 
 
+# 11-15 加（经验库第 82 件）：热点原来只按排第几跳（网页第 2 条跳"热点二"）。总规矩第 5 条许播客按内容自己排顺序，
+# 11-12 网页第二条百度、第三条台积电，播客热点二讲台积电、热点三讲百度，两个按钮对调了。现在先按文字看一眼：
+# 排第几对上的那一章几乎没讲这一条（这一章最高分不到 4，或不到各热点章里最高分的六成，判据和 listen_at 找别处主讲的相同），
+# 另一个热点章明显在讲它，就跳那一章开头；都像、都不像，照旧按排第几跳（顺序一致的往期和改之前逐字相同）。
+# 环境变量 FD_LISTEN_HEADLINE=off 关掉，和改之前逐字相同。
+LISTEN_HEADLINE = (os.environ.get("FD_LISTEN_HEADLINE") or "on").strip().lower() not in ("off", "0", "false", "no", "关")
+LISTEN_HEAD_MOVED = []      # 这一期按内容改了章的热点：[(打分用的文字, 按顺序会跳的章, 现在跳的章)]
+
+
+def head_chapter(text, own, nth):
+    """热点条目跳哪一章：默认排第几就跳第几个热点章；那一章几乎没讲它、别的热点章明显在讲它时，改跳那一章。"""
+    if not LISTEN_HEADLINE or len(own) < 2:
+        return own[nth]
+    sc = [max(para_scores(text, [p for p in PARAS if p["ch"] == c["title_zh"]]) or [0]) for c in own]
+    top_ = max(sc)
+    if top_ < 4 or sc[nth] >= max(4, top_ * 0.6):
+        return own[nth]
+    c = own[sc.index(top_)]
+    LISTEN_HEAD_MOVED.append((text, own[nth]["title_zh"], c["title_zh"]))
+    return c
+
+
 def listen_at(kind, text, nth=None):
     """“听这一段”跳到哪一秒。有自己章节的栏目（热点、要闻、快讯、一词、预告）在本章里按文字找；
     没有自己章节的（国内外对照的条目：在对谈里可能夹在热点或快讯里讲）在整集的逐轮（逐段）文字里找最像的那一轮。
     11-05 改：网页放在某一栏、播客却在别的章里讲的（11-04 墨芯：网页在要闻，播客在热点三），本章里几乎找不到它
     （本章最高分不到 4，或不到整集最高分的六成，与 listen_check 的判据相同），就跳到整集里主讲它的那一段，
-    不再退回本章开头。"""
+    不再退回本章开头。热点跳章开头，跳哪一章见 head_chapter（11-15 改）。"""
     if not HAS_POD:
         return None
     keys = KIND_CH.get(kind, ())
     own = [c for c in chapters if has_key(c["title_zh"], keys)]
     if kind == "headline" and nth is not None and nth < len(own):
-        return own[nth]["start"]
+        return head_chapter(text, own, nth)["start"]
     if kind == "deep" and own:          # 周末的深度／深谈：从第一层那一章开头听（按文字找常落在开场的预告上，11-01 彩排遇到）
         return own[0]["start"]
     if own:
@@ -942,6 +964,10 @@ def listen_check(sid, text, t):
     best, here = PARAS[sc.index(top_)], chapter_at(t)
     in_ch = max([x for x, p in zip(sc, PARAS) if p["ch"] == here] or [0])
     if here != best["ch"] and in_ch < top_ * 0.6:   # 跳到的章节里根本没怎么讲它，才提醒（今日一词这类在本章和别处都讲的，不算）
+        if has_key(best["ch"], PREVIEW_CH):         # 最像的是开场预告、结尾回顾：指给主讲它的那一章（11-12 只说“开场”，没看出是对调）
+            main_, _ = main_talk(text)
+            if main_ is not None and main_["ch"] != here:
+                best = main_
         print("注意：“听这一段” %s 跳到 %s（%s），但整集里最像它的话在“%s” %s；请核对"
               % (sid, fmt_mmss(t), chapter_at(t), best["ch"], fmt_mmss(best["t"])))
 
@@ -1296,8 +1322,11 @@ for sec in WEB.get("sections") or []:
         if (sid if kind == "term" else ev) in IMG:
             st["image"] = IMG[sid if kind == "term" else ev]
         _lt = (it.get("title_zh") or "") + (it.get("summary_zh") or "")
-        _nm = len(LISTEN_MID)
+        _nm, _nh = len(LISTEN_MID), len(LISTEN_HEAD_MOVED)
         st["listen"] = listen_at(kind, _lt, n_head if kind == "headline" else None)
+        for _m in LISTEN_HEAD_MOVED[_nh:]:   # 11-15 加：网页和播客热点顺序不同（head_chapter）
+            print("“听这一段” %s 是网页第 %d 条热点，播客里讲它的是“%s”（按顺序会跳“%s”）：跳“%s”开头 %.1f 秒"
+                  % (sid, n_head + 1, _m[2], _m[1], _m[2], st["listen"]))
         for _m in LISTEN_MID[_nm:]:          # 11-15 加：这一条从一段半中间才开始讲（mid_start）
             print("%s“听这一段” %s 从那一段的第 %d 句才开始讲（“%s……”）：跳 %.1f 秒（按段首是 %.1f 秒），句首按%s定%s"
                   % ("注意：" if _m[3].startswith("估算") else "", sid, _m[4], _m[5].strip()[:12], _m[2], _m[1],
