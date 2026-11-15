@@ -275,6 +275,10 @@
     '  if (a < 0.003) discard;',
     '  gl_FragColor = vec4(col, a);', '#include <fog_fragment>', '}'
   ].join('\n');
+  // 11-15：摘录卡压图用的图板比 16:9 宽（让出左上角章名和下面的字幕），只取图片中间一条、不拉扁（uCrop：横竖各取几成）。
+  // 只给 fbpBuild 用；别的配图仍用上面的 PHOTO_F，一个字不改，画面逐像素相同。
+  var PHOTO_F_CROP = PHOTO_F.replace('uniform vec2 uSize;', 'uniform vec2 uSize; uniform vec2 uCrop;')
+    .replace('vec2 uv = c + (vUv - c) / uZoom;', 'vec2 uv = c + (vUv - c) * uCrop / uZoom;');
   // 粒子（空气里的尘、下坠时溅起的碎屑、五千个点）
   var DUST_V = [
     'attribute vec3 aR; uniform float uTime; uniform float uSize; uniform float uPR;',
@@ -1613,11 +1617,17 @@
   }
   /* ---- 摘录卡压在章图上（2026-11-15 加，尝试版；fd_开关.json"摘录卡压在章图上"）：原文截图没截成、退回原句摘录的卡片
    *   （source_excerpt、带 shot 的 quote_card / post_card）后面立一张这一章的配图（video3_storyboard.excerpt_photo 挑的，数据里是 photo_img），
-   *   比这一镜的取景大两成、铺满画面；镜头和卡片的取景不变（卡片和字在画面里一样大）。配图跟着卡片溶解出现、收场时溶解消失（ovpTl）。
+   *   镜头和卡片的取景不变（卡片和字在画面里一样大）。配图跟着卡片溶解出现、收场时溶解消失（ovpTl）。
+   *   第一版（同日）比取景大两成、铺满画面：左上角章名压在深色图上看不清，镜头移走时露出图边。用户看了并排图说要背景图，
+   *   改成第二版：图板比取景小一圈（FBP_K），四周留白、圆角露出来，和 11-06"研发成本"那类压图镜头一个样子；
+   *   再往下挪取景高度的 FBP_DY，上沿让开章名。
    *   数据里没有 photo_img 的不走这一段，画面和原来逐像素相同。 */
+  var FBP_KX = 0.94, FBP_KY = 0.8, FBP_DY = 0;
   function fbpBuild(self, b, c, fw, fh) {
-    var w = Math.max(fw, fh * 16 / 9) * 1.2, h = w * 9 / 16, m = self.photo(b.photo_img, w, h, OVP_BLUR);
-    m.position.set(c[0], c[1], OVP_Z); b._.g.add(m); self.photos.push(m);
+    // 横屏 16:9、视角 34° 时这一镜装下 vw×vw·9/16（W.shotPos），镜头离卡片 d；图板在卡片后面 |OVP_Z|，要放大 (d+|OVP_Z|)/d 才显得一样大
+    var vw = Math.max(fw, fh * 16 / 9), d = vw / 2 / (Math.tan(17 * DEG) * 16 / 9), k = (d - OVP_Z) / d;
+    var w = vw * FBP_KX * k, h = vw * 9 / 16 * FBP_KY * k, m = self.photo(b.photo_img, w, h, OVP_BLUR, [1, FBP_KY / FBP_KX]);
+    m.position.set(c[0], c[1] - vw * 9 / 16 * FBP_DY * k, OVP_Z); b._.g.add(m); self.photos.push(m);
     b._.o.ovp = m; b._.o.fbp = true;
   }
   function ovpTl(b, a, t0, off) {
@@ -2851,12 +2861,14 @@
   };
 
   // 2.5D 视差配图（贴在世界里的一扇“窗”）
-  W.photo = function (key, w, h, blur) {
+  W.photo = function (key, w, h, blur, crop) {     // crop：[横, 竖] 各取图片的几成（11-15，只有摘录卡压图用；不传就和原来一样）
     var info = (this.P.v.images || {})[key], pal = this.pal, self = this;
+    var un = { uImg: { value: null }, uDep: { value: null }, uHasDep: { value: 0 }, uReveal: { value: 0 }, uFade: { value: 1 }, uShift: { value: new THREE.Vector2() },
+        uZoom: { value: 1.06 }, uFocus: { value: 0.35 }, uEdge: { value: pal.acc.clone() }, uReady: { value: 0 }, uSize: { value: new THREE.Vector2(w, h) }, uBias: { value: blur || 0 } };
+    if (crop) un.uCrop = { value: new THREE.Vector2(crop[0], crop[1]) };
     var mat = new THREE.ShaderMaterial({
-      uniforms: this.fogU({ uImg: { value: null }, uDep: { value: null }, uHasDep: { value: 0 }, uReveal: { value: 0 }, uFade: { value: 1 }, uShift: { value: new THREE.Vector2() },
-        uZoom: { value: 1.06 }, uFocus: { value: 0.35 }, uEdge: { value: pal.acc.clone() }, uReady: { value: 0 }, uSize: { value: new THREE.Vector2(w, h) }, uBias: { value: blur || 0 } }),
-      vertexShader: PHOTO_V, fragmentShader: PHOTO_F, transparent: true, depthWrite: false, fog: true
+      uniforms: this.fogU(un),
+      vertexShader: PHOTO_V, fragmentShader: crop ? PHOTO_F_CROP : PHOTO_F, transparent: true, depthWrite: false, fog: true
     });
     var m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat); m.renderOrder = 0; m.userData = { w: w, h: h, key: key };
     if (info) {

@@ -1223,7 +1223,7 @@ class Video(Step):
                 "=视频导演=" + ("" if director_switch()[0] else "关"),
                 "=导演旁白=" + ("" if narration_switch()[0] else "关"),       # 11-09：视频旁白归导演开关，同样做法
                 "=中文整词换行=" + ("" if zh_wrap_switch()[0] else "关"),     # 11-09 晚：视频中文整词换行开关，同样做法
-                "=摘录卡压图=" + ("开" if excerpt_photo_switch()[0] else "")]    # 11-15：默认关，关着是空字符串（往期不重做）
+                "=摘录卡压图=" + ("" if excerpt_photo_switch()[0] else "关")]    # 11-15 加、同日用户定开：和整词换行同样做法，开着是空字符串（往期不重做）
 
     def shots_plan(self, c):
         on, why = motion_switch()

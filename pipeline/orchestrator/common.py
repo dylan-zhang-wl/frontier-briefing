@@ -245,7 +245,7 @@ EXCERPT_PHOTO_KEY = "摘录卡压在章图上"
 
 
 def excerpt_photo_switch():
-    """摘录卡压在章图上（2026-11-15 加，尝试版，默认关）：返回 (开着没有, 从哪来的一句话)。
+    """摘录卡压在章图上（2026-11-15 加；fd_开关.json 写"开"，用户看了并排图定的；读不到文件或没写按"关"）：返回 (开着没有, 从哪来的一句话)。
     site/tools/video3_storyboard.py 的 excerpt_photo_switch 是同一套规则，两边要一起改。"""
     env = str(os.environ.get("FD_EXCERPT_PHOTO") or "").strip().lower()
     if env in _OFF:

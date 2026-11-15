@@ -615,10 +615,10 @@ class MediaShots(unittest.TestCase):
             with mock.patch.dict(os.environ, {"FD_EXCERPT_PHOTO": env}):
                 self.assertEqual(SB.excerpt_photo_switch()[0], common.excerpt_photo_switch()[0], env)
         with mock.patch.dict(os.environ, {"FD_EXCERPT_PHOTO": ""}):
-            self.assertFalse(common.excerpt_photo_switch()[0])          # fd_开关.json 里默认"关"（尝试版）
+            self.assertTrue(common.excerpt_photo_switch()[0])           # fd_开关.json 里写"开"（11-15 用户看了并排图定的）
         old = {"=中文整词换行=": ""}
-        self.assertEqual(runner.diff_inputs(old, {"=中文整词换行=": "", "=摘录卡压图=": ""}), [])   # 关着不让往期重做
-        self.assertEqual(runner.diff_inputs(old, {"=中文整词换行=": "", "=摘录卡压图=": "开"}), ["=摘录卡压图="])
+        self.assertEqual(runner.diff_inputs(old, {"=中文整词换行=": "", "=摘录卡压图=": ""}), [])   # 开着（默认）不让往期重做
+        self.assertEqual(runner.diff_inputs(old, {"=中文整词换行=": "", "=摘录卡压图=": "关"}), ["=摘录卡压图="])
 
 
 if __name__ == "__main__":

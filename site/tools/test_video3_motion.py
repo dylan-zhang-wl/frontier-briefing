@@ -468,7 +468,7 @@ class Combined(unittest.TestCase):
         self.assertNotIn("img", nb["shot"])                       # 播放器排成摘录
         self.assertEqual(nb["shot"]["full"], QUOTE)
 
-    # 11-15 加：截图退回摘录时摘录卡压在章图上（开关"摘录卡压在章图上"，默认关）
+    # 11-15 加：截图退回摘录时摘录卡压在章图上（开关"摘录卡压在章图上"，同日用户定开；读不到开关文件按"关"）
     def _fallback_compile(self, blocks):
         sb = storyboard(blocks)
         warn = run_checks(sb, self.issue)
