@@ -1279,7 +1279,7 @@ class Video(Step):
         返回 (处数, 用截图, [退回摘录的位置]）；一处都没有返回 None。"""
         n, ok, back = 0, 0, []
         for ch in media.get("chapters") or []:
-            for b in ch.get("blocks") or []:
+            for b in (ch.get("blocks") or []) if isinstance(ch, dict) else []:
                 if not isinstance(b, dict):
                     continue
                 t, where = b.get("type"), "「%s」%s/%s" % (ch.get("id"), b.get("type"), b.get("id"))
