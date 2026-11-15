@@ -78,6 +78,7 @@
 | 配图 | Codex | 用户的 ChatGPT 订阅（云端单独一份登录） | 网页原图、原文截图、程序封面 |
 | 配音 | Gemini 3.8 Flash TTS，走 Vertex；Shirley 用声音"庚A"，Dylan 用"男声03" | Google 主账号订阅的每月赠金（Google Cloud 项目 frontier-daily） | MiMo 复刻的备用声音 → 只出不带播客的"数据版" |
 | 转写对稿、视频对齐 | faster-whisper large-v3-turbo（云端）；mlx-whisper（mini） | 免费，在机器上跑 | — |
+| 对稿复核（11-15 加） | SenseVoiceSmall、Paraformer-zh（阿里开源听写模型，funasr；环境 `~/.venvs/fd-asr2`，模型 `~/.cache/fd-asr2`） | 免费，在机器上跑 | 没装好就不复核，对稿照旧 |
 | 归并 | LaBSE | 免费 | — |
 | 云端电脑 | GitHub Actions | GitHub Free，每月约 2,000 分钟 | — |
 | 网站 | Cloudflare Worker（只管 `/frontier` 的小程序） | Cloudflare 免费档 | 不发布，网站继续显示上一期 |
@@ -152,13 +153,16 @@
 - `视频导演`：关掉就只走老路，视频和加这个开关以前逐像素一样。
 - `视频旁白归导演`（11-09 加，默认开）：视频导演开着时，视频旁白也由导演写；过了第 7 步那套检查才重配视频旁白，不过就整段用第 6 步写、第 11 步配好的旁白。关掉就是导演只管画面、旁白不动。视频导演关着时它不起作用。
 - `视频中文整词换行`（11-09 晚加，默认开）：视频卡片、标题、字幕按整词换行，和网页同一套（`zh_breaks.py`）；只在显示那一层加看不见的换行点，触发词、字幕逐字高亮的时间不动。关掉就和加开关以前逐像素一样。
-- 只管一次的话，在命令前加环境变量，比文件优先：`FD_MOTION=off ./fd run …`、`FD_DIRECTOR=off ./fd run …`、`FD_DIRECTOR_NARRATION=off ./fd run …`、`FD_VIDEO_ZH_WRAP=off ./fd run …`。
+- `对稿数字整数比对`（11-15 加）：配音对稿时原稿里的数按整个数和转写比（"一千零九页"念成"109 页"逐字比只差一个 0，原来拦不住），对不上就重录那一块，最多 2 次；还错写进 qc.json"数字不符（请你耳听）"。
+- `对稿第二个听写模型`（11-15 加）：Whisper 和原稿不带声调的拼音对不上的地方（英文名除外），截几秒交给 SenseVoiceSmall、Paraformer-zh 再听，至少一个也听错才算念错、重录（最多 2 次）；两个都听成原稿就是 Whisper 听错，不重录。没装这两个模型时不复核。这两个开关没写按"关"，关掉就和加以前一样。规则见 `pipeline/tts_qc.py` 文件头。
+- 只管一次的话，在命令前加环境变量，比文件优先：`FD_MOTION=off ./fd run …`、`FD_DIRECTOR=off ./fd run …`、`FD_DIRECTOR_NARRATION=off ./fd run …`、`FD_VIDEO_ZH_WRAP=off ./fd run …`、`FD_QC_NUMBERS=off ./fd run …`、`FD_QC_ASR2=off ./fd run …`。
 
 **测试**（不花钱）：
 ```bash
 export PYTHONDONTWRITEBYTECODE=1                                # 仓库在 iCloud 里：跑测试不生成 __pycache__
 PY=~/.venvs/frontier-daily/bin/python
 $PY -m unittest pipeline/test_fd_motion.py                     # pipeline/ 下还有 test_lexicon_check、test_spoken_numbers 等
+$PY -m unittest pipeline/test_tts_qc_numbers.py pipeline/test_tts_qc_asr2.py   # 对稿数字整数比对、第二个听写模型复核（假的听写进程，不载模型）
 $PY site/tools/test_video3_director.py                          # site/tools/ 下 test_*.py 同理
 python3 -m unittest discover -s cloud/release/tests -v          # 放行、邮件
 python3 -m unittest discover -s cloud/deploy/tests -v           # 上线包、往期存档
