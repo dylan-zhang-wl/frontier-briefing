@@ -137,6 +137,25 @@ def terms(cards):
     return out
 
 
+# 播放器自己在原文外面加了东西的（11-15 加）：原话卡（post_card）的中文原话，播放器排成“……”（加中文引号，video3.js TPL.post_card），
+# 元素里的字和表里的原文对不上，这一句就没按整词换行——11-15 股东信那张卡"从容程序"被拆成"从容程｜序"。组装时把加好引号的
+# 那一版也放进表里（README_video3.md"新模板、新版式"一条说的办法）。环境变量 FD_VIDEO_ZH_WRAP_QUOTE=off 不加，和改之前一样。
+QUOTE_ENV = "FD_VIDEO_ZH_WRAP_QUOTE"
+
+
+def quoted(data):
+    """原话卡画面上那一句（加了引号的）：[(画面上的字, 原文)]。英文那边不是中文，不用管。"""
+    out = []
+    for c in data.get("chapters") or []:
+        for b in (c.get("blocks") or []) if isinstance(c, dict) else []:
+            if isinstance(b, dict) and b.get("type") == "post_card":
+                t = b.get("text")
+                q = t.get("zh") if isinstance(t, dict) else t
+                if isinstance(q, str) and CJK.search(q):
+                    out.append(("\u201c" + q + "\u201d", q))
+    return out
+
+
 def table(data, extra_words=()):
     """返回 (对照表 {原文: 显示文字}, 一句话)。断行工具没装或出错时对照表是 None。"""
     try:
@@ -155,6 +174,11 @@ def table(data, extra_words=()):
             d = display(s, zh_breaks.phrase_breaks)
             if d:
                 out[s] = d
+        if str(os.environ.get(QUOTE_ENV) or "").strip().lower() not in _OFF:
+            for shown, raw in quoted(data):
+                d = out.get(raw) if raw in out else display(raw, zh_breaks.phrase_breaks)
+                if d and shown not in out:
+                    out[shown] = shown[0] + d + shown[-1]
     except Exception as e:  # noqa: BLE001
         return None, "断行出错（%s: %s），这一期视频不加整词换行" % (type(e).__name__, e)
     n, m = sum(d.count(ZW) for d in out.values()), sum(1 for d in out.values() if ZW in d)
