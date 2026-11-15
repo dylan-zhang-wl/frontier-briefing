@@ -217,6 +217,9 @@ jobs:
       FD_WHISPER_BIN: /home/runner/.venvs/fd-whisper/bin/mlx_whisper
       # 替身用的本地模型目录（下面"装转写替身"那步下载、存缓存）
       FD_FW_LOCAL: /home/runner/.cache/fd-whisper
+      # 对稿的第二个听写模型（2026-11-15 加，pipeline/tts_qc.py、asr2_worker.py 读这两个变量；下面"装第二个听写模型"那步装、存缓存）
+      FD_ASR2_PYTHON: /home/runner/.venvs/fd-asr2/bin/python
+      FD_ASR2_MODELS: /home/runner/.cache/fd-asr2
       # Chrome：没有显卡，用 SwiftShader 软件渲染 WebGL（Chromium 文档 docs/gpu/swiftshader.md：新版要 --enable-unsafe-swiftshader 才肯用）
       FD_CHROME_ARGS: "--use-gl=angle --use-angle=swiftshader-webgl --enable-unsafe-swiftshader --ignore-gpu-blocklist"
       # 私有那一半：每期内容（测试版/）、音乐、整期文件包（发行版 run-<运行编号>）、配图、放行发布都在这里。不是秘密
@@ -411,6 +414,49 @@ jobs:
           path: ~/.cache/fd-whisper
           key: fd-whisper-turbo-v2
 
+      # 对稿的第二个听写模型（2026-11-15 加）：阿里开源的 SenseVoiceSmall、Paraformer-zh（共约 1.8 GB），第 11 步配音对稿时
+      # 只听可疑的那几秒（fd_开关.json"对稿第二个听写模型"）。单独一个环境，免得 funasr 的依赖顶掉项目环境的版本。
+      # 这三步出错都不挡出刊：没装好时对稿照旧，数字不符照常重录（pipeline/tts_qc.py 文件头"第二个听写模型复核"）。
+      # 模型下成普通文件（local_dir）存缓存，理由同上面的转写替身。缓存键要换（换模型、换版本）就把 v1 改成 v2。
+      - name: 取缓存的第二个听写模型（SenseVoiceSmall、Paraformer-zh）
+        id: asr2_model
+        if: steps.day.outputs.produce == 'true'
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/fd-asr2
+          key: fd-asr2-v1
+
+      - name: 装第二个听写模型（~/.venvs/fd-asr2：funasr）
+        id: asr2_install
+        if: steps.day.outputs.produce == 'true'
+        continue-on-error: true
+        run: |
+          t0=$(date +%s)
+          uv venv ~/.venvs/fd-asr2 --python "$(which python)"
+          PY="$FD_ASR2_PYTHON"
+          # torch 照项目环境：CPU 版、不带依赖，依赖在 cloud/asr2_requirements.txt 里钉死
+          uv pip install --python "$PY" --index-url https://download.pytorch.org/whl/cpu --no-deps torch==2.15.0 torchaudio==2.11.1
+          uv pip install --python "$PY" -r cloud/asr2_requirements.txt
+          # 钉住版本（Hugging Face 上那一版的提交号）；只下程序要的几个文件（不下示例音频、图片）
+          for spec in "FunAudioLLM/SenseVoiceSmall SenseVoiceSmall 3847d57b6bdf2dd8875cb1508d2af43d80a16bf7" \
+                      "funasr/paraformer-zh paraformer-zh d7811ee3ac581fbcfdeb37c98c6ba674028433dc"; do
+            set -- $spec
+            if [ ! -f "$FD_ASR2_MODELS/$2/model.pt" ]; then
+              HF_HUB_DISABLE_XET=1 "$PY" -c "import sys; from huggingface_hub import snapshot_download; snapshot_download(sys.argv[1], revision=sys.argv[3], local_dir=sys.argv[2], allow_patterns=['am.mvn', 'config.yaml', 'configuration.json', 'model.pt', 'tokens.json', 'seg_dict', '*.bpe.model'])" "$1" "$FD_ASR2_MODELS/$2" "$3"
+            fi
+          done
+          du -sh "$FD_ASR2_MODELS"/SenseVoiceSmall "$FD_ASR2_MODELS"/paraformer-zh
+          echo "装第二个听写模型用了 $(( $(date +%s) - t0 )) 秒"
+
+      - name: 存第二个听写模型缓存
+        if: steps.day.outputs.produce == 'true' && steps.asr2_model.outputs.cache-hit != 'true' && steps.asr2_install.outcome == 'success'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/fd-asr2
+          key: fd-asr2-v1
+
       - name: 装 Node 22
         uses: actions/setup-node@v4
         with:
@@ -457,6 +503,16 @@ jobs:
           t1=$(date +%s)
           python -c "import json,sys; d=json.load(open(sys.argv[1])); w=[x for s in d['segments'] for x in s.get('words',[])]; print('转写：', len(d['text']), '字，', len(w), '个词；开头', d['text'][:40])" "$RUNNER_TEMP/selftest/clip.json"
           echo "转写 48 秒的样音用了 $((t1-t0)) 秒（含载入模型）"
+          # 第二个听写模型：载入两个模型、听样音头 12 秒（只印字数和用时，不印听到的字）
+          if [ -x "$FD_ASR2_PYTHON" ]; then
+            t2=$(date +%s)
+            printf '{"id": 1, "wav": "%s", "start": 0, "end": 12}\n' "$clip" \
+              | timeout 900 "$FD_ASR2_PYTHON" -u pipeline/asr2_worker.py --models "$FD_ASR2_MODELS" 2>"$RUNNER_TEMP/selftest/asr2.log" \
+              | python -c "import json,sys; [print('第二个听写模型：', ('载入 %s 秒' % d['载入秒']) if 'ready' in d and d['ready'] else ('听一段 %s 秒：SenseVoice %d 字、Paraformer %d 字' % (d.get('秒'), len(d.get('SenseVoice') or ''), len(d.get('Paraformer') or ''))) if 'id' in d else ('载入失败：' + str(d.get('错误'))[:200])) for d in map(json.loads, sys.stdin)]"
+            echo "第二个听写模型自检用了 $(( $(date +%s) - t2 )) 秒（含载入）"
+          else
+            echo "第二个听写模型没装好（$FD_ASR2_PYTHON 不在）：对稿照旧，数字不符照常重录"
+          fi
           node cloud/selftest_chrome.mjs
 
       # 2026-11 起文件包在私有仓库的发行版 run-<运行编号> 里（以前是那次运行的产物）：media-日期、issue-日期、state-日期，各一个 .tar.gz
