@@ -468,6 +468,59 @@ class Combined(unittest.TestCase):
         self.assertNotIn("img", nb["shot"])                       # 播放器排成摘录
         self.assertEqual(nb["shot"]["full"], QUOTE)
 
+    # 11-15 加：截图退回摘录时摘录卡压在章图上（开关"摘录卡压在章图上"，默认关）
+    def _fallback_compile(self, blocks):
+        sb = storyboard(blocks)
+        warn = run_checks(sb, self.issue)
+        T = {"vote.pc.show": 3.0, "vote.qc.show": 5.0, "vote.ex.show": 3.0}
+        photos = {}
+        nbs = SB.compile_chapters(sb, T, [{"voice_start": 0, "voice_end": 1, "end": 2}] * 3, photos)[1]["blocks"]
+        return sb, warn, nbs, photos
+
+    def test_excerpt_photo_off_by_default(self):
+        with mock.patch.dict(os.environ, {"FD_EXCERPT_PHOTO": ""}), mock.patch.object(SB, "MOTION_SWITCH_FILE", self.issue / "没有.json"):
+            self.assertFalse(SB.excerpt_photo_switch()[0])
+            sb, _w, nbs, photos = self._fallback_compile([post_block()])
+        self.assertNotIn("_fb_photo", sb["chapters"][1]["blocks"][0])
+        self.assertNotIn("photo_img", nbs[0])
+        self.assertEqual(photos, {})
+
+    def test_excerpt_photo_uses_replaced_image(self):        # 卡片原来写的配图（被截图替代的）垫在后面
+        with mock.patch.dict(os.environ, {"FD_EXCERPT_PHOTO": "on"}):
+            sb, warn, nbs, photos = self._fallback_compile([post_block()])
+        b = sb["chapters"][1]["blocks"][0]
+        self.assertEqual(b["_fb_photo"], "v_vote")
+        self.assertTrue(any("压在配图 v_vote 上" in w for w in warn), warn)
+        self.assertEqual(nbs[0]["photo_img"], "pc.photo")
+        self.assertNotIn("_fb_photo", nbs[0])
+        self.assertNotIn("img", nbs[0]["shot"])                  # 卡片里照旧是摘录
+        self.assertIn("pc.photo", photos)
+        self.assertIn("v_vote", SB.photo_moments(sb["chapters"][1])[0])
+        kinds = [(a, k) for a, _z, k in SB._moments(b, {"show": 3.0, "shot_mark": 4.0})]
+        self.assertIn((3.0, "img"), kinds)                         # 从卡片出现就算有图（章首不再空）
+
+    def test_excerpt_photo_uses_chapter_image(self):          # 卡片本来没配图：用这一章别的块的配图
+        q = {"type": "quote_card", "id": "qc", "text": LAB("不签保密协议", "No NDAs"), "cues": {"show": "周四"},
+             "image": "v_vote"}
+        with mock.patch.dict(os.environ, {"FD_EXCERPT_PHOTO": "on"}):
+            sb, _w, nbs, _p = self._fallback_compile([post_block(image=None), q])
+        self.assertEqual(sb["chapters"][1]["blocks"][0]["_fb_photo"], "v_vote")
+        self.assertEqual(nbs[0]["photo_img"], "pc.photo")
+        self.assertNotIn("photo_img", nbs[1])
+
+    def test_excerpt_photo_source_shot(self):                 # source_shot 截不成退回 source_excerpt，也垫
+        b = shot_block(id="ex")
+        with mock.patch.dict(os.environ, {"FD_EXCERPT_PHOTO": "on"}):
+            sb, _w, nbs, _p = self._fallback_compile([b, post_block(shot=None)])
+        self.assertEqual(nbs[0]["type"], "source_excerpt")
+        self.assertEqual(nbs[0]["photo_img"], "ex.photo")
+
+    def test_excerpt_photo_not_when_shot_ok(self):
+        write_shot(self.issue, "pc", VQ, font_px=20, clip={"w": 600}, w=1200, h=360)
+        with mock.patch.dict(os.environ, {"FD_EXCERPT_PHOTO": "on"}):
+            sb, _w, nbs, _p = self._fallback_compile([post_block()])
+        self.assertNotIn("photo_img", nbs[0])
+
     def test_card_shot_too_small_falls_back(self):
         write_shot(self.issue, "pc", VQ, font_px=12, clip={"w": 1100})
         sb = storyboard([post_block()])

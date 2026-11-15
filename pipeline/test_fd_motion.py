@@ -594,5 +594,32 @@ local officials, and several towns have asked for more disclosure.</p><p>Short c
             self.assertFalse(list((issue / "06_配图/原文截图").glob("*.png")))
 
 
+class MediaShots(unittest.TestCase):
+    """11-15 加：第 14 步报告里的原文截图处数按成片 video3_media.json 数（导演那一段另截的也算）；摘录卡压图开关和 fd 说法一致。"""
+
+    def test_count_from_final_media(self):
+        media = {"chapters": [
+            {"id": "week", "blocks": [{"type": "timeline", "id": "days", "ticks": [{"shot": {"src": {}}}, {"img": "x"}]}]},
+            {"id": "bench", "blocks": [{"type": "quote_card", "id": "nofirm", "shot": {"img": "shot.bench_nofirm"}}]},
+            {"id": "voices", "blocks": [{"type": "quote_card", "id": "petition", "shot": {"src": {}}},
+                                        {"type": "post_card", "id": "letter", "img": "letter"}]},
+            {"id": "x", "blocks": [{"type": "source_shot", "id": "a"}, {"type": "source_excerpt", "id": "b"}]}]}
+        n, ok, back = steps.Video.media_shots(media)
+        self.assertEqual((n, ok), (5, 2))
+        self.assertEqual(back, ["「week」timeline/days 第 1 个日子的 shot", "「voices」quote_card/petition 的 shot",
+                                "「x」source_excerpt/b"])
+        self.assertIsNone(steps.Video.media_shots({"chapters": [{"id": "a", "blocks": [{"type": "quote_card"}]}]}))
+
+    def test_excerpt_photo_switch_same_rule(self):
+        for env in ("", "on", "off"):
+            with mock.patch.dict(os.environ, {"FD_EXCERPT_PHOTO": env}):
+                self.assertEqual(SB.excerpt_photo_switch()[0], common.excerpt_photo_switch()[0], env)
+        with mock.patch.dict(os.environ, {"FD_EXCERPT_PHOTO": ""}):
+            self.assertFalse(common.excerpt_photo_switch()[0])          # fd_开关.json 里默认"关"（尝试版）
+        old = {"=中文整词换行=": ""}
+        self.assertEqual(runner.diff_inputs(old, {"=中文整词换行=": "", "=摘录卡压图=": ""}), [])   # 关着不让往期重做
+        self.assertEqual(runner.diff_inputs(old, {"=中文整词换行=": "", "=摘录卡压图=": "开"}), ["=摘录卡压图="])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

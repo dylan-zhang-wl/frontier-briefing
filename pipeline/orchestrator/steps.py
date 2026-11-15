@@ -18,7 +18,7 @@ from .common import (DONE, FAILED, SKIPPED, WAITING, PIPE, TOOLS, PROMPTS, PROFI
                      WEB_DRAFT, STORYBOARD, NARRATION, VIDEO_VOICE, CARDS, LINEUP, NO_PODCAST,
                      read_json, write_json, rel, fp_file, fp_dir, key_lines, tail, running_scripts, today_utc, hours_ago,
                      gemini_price_out, episode_title, iso, motion_switch, director_switch, narration_switch,
-                     zh_wrap_switch)
+                     zh_wrap_switch, excerpt_photo_switch)
 from .ledger import usage_new_spend, chunk_spend_since, mimo_tokens_since
 
 IMG_EXT = (".png", ".jpg", ".jpeg", ".webp")
@@ -1222,7 +1222,8 @@ class Video(Step):
         return [STORYBOARD, "%s/voice.json" % VIDEO_VOICE, CARDS, "@step:web", "=新动效=" + ("" if motion_switch()[0] else "关"),
                 "=视频导演=" + ("" if director_switch()[0] else "关"),
                 "=导演旁白=" + ("" if narration_switch()[0] else "关"),       # 11-09：视频旁白归导演开关，同样做法
-                "=中文整词换行=" + ("" if zh_wrap_switch()[0] else "关")]     # 11-09 晚：视频中文整词换行开关，同样做法
+                "=中文整词换行=" + ("" if zh_wrap_switch()[0] else "关"),     # 11-09 晚：视频中文整词换行开关，同样做法
+                "=摘录卡压图=" + ("开" if excerpt_photo_switch()[0] else "")]    # 11-15：默认关，关着是空字符串（往期不重做）
 
     def shots_plan(self, c):
         on, why = motion_switch()
@@ -1270,6 +1271,37 @@ class Video(Step):
             return msg, warns, {"原文截图": {k: res.get(k) for k in ("处数", "成功", "退回摘录", "用时秒")}}
         except Exception as e:      # noqa: BLE001  截图只是锦上添花：fd 自己出错也照常组装
             return "原文截图这一步出错，退回原句摘录", ["原文截图这一步 fd 出错（%s: %s），照常组装" % (type(e).__name__, e)], {}
+
+    @staticmethod
+    def media_shots(media):
+        """成片里的原文截图（11-15 加）：按最后用上的那一版 11_视频v3/video3_media.json 数，导演那一段又截的也算
+        （11-15 报告写"1 处：用截图 0、退回摘录 1"，只数了导演之前那一次，成片实际 3 处：用截图 1、退回摘录 2）。
+        返回 (处数, 用截图, [退回摘录的位置]）；一处都没有返回 None。"""
+        n, ok, back = 0, 0, []
+        for ch in media.get("chapters") or []:
+            for b in ch.get("blocks") or []:
+                if not isinstance(b, dict):
+                    continue
+                t, where = b.get("type"), "「%s」%s/%s" % (ch.get("id"), b.get("type"), b.get("id"))
+                if t == "source_shot":
+                    n, ok = n + 1, ok + 1
+                elif t == "source_excerpt":
+                    n += 1
+                    back.append(where)
+                elif isinstance(b.get("shot"), dict):
+                    n += 1
+                    if b["shot"].get("img"):
+                        ok += 1
+                    else:
+                        back.append(where + " 的 shot")
+                for k, tk in enumerate(b.get("ticks") or []):
+                    if isinstance(tk, dict) and isinstance(tk.get("shot"), dict):
+                        n += 1
+                        if tk["shot"].get("img"):
+                            ok += 1
+                        else:
+                            back.append("%s 第 %d 个日子的 shot" % (where, k + 1))
+        return (n, ok, back) if n else None
 
     def engine(self, c):
         return ((c.state.step("voice") or {}).get("附加") or {}).get("视频引擎") or "gemini"
@@ -1414,7 +1446,8 @@ class Video(Step):
             return ("导演版（两轮导演 %s 秒、新画 %d 张%s，整个导演环节 %.0f 分钟）" % (
                         "＋".join(str((d.get(k) or {}).get("秒", "?")) for k in ("第一轮", "第二轮")), len(got),
                         "；旁白导演写" if res.get("旁白") == "导演写" else ("；旁白退回现行旁白" if str(res.get("旁白", "")).startswith("退回") else ""), mins),
-                    (["导演改错用了一次：%s" % "、".join(res.get("改错"))] if res.get("改错") else []) + nar.get("提醒", []),
+                    (["导演改错用了一次：%s" % "、".join(res.get("改错"))] if res.get("改错") else []) + nar.get("提醒", [])
+                    + [x for x in res.get("提醒") or [] if "空档" in x][:2],             # 11-15：第二轮以后还在的空档
                     {"视频导演": dict({"结果": "用导演版", "用时分钟": round(mins, 1), "新画的图": got,
                                      "改错": res.get("改错") or [], "导演文件夹": rel(c.p(DIRECTOR_DIR))}, **nar.get("附加", {}))})
         except Exception as e:      # noqa: BLE001  导演只是锦上添花：fd 自己出错也用老路那一版
@@ -1440,6 +1473,14 @@ class Video(Step):
         media = read_json(c.p("11_视频v3/video3_media.json"), {}) or {}
         dur = float(media.get("duration") or 0)
         warns += dwarns
+        ms = self.media_shots(media)
+        if ms and (sextra.get("视频导演") or {}).get("结果") == "用导演版":      # 11-15：导演版另截的原文截图也数进去
+            before = (sextra.get("原文截图") or {}) if isinstance(sextra.get("原文截图"), dict) else {}
+            if (before.get("处数"), before.get("成功")) != (ms[0], ms[1]):
+                smsg = "原文截图 %d 处（按成片数，含导演那一段截的）：用截图 %d、退回摘录 %d" % (ms[0], ms[1], len(ms[2]))
+                warns += ["原文截图没用上：%s（导演那一段截的，原因见导演渲染目录的 06_配图/原文截图/），退回原句摘录" % w
+                          for w in ms[2] if not any(w.split(" 的 shot")[0] in x for x in swarns)][:3]
+            sextra["原文截图"] = dict(before, 处数=ms[0], 成功=ms[1], 退回摘录=len(ms[2]), 按="成片 11_视频v3/video3_media.json")
         if dur > 180:
             return R(FAILED, "视频 %.0f 秒，超过 3 分钟" % dur, warns, sextra, go_on=True)
         if c.preview:

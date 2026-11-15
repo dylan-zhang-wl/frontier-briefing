@@ -230,5 +230,28 @@ class IssueDateAndReason(unittest.TestCase):
         self.assertEqual(DR.fail_reason(self.d), ["要改：稿子检查：第 8 行 [数字] 11月10日 —— 日期"])
 
 
+class Gaps(unittest.TestCase):
+    """11-15 加：第一轮组装量到的空档写进第二轮开场提示（必须改）；成片还在的记提醒。"""
+    MEDIA = {"chapters": [{"id": "voices", "label": {"zh": "要他回来？"}, "blank": [[100.5, 110.5, "opener"]]},
+                          {"id": "drop", "label": {"zh": "连跌六周"}, "blank": [[70.0, 75.2, "gap"]]},
+                          {"id": "open", "label": {"zh": "开场"}}]}
+
+    def test_blank_list_and_note(self):
+        rows = DR.blank_list(self.MEDIA)
+        self.assertEqual(rows, [("voices", "要他回来？", 100.5, 110.5, "opener"), ("drop", "连跌六周", 70.0, 75.2, "gap")])
+        note = DR.blank_note(self.MEDIA)
+        self.assertIn("必须改", note)
+        self.assertIn("「要他回来？」100.5–110.5 秒 章首没主角", note)
+        self.assertIn("「连跌六周」70.0–75.2 秒 有人声时画面空着超过 4 秒", note)
+
+    def test_no_blank_no_note(self):
+        self.assertEqual(DR.blank_note({"chapters": [{"id": "a"}]}), "")
+        self.assertEqual(DR.blank_list({}), [])
+
+    def test_prompt_says_must_fix(self):
+        txt = (Path(__file__).resolve().parents[2] / "pipeline" / "prompts" / "视频导演.md").read_text(encoding="utf-8")
+        self.assertIn("**必须改**", txt.split("## 第二轮")[1].split("## 交付")[0])
+
+
 if __name__ == "__main__":
     unittest.main()

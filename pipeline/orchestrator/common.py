@@ -241,6 +241,27 @@ def zh_wrap_switch():
     return True, "fd_开关.json 的“视频中文整词换行”写着“开”" if v in _ON else "fd_开关.json 的“视频中文整词换行”值认不出（%r），按“开”" % v
 
 
+EXCERPT_PHOTO_KEY = "摘录卡压在章图上"
+
+
+def excerpt_photo_switch():
+    """摘录卡压在章图上（2026-11-15 加，尝试版，默认关）：返回 (开着没有, 从哪来的一句话)。
+    site/tools/video3_storyboard.py 的 excerpt_photo_switch 是同一套规则，两边要一起改。"""
+    env = str(os.environ.get("FD_EXCERPT_PHOTO") or "").strip().lower()
+    if env in _OFF:
+        return False, "环境变量 FD_EXCERPT_PHOTO=%s" % env
+    if env in _ON:
+        return True, "环境变量 FD_EXCERPT_PHOTO=%s" % env
+    try:
+        v = str(json.loads(SWITCH_FILE.read_text(encoding="utf-8")).get(EXCERPT_PHOTO_KEY) or "").strip().lower()
+    except (OSError, ValueError, AttributeError):
+        return False, "没有 fd_开关.json（或读不出来），按“关”"
+    if v in _ON:
+        return True, "fd_开关.json 的“%s”写着“开”" % EXCERPT_PHOTO_KEY
+    return False, ("fd_开关.json 的“%s”写着“关”" % EXCERPT_PHOTO_KEY if v in _OFF
+                   else "fd_开关.json 没写“%s”（或值认不出），按“关”" % EXCERPT_PHOTO_KEY)
+
+
 def monthly_cap():
     prof = read_json(PROFILE, {}) or {}
     v = prof.get("每月 Gemini 配音上限美元（建议）")

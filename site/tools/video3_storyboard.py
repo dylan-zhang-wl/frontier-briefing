@@ -188,6 +188,59 @@ def motion_off():
     return not motion_switch()[0]
 
 
+# 摘录卡压在章图上（2026-11-15 加，尝试版）：原文截图没截成、退回原句摘录时，摘录卡后面立一张配图（这张卡原来写的 image，
+# 没有就用这一章第一张配图），和 tile_row、compare_panel 的 photo 同一个画法（ovp）。11-15"要他回来"章首约 8 秒只有一张白色
+# 摘录卡（100.5–108.6 秒）。先看环境变量 FD_EXCERPT_PHOTO，再看 fd_开关.json 的"摘录卡压在章图上"；都没有或读不出来按"关"
+# （画面拿不准，用户看了并排图再定）。关着时和加开关以前逐像素一样。
+# pipeline/orchestrator/common.py 的 excerpt_photo_switch 是同一套规则，两边要一起改。
+EXCERPT_PHOTO_KEY = "摘录卡压在章图上"
+EXCERPT_PHOTO_BLOCKS = ("source_excerpt", "quote_card", "post_card")
+
+
+def excerpt_photo_switch():
+    """返回 (开着没有, 从哪来的一句话)。默认关。"""
+    env = str(os.environ.get("FD_EXCERPT_PHOTO") or "").strip().lower()
+    if env in _OFF:
+        return False, "环境变量 FD_EXCERPT_PHOTO=%s" % env
+    if env in _ON:
+        return True, "环境变量 FD_EXCERPT_PHOTO=%s" % env
+    try:
+        v = str(json.loads(MOTION_SWITCH_FILE.read_text(encoding="utf-8")).get(EXCERPT_PHOTO_KEY) or "").strip().lower()
+    except (OSError, ValueError, AttributeError):
+        return False, "没有 fd_开关.json（或读不出来），按“关”"
+    if v in _ON:
+        return True, "fd_开关.json 的“%s”写着“开”" % EXCERPT_PHOTO_KEY
+    return False, ("fd_开关.json 的“%s”写着“关”" % EXCERPT_PHOTO_KEY if v in _OFF
+                   else "fd_开关.json 没写“%s”（或值认不出），按“关”" % EXCERPT_PHOTO_KEY)
+
+
+def chapter_images(c, skip=None):
+    """一章里写到的配图名（按出现先后、去重）：卡片和图卡的 image、压图的 photo、小卡／日子／国内外小卡上的 image。"""
+    out = []
+    for b in c.get("blocks") or []:
+        if not isinstance(b, dict) or b is skip:
+            continue
+        for x in [b.get("image"), b.get("photo"), b.get("_image_replaced")] + [
+                it.get("image") or it.get("_image_replaced") for f in ("items", "ticks") + SPLIT_SIDES
+                for it in b.get(f) or [] if isinstance(it, dict)]:
+            if isinstance(x, str) and x and x not in out:
+                out.append(x)
+    return out
+
+
+def excerpt_photo(issue, c, b, owner, warn, where):
+    """截图退回摘录（owner 记着 _shot_fail）、开关开着：给这一块挑一张垫在后面的配图，记进 b["_fb_photo"]。
+    先用这张卡原来写的 image（被截图替代的 _image_replaced），没有就用这一章第一张找得到的配图；都没有就照旧（只有摘录）。"""
+    if not excerpt_photo_switch()[0] or not owner.get("_shot_fail") or b.get("type") not in EXCERPT_PHOTO_BLOCKS:
+        return
+    for name in [b.get("_image_replaced")] + chapter_images(c, skip=b):
+        if name and find_image(issue, name):
+            b["_fb_photo"] = name
+            warn.append("%s 退回摘录，摘录卡压在配图 %s 上（开关“%s”开着）" % (where, name, EXCERPT_PHOTO_KEY))
+            return
+    warn.append("%s 退回摘录，这一章找不到能垫在后面的配图，只有摘录" % where)
+
+
 # 视频导演开关（2026-11-08 晚加；pipeline/orchestrator/common.py 的 director_switch 是同一套规则，两边要一起改）：
 # 先看环境变量 FD_DIRECTOR，再看 fd_开关.json 的"视频导演"；都没有或读不出来按"开"。
 # 组装这边只用它决定 11-08 的渲染修复（fix1108：封面图、对比卡长数值、卡片及时收起、柱子、时间轴小图与小字、对比卡压图不出画、
@@ -470,6 +523,7 @@ def shot_fallback(issue, c, b, warn):
         warn.append("「%s」source_shot/%s %s，退回 source_excerpt（原句自己排版，荧光笔照样扫）" % (c.get("id"), b.get("id"), why))
         b["type"] = "source_excerpt"
         b["_shot_fail"] = why
+        excerpt_photo(issue, c, b, b, warn, "「%s」source_shot/%s" % (c.get("id"), b.get("id")))
         return
     b["_shot"] = {"png": str(png), "rec": rec}
 
@@ -506,6 +560,7 @@ def card_shot(issue, c, b, warn):
     if b.get("image"):
         b["_image_replaced"] = b.pop("image")
     _owner_shot(issue, where + " 的 shot", b, b["shot"], "card", b["shot"].get("id") or b.get("id"), warn)
+    excerpt_photo(issue, c, b, b["shot"], warn, where + " 的 shot")
 
 
 def tick_shots(issue, c, b, warn):
@@ -635,6 +690,8 @@ def has_real_layer(c):
         if b["type"] in ("image_card", "tally", "source_shot") or b.get("image") or b.get("logos") or b.get("head_logos"):
             return True
         if b["type"] in PHOTO_BLOCKS and b.get("photo"):                     # 11-07：压在配图上
+            return True
+        if b.get("_fb_photo"):                                                # 11-15：摘录卡压在章图上（开关开着才有）
             return True
         if b["type"] in CARD_SHOT and isinstance(b.get("shot"), dict):        # 结合式：卡上的原文截图（或摘录）
             return True
@@ -912,6 +969,8 @@ def photo_moments(c):
         t = b.get("type")
         if t in PHOTO_BLOCKS and b.get("photo"):     # 11-07：压在配图上（清楚、不虚化，镜头装下整张图）
             clear.append(stem(b["photo"]))
+        if b.get("_fb_photo"):                       # 11-15：退回摘录的卡压在章图上（同一个画法）
+            clear.append(stem(b["_fb_photo"]))
         if t == "image_card" and b.get("image"):
             (clear if fork and first else back).append(stem(b["image"]))
             first = False
@@ -1716,6 +1775,8 @@ def _moments(b, ts, over_ok=False):
         out.append((g("show", first), _INF, "img"))
     if t in PHOTO_BLOCKS and b.get("photo") and first is not None:    # 11-07：压在配图上，配图从出现到这一块下场都算
         out.append((g("photo", first), _INF, "img"))
+    if b.get("_fb_photo") and first is not None:                       # 11-15：退回摘录的卡压在章图上，配图跟着卡片出现
+        out.append((g("show", first), _INF, "img"))
     for f in ("items", "ticks") + SPLIT_SIDES:
         for k, it in enumerate(b.get(f) or []):
             if isinstance(it, dict) and it.get("image") and t in ("tile_row", "timeline", "split"):
@@ -1978,6 +2039,8 @@ def image_names(sb):
                     out.append(Path(str(it["image"])).stem)
             if b.get("type") in PHOTO_BLOCKS and b.get("photo"):
                 out.append(Path(str(b["photo"])).stem)
+            if b.get("_fb_photo"):                     # 11-15：退回摘录的卡压在章图上
+                out.append(Path(str(b["_fb_photo"])).stem)
     for lst in (sb.get("_pending_images") or {}).values():
         out += lst
     return list(dict.fromkeys(out))
@@ -2262,6 +2325,9 @@ def compile_chapters(sb, T, marks, photos):
                 nb["img"] = ensure_photo(sb, photos, b["id"], b["image"], 1200)
             if b["type"] in PHOTO_BLOCKS and b.get("photo"):           # 11-07：压在配图上（动效尝试版）
                 nb["photo_img"] = ensure_photo(sb, photos, "%s.photo" % b["id"], b["photo"], 1600)
+            nb.pop("_fb_photo", None)
+            if b.get("_fb_photo") and b["type"] in EXCERPT_PHOTO_BLOCKS:   # 11-15：退回摘录的卡压在章图上（开关开着才有）
+                nb["photo_img"] = ensure_photo(sb, photos, "%s.photo" % b["id"], b["_fb_photo"], 1600)
             for i2, tk in enumerate(nb.get("ticks") or [] if b["type"] == "timeline" else []):    # 11-06：时间轨日子上的小图
                 if isinstance(tk, dict) and tk.get("image"):
                     tk["img"] = ensure_photo(sb, photos, "%s.ticks%d" % (b["id"], i2), tk["image"], 800)

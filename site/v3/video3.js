@@ -1611,6 +1611,15 @@
     b._.o.ovp = m;
     return self.bshot(b, [cx, cy, OVP_Z], 0, 2, w * 1.02, h * 1.02, pk ? { pk: pk, pc: [0, cy, OVP_Z] } : { pk: 1 });
   }
+  /* ---- 摘录卡压在章图上（2026-11-15 加，尝试版；fd_开关.json"摘录卡压在章图上"）：原文截图没截成、退回原句摘录的卡片
+   *   （source_excerpt、带 shot 的 quote_card / post_card）后面立一张这一章的配图（video3_storyboard.excerpt_photo 挑的，数据里是 photo_img），
+   *   比这一镜的取景大两成、铺满画面；镜头和卡片的取景不变（卡片和字在画面里一样大）。配图跟着卡片溶解出现、收场时溶解消失（ovpTl）。
+   *   数据里没有 photo_img 的不走这一段，画面和原来逐像素相同。 */
+  function fbpBuild(self, b, c, fw, fh) {
+    var w = Math.max(fw, fh * 16 / 9) * 1.2, h = w * 9 / 16, m = self.photo(b.photo_img, w, h, OVP_BLUR);
+    m.position.set(c[0], c[1], OVP_Z); b._.g.add(m); self.photos.push(m);
+    b._.o.ovp = m; b._.o.fbp = true;
+  }
   function ovpTl(b, a, t0, off) {
     var pu = b._.o.ovp.material.uniforms;
     a.ST(pu.uReveal, { value: 0 }); a.U(pu.uReveal, 0, 1.02, t0 - 0.6, 1.5, 'power1.inOut');
@@ -1722,7 +1731,7 @@
   }
   function shortText(s, L) { s = String(s || ''); return L === 'en' ? s.length <= 34 : s.replace(/\s/g, '').length <= 12; }
   TPL.quote_card = {
-    ext: [5, 5], panel: true,
+    ext: [5, 5], panel: true, extPhoto: [8, 8],       // extPhoto：截图退回摘录、压在章图上时占得宽（11-15）
     build: function (b) {
       var P = this.P, L = P.L, q = S2(b.text, L), src = b.img ? imgUrl(P, b.img) : null, sh = shortText(q, L);
       var cq = b.count === true ? countHtml(q) : null;        // 动效尝试：count: true 时第一个数字从 0 滚到终值
@@ -1772,7 +1781,7 @@
   var PF_NAME = { podcast: { zh: '播客', en: 'Podcast' }, x: { zh: 'X', en: 'X' }, threads: { zh: 'Threads', en: 'Threads' }, youtube: { zh: 'YouTube', en: 'YouTube' },
     statement: { zh: '官方声明', en: 'Statement' }, document: { zh: '文件', en: 'Document' }, post: { zh: '帖子', en: 'Post' }, quote: { zh: '原话', en: 'Quote' } };
   TPL.post_card = {
-    ext: [5.5, 5.5], panel: true,
+    ext: [5.5, 5.5], panel: true, extPhoto: [8, 8],   // 同上（11-15）
     build: function (b) {
       var P = this.P, L = P.L, pf = b.platform || { kind: 'quote' }, kind = PF_NAME[pf.kind] ? pf.kind : 'quote';
       var logoPf = (kind === 'x' || kind === 'threads' || kind === 'youtube') && (P.v.logos || {})[kind];
@@ -2311,6 +2320,7 @@
     var lb = self.label(html, { obj: p, at: V3(0, 0, 0.05), shot: b._.shS, fitW: w, fitH: 0, min: 0.4, max: 1.4 });
     b._.o.pan = p; b._.o.lb = lb; b._.o.lines = src ? (sh.lines || []) : null;
     b._.enterAt = V3(-w / 2 + 0.5, 1, 0); b._.exitAt = V3(w / 2 - 0.5, 1, 0); b._.headAt = V3(0, h + 1.4, 0);
+    if (!src && ovpOn(P, b)) fbpBuild(self, b, [0, h / 2 + 0.5 - h * 0.06, 0], w * fw, h * 1.6);   // 11-15：退回摘录，压在章图上
   }
   function srcTl(b, a) {
     var o = b._.o, c = b._.c, show = bt(b, 'show', c.vs + 0.6), mk = bt(b, 'mark', show + 1.2), el = o.lb.el;
@@ -2343,6 +2353,7 @@
     }
     if (zh) { a.ST(zh, { autoAlpha: 0, y: 8 }); a.tl.fromTo(zh, { autoAlpha: 0, y: 8 }, { autoAlpha: 1, y: 0, duration: 0.5, ease: 'power2.out' }, mk + Math.min(dur, 1.2)); }
     o.show = show; o.mk = mk; o.done = mk + dur;
+    if (o.fbp) ovpTl(b, a, show, endT);       // 11-15：退回摘录，压在章图上
   }
   TPL.source_shot = {
     ext: [6.6, 6.6],
@@ -2353,7 +2364,7 @@
     explore: function (b) { return [2, b._.shS]; }
   };
   TPL.source_excerpt = {
-    ext: [6.6, 6.6],
+    ext: [6.6, 6.6], extPhoto: [12, 12],                // 同上（11-15）
     build: function (b) { srcBuild(this, b); },
     tl: function (b, a) { srcTl(b, a); },
     cams: function (b) { return TPL.source_shot.cams.call(this, b); },
@@ -2541,6 +2552,7 @@
     b._.shS = self.bshot(b, [0, 3.9, 0], b._.fork ? (b._.branch ? 14 : -14) : 0, 3, 100 * kw, hU * kw * 1.06, { pk: 1 });
     b._.o.lb.shot = b._.shS;
     b._.o.sx = sx; b._.o.cardU = cardU;
+    if (!sx.img && ovpOn(P, b)) fbpBuild(self, b, [0, 3.9, 0], 100 * kw, hU * kw * 1.06);     // 11-15：退回摘录，压在章图上
   }
   function sbxCardTl(self, b, a, show) {
     var o = b._.o, c = b._.c, el = o.lb.el, sx = o.sx;
@@ -2548,6 +2560,7 @@
     var dur = sbxSweep(a, root, sx.lines, mk);
     sbxTl(a, root, show, c.end + 0.3, mk, dur);
     o.mk = mk; o.done = mk + dur;
+    if (o.fbp) ovpTl(b, a, show, panelEnd(b, show));
   }
   // 时间轴日子带截图：小图（截图按原句那一块裁满）＋弹出框；弹出框每一帧在 updateLabels 之后摆（tlPopFrame）
   function tickShot(self, q) {

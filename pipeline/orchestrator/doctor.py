@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from .common import (ROOT, PIPE, PY, VENV, CACHE, PLAYWRIGHT, PROFILE, TESTDIR, DEFAULT_LEDGER, SWITCH_FILE, tts_constants, read_json, rel,
-                     motion_switch, director_switch, zh_wrap_switch)
+                     motion_switch, director_switch, zh_wrap_switch, excerpt_photo_switch)
 from .ledger import Ledger
 
 OK, BAD, WARN = "✓ 好了", "✗ 缺了", "! 提醒"
@@ -256,6 +256,9 @@ class Doctor:
             "" if (not don or has) else "装 Claude Code 并登录订阅，或把 fd_开关.json 的“视频导演”改成“关”")
         zon, zwhy = zh_wrap_switch()           # 11-09 晚加：视频中文整词换行开关（断行工具 budoux、jieba 在上面的软件检查里）
         self.add(OK, "视频中文整词换行（开关）", "%s（%s）%s" % ("开" if zon else "关", zwhy, "" if zon else "：视频文字按加开关以前的办法换行"))
+        eon, ewhy = excerpt_photo_switch()     # 11-15 加：摘录卡压在章图上（尝试版，默认关）
+        self.add(OK, "摘录卡压在章图上（开关）", "%s（%s）%s" % ("开" if eon else "关", ewhy,
+                                                    "：截图退回摘录时，摘录卡后面立这一章的配图" if eon else "：尝试版，默认关"))
 
     def disk(self):
         u = shutil.disk_usage(str(Path.home()))
