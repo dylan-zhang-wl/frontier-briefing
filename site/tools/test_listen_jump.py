@@ -345,15 +345,114 @@ def synthetic(g):
           "8. 没有对齐数据 → 按字数比例（%s）" % (g["para_times"](blk, ps),))
 
     g["PARAS"][:], g["chapters"][:] = real_paras, real_ch
+    mid_turn(g)
+
+
+def mid_turn(g):
+    """9. 11-15 加：对谈一轮里，上一条的尾巴讲完才接着讲这一条（mid_start）。文字是编的（两家虚构的公司），
+    格局照 11-15 第 4–6 轮：第 4、5 轮讲钱包，第 6 轮前两句还是钱包的尾巴，第三句"国内这边"才讲接口。"""
+    print("四、对谈一轮里换条目（mid_start）")
+    saved = {k: (list(g[k]) if isinstance(g[k], list) else dict(g[k])) for k in ("PARAS", "chapters", "ITEM_TEXT", "PARA_SRC")}
+    G = g["mid_start"].__globals__          # runpy 返回的是全局变量的副本；开关要改函数真正读的那一份
+    voice0, sw0 = dict(g["VOICE_DB"]), G["LISTEN_SENTENCE"]
+    A = "星河钱包上线，智能体能替人付款" + "星河公司周五推出星河钱包，智能体可替用户下单；每笔购买都要指纹验证。"
+    B = "远帆开放全家桶接口" + "远帆的联网搜索、文件上传有了独立接口，可以单独调用、分别计费。"
+    A_RICH = A + "星河承认智能体购物还在早期阶段；付费订阅用户先用，航空公司和网店都在设限。"
+    T4 = "先说替人付款这件事。星河公司周五推出星河钱包，让智能体替用户下单付款。"
+    T5 = "补一个细节。星河说，每一笔购买都要指纹验证一次。"
+    T6 = ["首批只开放给付费订阅用户，智能体能替人付款。", "星河自己说，智能体购物还在早期阶段；航空公司和网店都在设限。",
+          "国内这边，据报道，远帆正式开放全家桶接口。", "联网搜索、文件上传，都有了独立接口，可以单独调用、分别计费。"]
+    SPANS = [[0.0, 4.9], [4.9, 15.3], [15.3, 22.1], [22.1, 34.0]]
+
+    def setup(t6=None, spans=SPANS, dialog=True, voice=None):
+        g["chapters"][:] = [{"start": 0.0, "title_zh": "开场"}, {"start": 60.0, "title_zh": "快讯"}]
+        g["ITEM_TEXT"].clear()
+        g["ITEM_TEXT"].update({A: A_RICH, B: B})
+        g["PARA_SRC"].clear()
+        paras = [{"ch": "开场", "t": 1.0, "text": "欢迎收听。", "lead": 0.5, "how": "估算"}]
+        rows = [(T4, 60.0, 15.0), (T5, 75.5, 16.0), ("".join(t6 or T6), 92.0, 34.0)]
+        for txt, st, sec in rows:
+            b = {"秒数": sec, "开始秒": st, "_对谈轮": dialog, "_句子级找平": {"各句起止秒": spans} if spans else None,
+                 "_人声目录": "/假的人声目录" if voice is not None else None, "_人声开始秒": st - 40.0}
+            paras.append({"ch": "快讯", "t": st, "text": txt, "lead": 0.5, "how": "估算"})
+            g["PARA_SRC"][id(paras[-1])] = (b, 0, [0.0])
+        g["PARAS"][:] = paras
+        g["VOICE_DB"].clear()
+        if voice is not None:
+            g["VOICE_DB"]["/假的人声目录"] = voice
+
+    try:
+        setup()
+        t = g["listen_at"]("flash", B)
+        check(t == 107.3, "9a. 第 6 轮第三句才讲这一条 → 跳到配音时切出的那个句界（%s，应为 92.0+15.3=107.3）" % t)
+        check(g["listen_at"]("flash", A) == 59.5, "9b. 上一条照旧跳它那一轮开头（%s，应为 59.5）" % g["listen_at"]("flash", A))
+        import numpy as np
+        db = np.full(14000, -20.0)               # 人声版 140 秒，全是说话
+        db[6720:6780] = -60                      # 第 6 轮第 15.2–15.8 秒（人声版 52+15.2 秒）：句间停顿
+        setup(voice=db)
+        t = g["listen_at"]("flash", B)
+        check(t == 107.5, "9c. 有人声版 → 吸到停顿，跳开口前 0.3 秒（%s，应为 92.0+15.8−0.3=107.5）" % t)
+        setup(spans=[[0.0, 8.0], [8.0, 34.0]])
+        n0 = len(g["LISTEN_MID"])
+        t = g["listen_at"]("flash", B)
+        how = g["LISTEN_MID"][-1][3] if len(g["LISTEN_MID"]) > n0 else None
+        check(how == "估算" and t is not None and 102 <= t <= 110,
+              "9d. 句界和字数估的位置对不上、也没有人声版 → 按字数比例、提醒请核对（%s，%s）" % (t, how))
+        setup(dialog=False)
+        check(g["listen_at"]("flash", B) == 91.5, "9e. 单人稿的段 → 照旧跳段首（%s，应为 91.5）" % g["listen_at"]("flash", B))
+        setup(t6=[T6[2], T6[3], T6[0], T6[1]])
+        check(g["listen_at"]("flash", B) == 91.5, "9f. 这一轮开头就在讲这一条 → 跳轮首（%s，应为 91.5）" % g["listen_at"]("flash", B))
+        setup(t6=["我们再看一件别的事。", T6[2], T6[3]], spans=[[0.0, 2.0], [2.0, 9.0], [9.0, 20.0]])
+        check(g["listen_at"]("flash", B) == 91.5,
+              "9g. 前面只是和哪条都不沾的过渡句 → 跳轮首（%s，应为 91.5）" % g["listen_at"]("flash", B))
+        G["LISTEN_SENTENCE"] = False
+        setup()
+        check(g["listen_at"]("flash", B) == 91.5, "9h. FD_LISTEN_SENTENCE=off → 和改之前一样跳轮首（%s，应为 91.5）"
+              % g["listen_at"]("flash", B))
+    finally:
+        G["LISTEN_SENTENCE"] = sw0
+        for k, v in saved.items():
+            if isinstance(g[k], list):
+                g[k][:] = v
+            else:
+                g[k].clear()
+                g[k].update(v)
+        g["VOICE_DB"].clear()
+        g["VOICE_DB"].update(voice0)
+
+
+def judge_cases():
+    """五、第 16 步的转写核对（check_listen_text.judge）：编好的转写小段，不跑转写模型。"""
+    print("五、第 16 步：'听这一段'转写核对的判断（check_listen_text.judge）")
+    sys.path.insert(0, HERE)
+    import check_listen_text as T
+    grams = T.make_grams()
+    texts = {"A": "星河钱包上线，智能体能替人付款。星河公司周五推出星河钱包，每笔购买都要指纹验证；智能体购物还在早期阶段。",
+             "B": "远帆开放全家桶接口。远帆的联网搜索、文件上传有了独立接口，可以单独调用、分别计费。",
+             "C": "英国卫报 11 月 13 日报道，逻辑学家用模型读懂速记笔记。"}
+    r = T.judge("B", [(0.0, 4.5, "首批只开放给付费订阅用户智能体能替人付款"), (4.5, 10.0, "星河自己说智能体购物还在早期阶段"),
+                      (10.0, 15.0, "国内这边远帆正式开放全家桶接口")], texts, grams)
+    check(r["判断"] == "跳早了" and r["在讲"] == "A" and r["这一条开口（跳点后几秒）"] == 10.0,
+          "10a. 前 10 秒在讲上一条 → 跳早了，在讲 A、10 秒后开口（%s）" % r)
+    r = T.judge("B", [(0.0, 1.5, "字幕由某某提供"), (1.5, 6.0, "国内这边远帆正式开放全家桶接口")], texts, grams)
+    check(r["判断"] == "对上", "10b. 片头音乐里编出来的字不算 → 对上（%s）" % r["判断"])
+    r = T.judge("C", [(0.0, 3.0, "和做研究的朋友贴得最近的是英国卫报11月13日的一篇报道"), (3.0, 8.0, "逻辑学家用模型读懂速记笔记")],
+                texts, grams)
+    check(r["判断"] == "对上", "10c. 日期、虚字不算相同（“11 月 13 日”哪条都有）→ 对上（%s）" % r["判断"])
+    r = T.judge("B", [(0.0, 4.0, "星河钱包每笔购买都要指纹验证"), (4.0, 9.0, "远帆开放全家桶接口")], texts, grams)
+    check(r["判断"] == "对上", "10d. 开头只有 4 秒在讲别的、后面听到这一条 → 不判跳早（%s）" % r["判断"])
+    r = T.judge("A", [(0.0, 20.0, "远帆的联网搜索文件上传有了独立接口可以单独调用分别计费")], texts, grams)
+    check(r["判断"] == "跳早了" and r["这一条开口（跳点后几秒）"] is None, "10e. 整段都在讲别的条目、没听到这一条 → 跳早了（%s）" % r["判断"])
 
 
 def main():
+    judge_cases()                            # 不用样期、不跑转写模型，先跑
     if not os.path.isdir(REAL):
         sys.exit("找不到 %s" % REAL)
     if not os.path.exists(os.path.join(REAL, POD)):
         print("跳过：%s 的完整样期（%s）不在。仓库的 测试版/ 只存文字；要跑这个测试，设 FD_SAMPLE_ROOT 指向完整样期所在的文件夹，"
               "或在有 本机资料/归档/mini试运行_1031-1109/ 的本机上跑" % (DAY, POD))
-        sys.exit(0)
+        sys.exit(1 if FAILS else 0)
     if not os.path.exists(CFG):              # 旧期网页配置只在私有仓库（2026-11 拆仓库）
         print("跳过：%s 不在（往期内容只在私有仓库；把私有仓库的 site/tools/v3_issues/ 拷进来再跑）" % os.path.relpath(CFG, ROOT))
         sys.exit(0)

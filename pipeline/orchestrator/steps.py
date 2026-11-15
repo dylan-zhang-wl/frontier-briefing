@@ -1496,7 +1496,8 @@ class Accept(Step):
     no, key, name = 16, "accept", "验收"
     timeout = 900
     check_text = ("shoot_v3（浅色、深色、手机）：无报错、不横向滚动、不缺字；首屏超过 2 MB 提醒；"
-                  "check_cites：上标不单独掉行；check_listen：'听这一段'从对的时间放")
+                  "check_cites：上标不单独掉行；check_listen：'听这一段'从对的时间放；"
+                  "check_listen_text：'听这一段'跳到的地方转写一遍，像在讲别的条目就提醒（不挡发布）")
     fix_text = "任何一项不过：标'验收没过，不要发布'，停下来叫人（现在本来也不自动发布）"
 
     def outputs(self, c):
@@ -1510,7 +1511,8 @@ class Accept(Step):
 
     def plan(self, c):
         return ["截图自检：node site/tools/shoot_v3.js <网页> 10_网页v3 10_网页v3/自检报告.json",
-                "上标：node site/tools/check_cites.js <网页>；听这一段：node site/tools/check_listen.js <网页>"]
+                "上标：node site/tools/check_cites.js <网页>；听这一段：node site/tools/check_listen.js <网页>",
+                "听这一段转写核对：$PY site/tools/check_listen_text.py <期目录> --out logs/听这一段_转写核对.json"]
 
     def run(self, c, how):
         env = dict(c.env, PW=str(PLAYWRIGHT))
@@ -1563,11 +1565,40 @@ class Accept(Step):
             if rc != 0 or not ok:
                 probs.append("'听这一段'点了没有从对的时间放：" + "；".join(tail(out, 2))[:120])
             res["听这一段"] = jr
+            warns += self.listen_text(c, env, res)
         res["没过"], res["提醒"] = probs, warns
         write_json(c.p("logs/验收.json"), res)
         if probs:
             return R(FAILED, "验收没过 %d 项，不要发布" % len(probs), probs + warns, go_on=True)
         return R(DONE, "三种视图无报错、不横滚、不缺字；上标不掉行；'听这一段'正常", warns)
+
+    def listen_text(self, c, env, res):
+        """11-15 加：每个'听这一段'从跳点截 20 秒播客转写一遍，和这一条、别的条目的网页文字比
+        （site/tools/check_listen_text.py）。像在讲别的条目（11-15 E006 跳到上一条的尾巴、11-12 热点二三对调）就提醒，
+        不挡发布；转写没跑成也只提醒。结果写 logs/听这一段_转写核对.json，摘要放进验收.json。返回提醒列表。"""
+        out_json = c.p("logs/听这一段_转写核对.json")
+        rc, out = c.run(self, c.py(TOOLS / "check_listen_text.py", c.issue, "--out", out_json),
+                        "听这一段转写核对", timeout=600, env=env)
+        jt = read_json(out_json, None)
+        if rc != 0 or not isinstance(jt, dict):
+            res["听这一段转写核对"] = "没跑成"
+            return ["'听这一段'转写核对没跑成：" + "；".join(tail(out, 2))[:120]]
+        if jt.get("跳过"):
+            res["听这一段转写核对"] = jt["跳过"]
+            return []
+        each = jt.get("各条") or {}
+        res["听这一段转写核对"] = {k: r.get("判断") for k, r in each.items()}
+        warns = []
+        for k, r in each.items():
+            if r.get("判断") != "跳早了":
+                continue
+            on = r.get("这一条开口（跳点后几秒）")
+            warns.append("'听这一段' %s 可能跳早了：跳到 %.1f 秒，之后约 %.0f 秒讲的像 %s，%s（转写核对，请耳听；"
+                         "logs/听这一段_转写核对.json）"
+                         % (k, float(r.get("跳点秒") or 0), float(r.get("之前在讲别的条目（秒）") or 0), r.get("在讲"),
+                            "这一条约 %.1f 秒才开口" % (float(r.get("跳点秒") or 0) + on) if on is not None
+                            else "%g 秒内没听到这一条" % float(jt.get("窗口秒") or 20)))
+        return warns
 
 
 def _json_list(out):
