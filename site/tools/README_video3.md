@@ -208,6 +208,7 @@ $PY site/tools/video3_trial.py --day 2026-11-07 --spec <加块说明.json> --reu
   - `zh` 只能取同一条的 `text_zh`（`who_said` 取 `said_zh`），写 `true` 就整句用；
   - `source` 的媒体名要在事件卡来源名或网址里；
   - 出处签日期按事件卡来源的日期写。截图记录里网页自己写的日期（`page_date`）和它不是同一天时，签上不写日期，并提醒。
+  - 11-15 加（截图和退回的摘录卡一样管）：原文开头的电头"X 月 X 日消息／电／讯"（第 5 步抓来的原文 `03_事件卡/材料/<事件>.json`，`attach_datelines` 记到来源上）和签上那天不一样，或者这张卡触发词所在那几句旁白说到了日期、又没有一个是签上那天，也只写媒体名并提醒（`check_sources`；11-15 两张 IT之家卡都是事件卡按 UTC 记早了一天）。只管一次在命令前写 `FD_SRC_DATE_CHECK=off` 退回只比 `page_date`。
 - 数字：`num_chain`、`headline_open` 的字按 `ref` 核，和别的模板一样。
 - 触发词：都要在这一章的旁白里（`check_cues`）。
 - 原句在成片里有多大（`shot_font_u`）：截图记录里原句的字号 `font_px` ÷ 截图宽 `clip.w` × 截图框在成片里的宽（`shot_slot_u`，按图位算：整屏卡、原话卡、弹出框，16:9 横屏），小于字幕 `SUB_U`＝1.85（舞台宽度的百分之几）就退回摘录。`shot_slot_u` 和 `video3.js` 的版式常数（`SBX_*`、`.v3tpop` 宽、`SRC_*`）要一起改；浏览器测试核过估的不比实际宽。

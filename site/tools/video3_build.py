@@ -629,6 +629,7 @@ def prepare(issue, gen=True):
     facts = SB.check_facts(sb, cards)
     reg = en_registry()
     SB.NAME_TOKENS = sorted({t for e in reg for t in [e["en"]] + e["zh"] if re.search(r"\d", t) and re.search(r"[A-Za-z]", t)})
+    SB.attach_datelines(facts, issue)  # 11-15：原文开头的"X 月 X 日消息"记到来源上，出处签日期对不上就只写媒体名
     n = SB.check_labels(sb, facts)
     for w in SB.check_posts(sb, facts) + SB.check_logos(sb, facts) + SB.check_layers(sb) + en_name_warnings(sb, reg) + SB.source_warnings(sb):
         say("  提醒：" + w)

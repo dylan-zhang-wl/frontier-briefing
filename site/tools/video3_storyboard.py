@@ -1103,6 +1103,86 @@ def source_name(name):
     return re.split(r"\s*[·（(]", str(name or "").strip())[0].strip()
 
 
+# 11-15 加：出处签的日期还要和原文自己写的日期、旁白对一遍。11-15"要他回来"请愿摘录卡写"IT之家 · 11 月 14 日"，
+# 原文开头是"IT之家 11 月 15 日消息"，旁白也说"到 11 月 15 日"；"没有副手"猎头截图卡写"11 月 13 日"，截图里原文第一行是
+# "IT之家 11 月 14 日消息"——事件卡按 UTC 记日期，国内媒体按北京时间写。原来只比截图记录里网页的发表日期（page_date），
+# 截图没截成（退回摘录）或网页没标发表日期时就漏了。现在三样任一对不上，签上只写媒体名：
+#   ① 网页的发表日期（page_date，原来就有）；
+#   ② 原文开头的电头"X 月 X 日消息／电／讯"（第 5 步抓来的原文，03_事件卡/材料/<事件>.json，attach_datelines 记到来源上）；
+#   ③ 这张卡的触发词所在那几句旁白里说到的日期（说到了日期、又没有一个是签上那天）。
+# 环境变量 FD_SRC_DATE_CHECK=off 关掉②③，和改之前逐字相同。
+DATELINE = re.compile(r"(\d{1,2})\s*月\s*(\d{1,2})\s*日\s*(?:消息|电|讯)")
+NARR_DATE = re.compile(r"(\d{1,2})\s*月\s*(\d{1,2})\s*日")
+
+
+def src_date_check_on():
+    return str(os.environ.get("FD_SRC_DATE_CHECK") or "on").strip().lower() not in ("off", "0", "false", "no", "关")
+
+
+def dateline_of(text):
+    """原文开头（前 200 个字）的电头日期：(月, 日)；没有返回 None。"""
+    m = DATELINE.search(str(text or "")[:200])
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def attach_datelines(facts, issue):
+    """把来源原文自己写的电头日期记到事件卡来源上（src["_dateline"] = (月, 日)），check_sources 用。
+    原文在 03_事件卡/材料/<事件>.json（第 5 步抓来的，[{url, text, summary, …}]）；读不到就不记，照旧只按事件卡的日期写。"""
+    if not src_date_check_on():
+        return 0
+    n, seen = 0, {}
+    for f in facts.values():
+        ev = f.get("ev")
+        if ev not in seen:
+            seen[ev] = {}
+            try:
+                mat = json.loads((Path(issue) / "03_事件卡" / "材料" / ("%s.json" % ev)).read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                mat = []
+            for it in mat if isinstance(mat, list) else []:
+                if isinstance(it, dict) and it.get("url"):
+                    d = dateline_of(it.get("text")) or dateline_of(it.get("summary"))
+                    if d:
+                        seen[ev][_url_key(it["url"])] = d
+        for src in f.get("card_sources") or []:
+            d = seen[ev].get(_url_key(src.get("url")))
+            if d and src.get("_dateline") != d:
+                src["_dateline"] = d
+                n += 1
+    return n
+
+
+def _url_key(u):
+    u = str(u or "").strip().split("#", 1)[0].lower()
+    return re.sub(r"^https?://(www\.)?", "", u).rstrip("/")
+
+
+def _cue_words(c, blk, owner):
+    """这一处截图／摘录的触发词：卡片（或时间轴那一天）的 show／at，加上截图自己的 mark。"""
+    out, groups = [], [owner.get("cues")]
+    if blk is not owner and blk.get("type") != "timeline":     # 卡片自己的 show（时间轴整条的 start 不算，只算那一天）
+        groups.append(blk.get("cues"))
+    for cues in groups:
+        for v in (cues.values() if isinstance(cues, dict) else []):
+            out.append(v.get("say") if isinstance(v, dict) else v)
+    if blk.get("type") == "timeline":
+        tk = next((t for t in blk.get("ticks") or [] if isinstance(t, dict) and t.get("shot") is owner), None)
+        if tk:
+            out.append(tk.get("at"))
+    return [str(x) for x in out if isinstance(x, str) and x.strip()]
+
+
+def narration_dates(c, blk, owner):
+    """触发词所在那几句旁白里说到的日期：{(月, 日)}。"""
+    nar = str(c.get("narration") or "")
+    words = _cue_words(c, blk, owner)
+    out = set()
+    for sen in re.findall(r"[^。！？!?]+[。！？!?]?", nar):
+        if any(w in sen for w in words):
+            out |= {(int(a), int(b)) for a, b in NARR_DATE.findall(sen)}
+    return out
+
+
 def check_sources(sb, facts):
     """source_shot / source_excerpt：
       · fact 指到 facts 里的一条，那一条要有 quote；
@@ -1148,6 +1228,18 @@ def check_sources(sb, facts):
             # 网页自己写的日期和事件卡记的不是同一天（多半是时区：事件卡按 UTC 记）：签上不写日期，免得和截图里的日期打架
             warn = "%s：网页上写的日期 %s 和事件卡记的 %s 不是同一天，出处签只写媒体名、不写日期" % (where, str(pd)[:10], str(src.get("date"))[:10])
             date = None
+        elif date and src_date_check_on():
+            m_ = re.match(r"^\d{4}-(\d{2})-(\d{2})", str(src.get("date") or ""))
+            tag = (int(m_.group(1)), int(m_.group(2))) if m_ else None
+            dl, nd = src.get("_dateline"), narration_dates(_c, _blk, b)
+            if tag and dl and tuple(dl) != tag:
+                warn = "%s：原文开头写的是“%d 月 %d 日消息”，事件卡记的是 %s，出处签只写媒体名、不写日期" % (
+                    where, dl[0], dl[1], str(src.get("date"))[:10])
+                date = None
+            elif tag and nd and tag not in nd:
+                warn = "%s：这张卡那几句旁白说的是 %s，事件卡记的是 %s，出处签只写媒体名、不写日期" % (
+                    where, "、".join("%d 月 %d 日" % x for x in sorted(nd)), str(src.get("date"))[:10])
+                date = None
         b["_src"] = {"name": name, "date": date, "url": src["url"], "full": full, "zh": zh or None, "ev": f["ev"], "warn": warn}
     return bad
 
