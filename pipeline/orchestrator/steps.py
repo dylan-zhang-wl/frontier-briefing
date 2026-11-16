@@ -590,14 +590,13 @@ class Check(Step):
                               "估计分钟": (wk.get("数据") or {}).get("估计分钟")})
         # 4 视频分镜
         rc, out = c.run(self, c.py(HELPERS, "storyboard", "--issue-dir", c.issue), "视频分镜")
-        items.append({"名字": "视频分镜", "要改": [] if rc == 0 else (key_lines(out, 6) or tail(out, 4)),
+        items.append({"名字": "视频分镜", "要改": [] if rc == 0 else storyboard_must(out),
                       "提醒": [x.strip() for x in out.splitlines() if x.strip().startswith("提醒")][:8]})
         # 5 网页数字预检
         pre = c.logs / "网页配置_预检.py"
         args = ["--day", c.day, "--issue-dir", c.issue, "--podcast", NO_PODCAST, "--out", pre] + (["--lenient"] if c.lenient else [])
         rc, out = c.run(self, c.py(TOOLS / "make_issue_v3.py", *args), "网页数字预检")
-        bad = [x.strip() for x in out.splitlines() if re.search(r"找不到|核对不上|对不上", x)]
-        items.append({"名字": "网页数字", "要改": [] if rc == 0 else (bad[:10] or key_lines(out, 4))})
+        items.append({"名字": "网页数字", "要改": [] if rc == 0 else web_must(out)})
         # 6 今日一词（11-03 加）：和近 30 天的重复时，要标 repeat_of、播客点明哪天讲过、中文名沿用往期；周末的名词解释只提醒
         rc, out = c.run(self, self.term_cmd(c), "今日一词")
         th = _json_tail(out)
@@ -650,7 +649,9 @@ class Check(Step):
             return R(DONE, "只差第一次补中文名，放宽：照原稿配音（配音时长检查照常），写自检时提一句（%s）" % "；".join(zhs)[:120],
                      warns[:12], extra={"没过时的产出指纹": seen})
         todo = ["把下面的问题交回主笔改稿（在会话里改 %s 等），第 %d 轮：" % (rel(c.p(c.ed["播客稿"])), n)]
-        todo += ["  - [%s] %s" % (k, m) for k, m in must[:20]]
+        todo += ["  - [%s] %s" % (k, m) for k, m in must[:TODO_SHOW]]
+        if len(must) > TODO_SHOW:
+            todo += ["  - ……还有 %d 处没列在这里，全部在 logs/检查_稿子.json（每一处都要改）" % (len(must) - TODO_SHOW)]
         todo += ["改完再运行：%s" % c.again()]
         return R(WAITING, "稿子检查有 %d 处要改（%s）" % (len(must), summary), warns[:12], todo=todo,
                  extra={"没过时的产出指纹": seen})
@@ -658,6 +659,23 @@ class Check(Step):
     def run(self, c, how):
         res, must, soft = self.suite(c)
         return self.judge(c, res, must, soft)
+
+
+TODO_SHOW = 20     # 屏幕和调度报告里"要你做"最多列几条；全部的在 logs/检查_稿子.json
+
+
+def storyboard_must(out):
+    """视频分镜检查（helpers.py storyboard）没过时要改的：全部"✗ 要改"行，一条不截（2026-11-16 改）。
+    原来只取最后 6 行要紧的（key_lines(out, 6)），加上 helpers.py 只印最后 12 条，11-16 第一轮 20 处只交回去 6～12 处。
+    一行 ✗ 都没有（程序自己出错之类）时，照旧退回要紧的几行。"""
+    rows = [x.strip() for x in (out or "").splitlines() if "✗" in x and "要改" in x]
+    return rows or (key_lines(out, 6) or tail(out, 4))
+
+
+def web_must(out):
+    """网页数字预检（make_issue_v3 严格模式）没过时要改的：全部"找不到／核对不上／对不上"的行，一条不截（2026-11-16 改，原来只取前 10 条）。"""
+    rows = [x.strip() for x in (out or "").splitlines() if re.search(r"找不到|核对不上|对不上", x)]
+    return rows or key_lines(out, 4)
 
 
 def _json_tail(out):
