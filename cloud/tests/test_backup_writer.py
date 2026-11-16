@@ -272,6 +272,18 @@ class DriverLoop(unittest.TestCase):
             self.assertEqual(len(chat.got), 1)
             self.assertIn("停下", json.loads(iss.p(BW.MARKER).read_text(encoding="utf-8"))["结果"])
 
+    def test_checker_crash_is_not_sent_to_mimo(self):
+        with tempfile.TemporaryDirectory() as t:
+            iss = make_issue(t)
+            for k in BW.KINDS:
+                put(iss.files[k], POD if k == "播客" else json.dumps(WEB))(iss.dir)
+            write_check(iss.dir, [{"名字": "稿子", "要改": ["script_check 没给出结果：FileNotFoundError: 找不到声音包 v3"]}])
+            chat = FakeChat([])
+            d, fd = self.driver(iss, chat, [(2, 7, BW.WAITING, None, None)])
+            self.assertEqual(d.run(), 2)
+            self.assertEqual(chat.got, [])                   # 检查程序自己出错：不花一次 MiMo 去"改"
+            self.assertIn("检查程序自己出错", json.loads(iss.p(BW.MARKER).read_text(encoding="utf-8"))["结果"])
+
     def test_select_fix_once_then_stop(self):
         with tempfile.TemporaryDirectory() as t:
             iss = make_issue(t)
