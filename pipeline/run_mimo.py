@@ -331,7 +331,8 @@ def past_lineups(n=3):
     return out
 
 
-def select():
+def select_inputs():
+    """选题的系统提示和输入（MiMo 选题、cloud/backup_writer.py 备用写稿共用这一份，免得两边写法走样）。"""
     cands = json.loads((RUN / "02_选题" / "candidates_compact.json").read_text(encoding="utf-8"))
     pairs = load_json(RUN / "02_选题" / "candidates_pairs.json", [])
     past = past_lineups()
@@ -343,8 +344,13 @@ def select():
     if terms:
         user += "\n\n往期今日一词（JSON；今日一词去重、沿用中文名，见第三节）：\n" + json.dumps(terms, ensure_ascii=False)
     user += weekend_inputs()
+    return system_prompt("选题.md"), user
+
+
+def select():
+    system, user = select_inputs()
     t0 = time.time()
-    obj, r = llm.chat_json(llm.PRO, system_prompt("选题.md"), user, max_tokens=24000, temperature=0.3)
+    obj, r = llm.chat_json(llm.PRO, system, user, max_tokens=24000, temperature=0.3)
     save(RUN / "02_选题" / "mimo.json", obj)
     save(RUN / "02_选题" / "mimo_用量.json", {"model": r["model"], "usage": r["usage"],
                                              "seconds": round(time.time() - t0, 1)})
