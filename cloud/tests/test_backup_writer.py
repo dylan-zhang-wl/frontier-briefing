@@ -191,6 +191,17 @@ class MimoClient(unittest.TestCase):
             with self.assertRaises(BW.Stop):
                 m.call(6, "写", "s", "b", 10, 0.1)
 
+    def test_no_new_calls_after_deadline(self):
+        with tempfile.TemporaryDirectory() as t:
+            now = [datetime(2026, 11, 17, 3, 29, tzinfo=timezone.utc)]
+            m = BW.Mimo(t, chat=FakeChat([("a", "x", "stop"), ("b", "y", "stop")]),
+                        deadline=datetime(2026, 11, 17, 3, 30, tzinfo=timezone.utc), clock=lambda: now[0])
+            self.assertEqual(m.call(6, "写", "s", "a", 10, 0.1), "x")
+            now[0] = datetime(2026, 11, 17, 3, 30, tzinfo=timezone.utc)
+            with self.assertRaises(BW.Stop):
+                m.call(6, "写", "s", "b", 10, 0.1)
+            self.assertEqual(m.totals()["次数"], 1)
+
     def test_truncated_and_failed_calls_are_recorded(self):
         with tempfile.TemporaryDirectory() as t:
             m = BW.Mimo(t, chat=FakeChat([("截", "半截", "length"), ("坏", RuntimeError("HTTP 500"), None)]))
@@ -270,6 +281,8 @@ class DriverLoop(unittest.TestCase):
             self.assertEqual(d.run(), 2)
             self.assertEqual(fd.n, 2)                       # 第二次还停在第 7 步就停下，不再交回改
             self.assertEqual(len(chat.got), 1)
+            snap = json.loads(iss.p("logs/备用写稿_检查_第7步交回改时.json").read_text(encoding="utf-8"))
+            self.assertEqual(snap["交回改的问题"]["网页"], ["[网页数字] E001 的 3 找不到"])
             self.assertIn("停下", json.loads(iss.p(BW.MARKER).read_text(encoding="utf-8"))["结果"])
 
     def test_checker_crash_is_not_sent_to_mimo(self):

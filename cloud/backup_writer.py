@@ -209,10 +209,12 @@ def default_chat():
 
 
 class Mimo:
-    def __init__(self, issue, chat=None, max_calls=14, max_tokens=1_500_000, model=PRO):
+    def __init__(self, issue, chat=None, max_calls=14, max_tokens=1_500_000, model=PRO, deadline=None, clock=None):
         self.issue = Path(issue)
         self._chat = chat
         self.max_calls, self.max_tokens, self.model = max_calls, max_tokens, model
+        self.deadline = deadline                  # datetime（UTC）：过了这个时刻不再新开调用（比如正式出刊要用 MiMo 做事件卡之前）
+        self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.log = read_json(self.issue / USAGE, None) or {
             "说明": "备用写稿（cloud/backup_writer.py）每次调 MiMo 的用量。credits 按 Token Plan 价目估（输入未命中 300、命中缓存 2.5、"
                     "输出 600／token，UTC 16–24 点 0.8 倍），只用来估，账以 MiMo 后台为准。",
@@ -240,6 +242,8 @@ class Mimo:
             raise Stop("MiMo 调用已到上限 %d 次，不再调用" % self.max_calls)
         if tot["输入token"] + tot["输出token"] >= self.max_tokens:
             raise Stop("MiMo 用量已到上限 %s token，不再调用" % format(self.max_tokens, ","))
+        if self.deadline and self.clock() >= self.deadline:
+            raise Stop("已过 %s（UTC），不再新开 MiMo 调用" % self.deadline.strftime("%Y-%m-%d %H:%M"))
         if self._chat is None:
             self._chat = default_chat()
         n = tot["次数"] + 1
@@ -736,6 +740,8 @@ class Driver:
         if broken:                      # 检查程序自己出错（缺文件、缺声音包……）：不是稿子的事，不花一次 MiMo 去"改"
             raise Stop("第 %d 步有检查程序自己出错（%d 处，如：%s），不交回 MiMo，停下等人" % (step, len(broken), broken[0][:80]))
         self.bump(key, "交回改：" + "、".join("%s %d 处" % (k, len(v)) for k, v in probs.items()))
+        snap = read_json(self.iss.p("logs/检查_稿子.json"), {}) or {}       # 这一轮的检查结果留一份（后面再检查会覆盖它）
+        write_json(self.iss.p("logs/备用写稿_检查_第%d步交回改时.json" % step), dict(snap, 交回改的问题=probs))
         for kind in KINDS:
             if kind not in probs:
                 continue
@@ -891,6 +897,7 @@ def main(argv=None):
         if name == "run":
             p.add_argument("--max-calls", type=int, default=14, help="最多调 MiMo 几次（含失败的）")
             p.add_argument("--max-tokens", type=int, default=1_500_000, help="输入加输出最多多少 token")
+            p.add_argument("--no-calls-after", help="过了这个 UTC 时刻不再新开 MiMo 调用，写成 2026-11-17T03:30")
             p.add_argument("fd_extra", nargs=argparse.REMAINDER, help="-- 后面原样交给每一条 ./fd run（如 --budget-usd 0）")
         else:
             p.add_argument("--no-select", action="store_true", help="不估选题（不 import run_mimo）")
@@ -905,7 +912,10 @@ def main(argv=None):
         return 0
     extra = [x for x in a.fd_extra if x != "--"]
     say("%s · %s · 期目录 %s" % (iss.day, iss.ed["名字"], "测试版/" + iss.day if iss.default_issue else "（--issue-dir 副本）"))
-    return Driver(iss, Mimo(iss.dir, max_calls=a.max_calls, max_tokens=a.max_tokens), extra, db=db).run()
+    dl = datetime.fromisoformat(a.no_calls_after).replace(tzinfo=timezone.utc) if a.no_calls_after else None
+    if dl:
+        say("过了 %s UTC 不再新开 MiMo 调用" % dl.strftime("%Y-%m-%d %H:%M"))
+    return Driver(iss, Mimo(iss.dir, max_calls=a.max_calls, max_tokens=a.max_tokens, deadline=dl), extra, db=db).run()
 
 
 if __name__ == "__main__":
