@@ -9,7 +9,10 @@
   · 至少一个新模型也不一样 → 念错、要重录；两个都听成原稿 → Whisper 听错、不重录；两个都没听清 → 不重录；
   · 数字不符被两个新模型推翻（11-15 视频"十六次"转写成"是 6 次"）→ 去掉那条原因；新模型也听错 → 照旧重录；
   · 新模型没装好：字词可疑处只记"没复核"，数字不符照旧重录，配音不停；
-  · 截哪几秒（按 Whisper 分段时间）、两头可以对不上的对齐、结果缓存（重跑不再听）。
+  · 截哪几秒（按 Whisper 分段时间）、两头可以对不上的对齐、结果缓存（重跑不再听）；
+  · 11-16 回放查出的三处（2026-11-16 补）：①"LeCun、吴恩达"转写成"勒坤吴文达"，英文那截照旧跳过、"恩→文"要单独挑出来；
+    ②"小艺"转写成"小一"，不在数字上下文里的"一"不当 1，同音不挑（"一千零九"照旧是 1009，见 test_tts_qc_numbers.py）；
+    ③名字（专名读音清单、读音表"人名"里用汉字写的）只差声调的（黄仁勋→黄仁荀）也挑，新模型按带声调比。
 
 用法（在项目根运行）：
     ~/.venvs/frontier-daily/bin/python -m unittest pipeline/test_tts_qc_asr2.py
@@ -56,7 +59,7 @@ def even_times(hyp_text, seconds):
 
 class Suspects(unittest.TestCase):
     def sus(self, ref, hyp, numbers=True):
-        return [(x["原稿"], x["转写"]) for x in Q.suspects(Q.tokens(ref), Q.tokens(hyp), numbers=numbers)]
+        return [(x["原稿"], x["转写"]) for x in Q.suspects(Q.qc_tokens(ref), Q.qc_tokens(hyp), numbers=numbers)]   # 和 check() 一样用 qc_tokens
 
     def test_picks(self):
         self.assertEqual(self.sus(REF, HYP), [("害", "失")])
@@ -71,6 +74,42 @@ class Suspects(unittest.TestCase):
         self.assertEqual(self.sus("我们看", "我们来看"), [])                             # 只多出字
         self.assertEqual(self.sus("一共一千零九页", "一共109页"), [])                    # 数字归数字不符
         self.assertEqual(self.sus("一共一千零九页", "一共109页", numbers=False), [("0", "")])
+
+    def test_english_name_split(self):
+        """11-16 播客 11:52：LeCun→勒坤 和 恩→文 只隔一个"吴"，原来并成一处、带英文字母，整处跳过，漏了用户耳听确认的"吴恩达"。"""
+        ref = "挂名的作者里，有 Hinton、李飞飞、LeCun、吴恩达等人。"
+        hyp = "挂名的作者里有Hinton 李飞飞 勒坤 吴文达等人"
+        self.assertEqual(self.sus(ref, hyp), [("恩", "文")])
+        self.assertEqual([x["原稿"] for x in Q.suspects(Q.tokens(ref), Q.tokens(hyp), names=[])], ["恩"])
+        self.assertEqual(self.sus("据 Semafor 报道", "据Summerford报道"), [])            # 英文名本身照旧不挑
+        self.assertEqual(self.sus("LeCun说", "勒坤硕"), [])                              # 和英文直接挨着的照旧跟着跳过
+        self.assertEqual(self.sus("营收增长了两成", "营收增长为两成"), [("了", "为")])     # 没有英文的照旧
+
+    def test_lone_yi_not_a_digit(self):
+        """11-16 播客 7:53："小艺"转写成"小一"。原来"一"先换成 1 再比，拼音对不上"艺"，同音字被挑出来、判了念错。"""
+        self.assertEqual(self.sus("小艺的基础问答", "小一的基础问答"), [])
+        self.assertEqual(self.sus("统一口径", "通一口径"), [])                            # 统/通 不同音才挑，这里 tong 同音
+        self.assertEqual(self.sus("唯一的办法", "唯以的办法"), [])
+        self.assertEqual(Q.qc_tokens("小一的"), ["小", "一", "的"])
+        self.assertEqual(Q.tokens("小一的"), ["小", "1", "的"])                          # 老的记号（字错率那些）不变
+        self.assertEqual(self.sus("排第一", "排第七"), [])                                # 真数字照旧归"数字不符"管
+        # 两边认的不一样：原稿"一边说"留着"一"，转写写成"1边说"（往期 10-31 那一处）；数字 1 按拼音也算 yi，照样对得上
+        self.assertEqual(self.sus("在寻求约两百亿，一边说已获", "在寻求约200亿1边说已获"), [])
+        self.assertEqual(self.sus("发了一封公开信", "发了1份公开信"), [("封", "份")])        # 只挑真不一样的"封→份"
+        self.assertEqual(self.sus("成都奕成科技", "成都1成科技"), [])                      # Whisper 把同音字写成 1（11-07）
+        self.assertEqual(self.sus("公司一旦上市", "公司不但上市"), [("一", "不")])          # 单独的"一"念没念对，现在也查
+
+    def test_name_tone(self):
+        """11-16 播客 0:27"黄仁勋"转写成"黄仁荀"（xūn→xún），不带声调一样，原来不挑；用户两期耳听都说声调不对。"""
+        ref = "黄仁勋还有没有可能回去？"
+        got = Q.suspects(Q.qc_tokens(ref), Q.qc_tokens("黄仁荀还有没有可能回去"))
+        self.assertEqual([(x["原稿"], x["转写"], x.get("声调")) for x in got], [("黄仁勋", "黄仁荀", True)])
+        self.assertEqual(self.sus(ref, "黄仁迅还有没有可能回去"), [("黄仁勋", "黄仁迅")])   # 11-12 那一处（xùn）
+        self.assertEqual(self.sus(ref, "黄仁勋还有没有可能回去"), [])
+        self.assertEqual(self.sus(ref, "黄仁熏还有没有可能回去"), [])                       # 同音同调的字不挑
+        self.assertEqual([x["原稿"] for x in Q.suspects(Q.tokens(ref), Q.tokens("黄仁荀还有没有可能回去"), names=[])], [])
+        self.assertEqual(self.sus("词元是什么", "次元是什么"), [])                           # 不是名字的只差声调照旧不挑
+        self.assertIn("黄仁勋", Q.load_tone_names())
 
     def test_minus_sign_is_fu(self):
         """11-11 视频：原稿"负百分之一百五十"，转写写成"-150%"——减号当"负"，不算少了"负"；型号里的连字符不动。"""
@@ -193,6 +232,47 @@ class Confirm(unittest.TestCase):
         Q.confirm([(r, REF, self.audio, times)], log=lambda *_: None)
         self.assertFalse(r["需重录"])
         self.assertEqual(r["复核"][0]["判"], "没听清")
+
+    def test_english_split_confirmed(self):
+        """11-16 播客 11:52：两个新模型都听成"吴文达"（11-16 回放），拆出来以后判念错、要重录。"""
+        ref = "挂名的作者里，有 Hinton、李飞飞、LeCun、吴恩达等人。"
+        hyp = "挂名的作者里有Hinton 李飞飞 勒坤 吴文达等人"
+        r, start, times = self.run_one(ref, hyp)
+        self.answers({start: {"SenseVoice": "李飞飞乐坤吴文达等人", "Paraformer": "李飞飞勒坤吴文达等人"}})
+        Q.confirm([(r, ref, self.audio, times)], log=lambda *_: None)
+        self.assertTrue(r["需重录"])
+        self.assertEqual([(x["原稿"], x["判"]) for x in r["复核"]], [("恩", "念错")])
+
+    def test_lone_yi_no_retake(self):
+        """11-16 播客 7:53"小艺"：Whisper、两个新模型都写"小一"。现在根本不挑，也就不会为它重录。"""
+        ref, hyp = "小艺的基础问答也开始收费。", "小一的基础问答也开始收费"
+        r = Q.check(ref, hyp)
+        self.assertNotIn("待复核", r)
+        Q.confirm([(r, ref, self.audio, even_times(hyp, 10.0))], log=lambda *_: None)
+        self.assertFalse(r["需重录"])
+        self.assertEqual(self.heard(), [])
+
+    def test_name_tone_misread(self):
+        """黄仁勋只差声调：新模型写"寻"（xún，11-16 两个新模型都这么写）→ 按带声调比也不一样 → 念错、重录。"""
+        ref, hyp = "黄仁勋还有没有可能回去？千问四 Max 说的是另一件事。", "黄仁迅还有没有可能回去千问4max说的是另一件事"
+        r, start, times = self.run_one(ref, hyp)
+        self.assertEqual([(x["原稿"], x.get("声调")) for x in r["待复核"]], [("黄仁勋", True)])
+        self.answers({start: {"SenseVoice": "黄仁寻还有没有可能回去", "Paraformer": "黄仁勋还有没有可能回去"}})
+        Q.confirm([(r, ref, self.audio, times)], log=lambda *_: None)
+        self.assertTrue(r["需重录"])
+        row = r["复核念错"][0]
+        self.assertEqual((row["判"], row["按声调比"], row["各模型"]), ("念错", True, {"SenseVoice": "也不一样", "Paraformer": "照原稿"}))
+        self.assertIn("名字按声调比", r["原因"][0])
+        self.assertTrue(Q.misread(r) and Q.misread_only(r))
+
+    def test_name_tone_overturned(self):
+        """两个新模型都写"勋"（或同音同调的"熏"）：算 Whisper 写错了字，不为它重录。"""
+        ref, hyp = "黄仁勋还有没有可能回去？", "黄仁迅还有没有可能回去"
+        r, start, times = self.run_one(ref, hyp)
+        self.answers({start: {"SenseVoice": "黄仁勋还有没有可能回去", "Paraformer": "黄仁熏还有没有可能回去"}})
+        Q.confirm([(r, ref, self.audio, times)], log=lambda *_: None)
+        self.assertFalse(r["需重录"])
+        self.assertEqual(r["复核"][0]["判"], "转写听错")
 
     def test_number_overturned(self):
         ref, hyp = "据报道，Alphabet 一共出现了十六次。", "据报道Alphabet一共出现了是6次"
