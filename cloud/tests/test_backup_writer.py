@@ -229,10 +229,15 @@ def put(rel, text):
 
 
 class DriverLoop(unittest.TestCase):
-    def driver(self, iss, chat, script, **kw):
+    def driver(self, iss, chat, script, sb=None, **kw):
         fd = FakeFd(iss.dir, script)
         sel = lambda: ("选题系统提示", "候选事件……")          # noqa: E731
-        d = BW.Driver(iss, BW.Mimo(iss.dir, chat=chat, **kw), fd_runner=fd, sel_inputs=sel, rerun=lambda n: [])
+        sb = list(sb or [])
+
+        def sb_runner():                                     # 假的分镜检查：按剧本给结果，剧本用完就"过了"
+            return sb.pop(0) if sb else (0, "分镜检查通过：6 章")
+        d = BW.Driver(iss, BW.Mimo(iss.dir, chat=chat, **kw), fd_runner=fd, sel_inputs=sel, rerun=lambda n: [],
+                      sb_runner=sb_runner)
         return d, fd
 
     def test_happy_path(self):
@@ -401,6 +406,56 @@ class DriverLoop(unittest.TestCase):
             self.assertEqual(d.run(), 0)
             self.assertEqual([g["thinking"] for g in chat.got], ["disabled"])
             self.assertEqual(json.loads(iss.p(BW.USAGE).read_text(encoding="utf-8"))["合计"]["次数"], 2)
+
+    def test_storyboard_precheck_rounds_then_fd(self):
+        with tempfile.TemporaryDirectory() as t:
+            iss = make_issue(t)
+            put(iss.files["播客"], POD)(iss.dir)
+            put(iss.files["网页"], json.dumps(WEB))(iss.dir)
+            bad1 = (1, "分镜检查没过：核对失败\n  ✗ 要改：「a」里的数字 650 在它引用的事件卡原文（n3）里找不到\n"
+                       "  ✗ 要改：「b」带数字（x），但没写 ref\n")
+            bad2 = (1, "分镜检查没过：触发词对不上旁白\n  ✗ 要改：qwen.claim.show：「x」在「千问」章的旁白里找不到\n")
+            chat = FakeChat([("写这一期的视频稿", json.dumps(SB), "stop"),
+                             ("按程序检查的问题改视频稿", json.dumps(SB), "stop"), ("按程序检查的问题改视频稿", json.dumps(SB), "stop")])
+            d, fd = self.driver(iss, chat, [(2, 6, BW.WAITING, None, None), (0, None, None, None, None)], sb=[bad1, bad2])
+            self.assertEqual(d.run(), 0)
+            fixes = [g["user"] for g in chat.got if "按程序检查的问题改视频稿" in g["user"]]
+            self.assertEqual(len(fixes), 2)
+            self.assertIn("没写 ref", fixes[0])                  # 第一轮把两条都交回去
+            self.assertIn("旁白里找不到", fixes[1])
+            log = json.loads(iss.p(BW.SB_LOG).read_text(encoding="utf-8"))["每一次检查"]
+            self.assertEqual([x["过了"] for x in log], [False, False, True])
+            self.assertEqual(log[0]["种类"], {"数字在引用的事件卡原文里找不到": 1, "带数字却没写 ref": 1})
+            self.assertEqual(d.count("sb_fix"), 2)
+
+    def test_storyboard_rounds_capped_then_fd_stops_without_more_calls(self):
+        with tempfile.TemporaryDirectory() as t:
+            iss = make_issue(t)
+            put(iss.files["播客"], POD)(iss.dir)
+            put(iss.files["网页"], json.dumps(WEB))(iss.dir)
+            bad = (1, "分镜检查没过：核对失败\n  ✗ 要改：「a」里的数字 650 在它引用的事件卡原文（n3）里找不到\n")
+            chat = FakeChat([("写这一期的视频稿", json.dumps(SB), "stop")] +
+                            [("按程序检查的问题改视频稿", json.dumps(SB), "stop")] * 3)
+            write_check(iss.dir, [{"名字": "视频分镜", "要改": ["✗ 要改：「a」里的数字 650 找不到"]}])
+            d, fd = self.driver(iss, chat, [(2, 6, BW.WAITING, None, None), (2, 7, BW.WAITING, None, None)], sb=[bad] * 4)
+            self.assertEqual(d.run(), 2)
+            self.assertEqual(sum(1 for g in chat.got if "按程序检查的问题改视频稿" in g["user"]), BW.SB_ROUNDS)
+            self.assertIn("改满 3 轮", json.loads(iss.p(BW.MARKER).read_text(encoding="utf-8"))["结果"])
+
+    def test_key_rules_are_verbatim_existing_lines(self):
+        text = BW.key_rules_text()
+        for kind, f, start in BW.KEY_RULES:
+            self.assertIn(start, text)
+            whole = (BW.ROOT / f).read_text(encoding="utf-8")
+            line = [x.strip() for x in whole.splitlines() if x.strip().startswith(start)][0]
+            self.assertIn("原文（%s）：%s" % (f, line), text)        # 原样摘，不改字
+        with tempfile.TemporaryDirectory() as t:
+            iss = make_issue(t)
+            self.assertIn("材料一之二", BW.common_material(iss))
+            rv = BW.review_task(iss, BW.task_sections(), {"播客": POD, "网页": "{}", "视频": "{}"})
+            for k in ("出处写清是谁说的", "作者的观点不算到媒体头上", "不自己做加减、换算", "不写卡里没有的关联",
+                      "并列的事不画成先后", "中文名的拼音要对"):
+                self.assertIn(k, rv)
 
     def test_call_cap_stops_midway(self):
         with tempfile.TemporaryDirectory() as t:
