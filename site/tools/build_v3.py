@@ -864,9 +864,58 @@ def has_key(title, keys):
     return any(k in title for k in keys)
 
 
+# 11-16 加（经验库第 68 件）："听这一段"在单人稿里跳晚。11-16 E040（门罗风投 89%）、E028（AI 垃圾论文）晚约 14 秒，
+# 11-11 E047、E005 和 11-13 E055 也是晚 14–16 秒：都跳到了这一条的第二段。原来取"本章第一段分数够本章最高分六成的"，
+# 可开讲那一段常是过渡句加背景（"账算到海外，还有一组数字值得放在一起读……"），和网页标题＋摘要重合得少，不到六成；
+# 分数又有两处偏：① 数字写法不统一，网页写"89%"，播客念"百分之八十九"，对不上；② 英文专名按字母两两计分，
+# "Times Higher Education"一个名字就有约 19 处，念到它的那一段分数虚高，六成的门槛跟着抬高。现在：
+#   ① 打分改用配音对稿同一种写法（pipeline/tts_qc.py 的 tokens()：中文数字统一成阿拉伯数字，英文一个词算一个），
+#      相邻两个算一处（grams）；
+#   ② 按分数找到那一段以后，往前看同一章里紧挨着的段：和这一条至少 WALK_MIN 处相同、又比和别的任何一条都像，
+#      就也是在讲这一条，从那一段听（run_start）；碰到讲别的条目的段、和哪条都不沾的段、章首就停。
+# 11-16 在有播客的 10 期缓存副本上比过：只用①不用②，数字多的细节段分数被抬高，11-16 E005、E003、E057，11-12 E002，
+# 11-01 E033 五条反而跳晚；只用②（仍按 bigr 打分）在这几期上和①②一起用结果相同，①是把诊断出的两处偏差改正，
+# 让"比别的条目都像"少受英文名字母对的干扰（这一点在样期上没有单独显出差别）。
+# 环境变量 FD_LISTEN_SCORE=off 关掉（两处都回到原来的做法），和改之前逐字相同。
+# 没改：对谈一轮里按句找（mid_start、owner_of）、找引子（with_lead_in）仍用 bigr，门槛是按 bigr 定的。
+LISTEN_SCORE = (os.environ.get("FD_LISTEN_SCORE") or "on").strip().lower() not in ("off", "0", "false", "no", "关")
+WALK_MIN = 3
+LISTEN_WALK = []            # 这一期往前找到开讲段的：[(打分用的文字, 按分数找到的那一段, 往前找到的那一段)]
+_TOK_GRAMS = {}
+
+
+def grams(s):
+    """打分用的"字对"：FD_LISTEN_SCORE 开着时按配音对稿的写法分词（数字统一、英文一词一个）再两两相邻成对，关着时就是 bigr。"""
+    if not LISTEN_SCORE or _TQ is None:
+        return bigr(s)
+    s = s or ""
+    if s not in _TOK_GRAMS:
+        t = _TQ.tokens(s)
+        _TOK_GRAMS[s] = set(zip(t, t[1:]))
+    return _TOK_GRAMS[s]
+
+
 def para_scores(text, cand):
-    B = bigr(text)
-    return [len(B & bigr(p["text"])) for p in cand]
+    B = grams(text)
+    return [len(B & grams(p["text"])) for p in cand]
+
+
+def run_start(p, text):
+    """p 是按分数找到的那一段。往前看同一章里紧挨着的段，还在讲这一条的（至少 WALK_MIN 处相同、比别的条目都像）
+    一并算上，返回最前面那一段。FD_LISTEN_SCORE=off 时原样返回 p。"""
+    if not LISTEN_SCORE:
+        return p
+    i = next(i for i, x in enumerate(PARAS) if x is p)
+    mine = grams(text)
+    while i > 0 and PARAS[i - 1]["ch"] == p["ch"]:
+        G = grams(PARAS[i - 1]["text"])
+        o = len(mine & G)
+        if o < WALK_MIN or o <= max((len(grams(k) & G) for k in ITEM_TEXT if k != text), default=0):
+            break
+        i -= 1
+    if PARAS[i] is not p:
+        LISTEN_WALK.append((text, p, PARAS[i]))
+    return PARAS[i]
 
 
 PREVIEW_CH = ("开场", "结尾")   # 开场预告、结尾回顾只提一句，不算“主讲”
@@ -914,7 +963,8 @@ def listen_at(kind, text, nth=None):
     没有自己章节的（国内外对照的条目：在对谈里可能夹在热点或快讯里讲）在整集的逐轮（逐段）文字里找最像的那一轮。
     11-05 改：网页放在某一栏、播客却在别的章里讲的（11-04 墨芯：网页在要闻，播客在热点三），本章里几乎找不到它
     （本章最高分不到 4，或不到整集最高分的六成，与 listen_check 的判据相同），就跳到整集里主讲它的那一段，
-    不再退回本章开头。热点跳章开头，跳哪一章见 head_chapter（11-15 改）。"""
+    不再退回本章开头。热点跳章开头，跳哪一章见 head_chapter（11-15 改）。
+    11-16 改：按分数找到那一段以后，往前找这一条开讲的那一段（run_start）；打分数字统一写法、英文按词（grams）。"""
     if not HAS_POD:
         return None
     keys = KIND_CH.get(kind, ())
@@ -931,17 +981,17 @@ def listen_at(kind, text, nth=None):
             top_ = max(sc)
         best, g_top = main_talk(text)
         if best is not None and not has_key(best["ch"], keys) and top_ < max(4, g_top * 0.6):
-            return jump_in(best, text)
+            return jump_in(run_start(best, text), text)
         if top_ >= 4:
             first = next(p for p, x in zip(cand, sc) if x >= max(4, top_ * 0.6))
-            return jump_in(first, text)
+            return jump_in(run_start(first, text), text)
         return own[0]["start"]
     if PARAS:                                       # 没有自己的章节：整集里找分数最高的那一轮（同分取靠前的）
         sc = para_scores(text, PARAS)
         top_ = max(sc)
         if top_ >= 4:
             best = PARAS[sc.index(top_)]
-            return jump_in(best, text)
+            return jump_in(run_start(best, text), text)
     return None
 
 
@@ -1322,8 +1372,11 @@ for sec in WEB.get("sections") or []:
         if (sid if kind == "term" else ev) in IMG:
             st["image"] = IMG[sid if kind == "term" else ev]
         _lt = (it.get("title_zh") or "") + (it.get("summary_zh") or "")
-        _nm, _nh = len(LISTEN_MID), len(LISTEN_HEAD_MOVED)
+        _nm, _nh, _nw = len(LISTEN_MID), len(LISTEN_HEAD_MOVED), len(LISTEN_WALK)
         st["listen"] = listen_at(kind, _lt, n_head if kind == "headline" else None)
+        for _w in LISTEN_WALK[_nw:]:         # 11-16 加：往前找到这一条开讲的那一段（run_start）
+            print("“听这一段” %s 往前找到这一条开讲的那一段（“%s……”）：跳 %.1f 秒（按分数找到的“%s……”是 %.1f 秒）"
+                  % (sid, _w[2]["text"].strip()[:12], st["listen"], _w[1]["text"].strip()[:12], jump_of(_w[1])))
         for _m in LISTEN_HEAD_MOVED[_nh:]:   # 11-15 加：网页和播客热点顺序不同（head_chapter）
             print("“听这一段” %s 是网页第 %d 条热点，播客里讲它的是“%s”（按顺序会跳“%s”）：跳“%s”开头 %.1f 秒"
                   % (sid, n_head + 1, _m[2], _m[1], _m[2], st["listen"]))

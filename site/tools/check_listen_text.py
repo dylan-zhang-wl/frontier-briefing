@@ -11,12 +11,18 @@ transcribe_many：本机 mlx-whisper，云端 cloud/whisper_standin）转写，�
 "在讲别的条目"的说话合计 5 秒以上（整个窗口都没听到这一条时 3 秒以上），判"跳早了"，写明在讲哪一条、这一条约在第几秒才开口。
 段首拿上一条起头的过渡句（11-09 E060"为什么要自己去抢设备？我们可以把它和……放在一起看"，约 4 秒）不判。
 片头、桥段音乐、"再快看几条"这类和哪条都不沾的话不算；转写模型在音乐里编出来的字一般也不沾，不算。
-只查"跳早"，不查"跳晚"（跳点前面那几句常常是这一条的引子，分不清）。只提醒、不挡发布。
+11-16 加"可能跳晚了"：要闻、快讯这类按文字找段的（热点、周末深度跳章开头，不查），再截跳点之前 20 秒转写，
+从紧挨跳点那一小段往前看：像这一条（和判"开口"同一个标准）的说话合计 5 秒以上、中间没碰到"在讲别的条目"的小段，
+就提醒"可能跳晚了"，写明这一条约从第几秒起（11-16 E040、E028，11-11 E005，11-13 E055，11-03 E055 都是跳到这一条的第二段）。
+原来不查跳晚，是怕跳点前面那句引子分不清；11-16 在 11-01 至 11-16 有播客的 10 期上试：build_v3 改好以后 98 个跳点
+都是 0 秒、一条没报；改之前的 98 个跳点报出 5 条，正是这次改了的（另两条：11-01 E036 3.6 秒没到门槛，11-11 E047 那一截
+转写只出了半句）。环境变量 FD_LISTEN_LATE=off 不查跳晚（少转将近一半）。
+只提醒、不挡发布。
 
 用法（在仓库根目录）：
     ~/.venvs/frontier-daily/bin/python site/tools/check_listen_text.py <期目录> [--out 结果.json] [--window 20]
 期目录里要有 10_网页v3/issues/<日期>/issue.js 和 audio/podcast.mp3（第 13、15 步组装的网页）。
-输出：每条一行；--out 写 JSON（fd 第 16 步写 logs/听这一段_转写核对.json）。没有播客退出码 0、打印"跳过"；
+输出：每条一行（可能跳晚的另起一行）；--out 写 JSON（fd 第 16 步写 logs/听这一段_转写核对.json）。没有播客退出码 0、打印"跳过"；
 转写没跑成退出码 3。截出来的音频放在 ~/.cache/frontier-daily/ 下的临时目录，用完就清；不调任何模型接口，不花钱。
 """
 import argparse
@@ -39,6 +45,10 @@ EARLY_SEC_NONE = 3.0 # 整个窗口里都没听到这一条时，门槛放低到
 MIN_HIT = 3          # 一小段和这一条至少有这么多处字对字相同、又比别的条目多，算这一条开口了
 OTHER_HIT, OTHER_GAP = 4, 2   # 和别的条目至少 4 处、还比这一条多 2 处以上，才算"在讲别的条目"（11-11 E007 段首
                               # "谷歌 DeepMind 这周还发了一项研究，用的也是智能体"回头提上一条，只多 1 处，不算）
+LATE_BEFORE = 20.0   # 11-16 加：跳点之前转写几秒，查"可能跳晚了"
+LATE_SEC = 5.0       # 紧挨跳点之前、像这一条的说话合计这么多秒以上，提醒可能跳晚了
+LATE_SKIP = ("headline", "deep")   # 热点、周末深度跳章开头（之前是上一章或开场预告），不查跳晚
+LISTEN_LATE = (os.environ.get("FD_LISTEN_LATE") or "on").strip().lower() not in ("off", "0", "false", "no", "关")
 FIELDS = ("title_zh", "summary_zh", "tab_zh", "lead_zh", "why_zh", "read_zh", "question_zh", "conclusion_zh")
 INVISIBLE = re.compile(r"[​⁠­﻿]")     # 网页按词组换行插进去的看不见的字符
 CITE = re.compile(r"\[\^[^\]]*\]")
@@ -118,6 +128,29 @@ def judge(sid, segs, texts, grams):
     return rec
 
 
+def judge_late(sid, segs, texts, grams):
+    """跳点之前的转写小段 [(起, 止, 字)]（从跳点起算，都是负数）→ 判断。从紧挨跳点的那一小段往前看：
+    像这一条的（和 judge 判"开口"同一个标准）计秒数；碰到"在讲别的条目"的就停；和哪条都不沾的跳过、不计。"""
+    mine = grams(texts[sid])
+    others = {k: grams(v) for k, v in texts.items() if k != sid}
+    late, first = 0.0, None
+    for a, b, tx in reversed(segs):
+        g = grams(tx)
+        own = len(g & mine)
+        best = max((len(g & v) for v in others.values()), default=0)
+        if best >= OTHER_HIT and best >= own + OTHER_GAP:
+            break
+        if own >= MIN_HIT and own > best:
+            late += max(0.0, b - a)
+            first = a
+    rec = {"跳点前在讲这一条（秒）": round(late, 1)}
+    if late >= LATE_SEC:
+        rec["跳晚"] = "可能跳晚了"
+        rec["这一条约从（跳点前几秒）"] = round(-first, 1)
+        rec["跳点前转写"] = "".join(tx for a, _, tx in segs if a >= first)[:40]
+    return rec
+
+
 def transcribe(clips):
     """clips：{条目: wav 路径} → {条目: [(起, 止, 字)]}，一次进程转完（tts_qc.transcribe_many）。"""
     import tts_qc as Q
@@ -156,12 +189,19 @@ def main():
     os.makedirs(base, exist_ok=True)
     tmp = tempfile.mkdtemp(prefix="check_listen_text_", dir=base)
     try:
-        clips = {}
+        clips, before = {}, {}
         for k, t in jumps.items():
             w = os.path.join(tmp, "%s.wav" % re.sub(r"[^A-Za-z0-9_-]", "_", k))
             subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-y", "-ss", "%.2f" % t, "-t", "%.2f" % a.window,
                             "-i", mp3, "-ac", "1", "-ar", "16000", w], check=True)
             clips[k] = w
+            t0 = max(0.0, t - LATE_BEFORE)
+            if LISTEN_LATE and stories[k].get("kind") not in LATE_SKIP and t - t0 >= 1.0:   # 11-16 加：跳点之前那一截
+                w = os.path.join(tmp, "%s_before.wav" % re.sub(r"[^A-Za-z0-9_-]", "_", k))
+                subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-y", "-ss", "%.2f" % t0, "-t", "%.2f" % (t - t0),
+                                "-i", mp3, "-ac", "1", "-ar", "16000", w], check=True)
+                clips[k + "_before"] = w
+                before[k] = t - t0
         try:
             segs = transcribe(clips)
         except Exception as e:  # noqa: BLE001
@@ -173,10 +213,12 @@ def main():
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     grams = make_grams()
-    n_bad = 0
+    n_bad = n_late = 0
     for k, t in jumps.items():
         r = judge(k, segs[k], texts, grams)
         r["跳点秒"] = t
+        if k in before:
+            r.update(judge_late(k, [(x - before[k], y - before[k], tx) for x, y, tx in segs[k + "_before"]], texts, grams))
         res["各条"][k] = r
         if r["判断"] == "跳早了":
             n_bad += 1
@@ -187,8 +229,14 @@ def main():
         else:
             print("%s  %s：跳到 %.1f 秒%s" % (r["判断"], k, t,
                                           "，%.1f 秒后开口" % r["这一条开口（跳点后几秒）"] if r["判断"] == "对上" else ""))
+        if r.get("跳晚"):
+            n_late += 1
+            print("可能跳晚了  %s：跳到 %.1f 秒，跳点之前约 %.0f 秒已经在讲这一条（约从 %.1f 秒起，转写“%s……”）"
+                  % (k, t, r["跳点前在讲这一条（秒）"], t - r["这一条约从（跳点前几秒）"], r["跳点前转写"][:16]))
     res["跳早了"] = n_bad
-    print("'听这一段'转写核对：%d 条，跳早了 %d 条" % (len(jumps), n_bad))
+    res["可能跳晚了"] = n_late if LISTEN_LATE else "没查（FD_LISTEN_LATE=off）"
+    res["查跳晚：跳点前几秒、门槛秒、不查的栏目"] = [LATE_BEFORE, LATE_SEC, list(LATE_SKIP)]
+    print("'听这一段'转写核对：%d 条，跳早了 %d 条%s" % (len(jumps), n_bad, "，可能跳晚了 %d 条" % n_late if LISTEN_LATE else ""))
     if a.out:
         json.dump(res, open(a.out, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 

@@ -1538,7 +1538,7 @@ class Accept(Step):
     timeout = 900
     check_text = ("shoot_v3（浅色、深色、手机）：无报错、不横向滚动、不缺字；首屏超过 2 MB 提醒；"
                   "check_cites：上标不单独掉行；check_listen：'听这一段'从对的时间放；"
-                  "check_listen_text：'听这一段'跳到的地方转写一遍，像在讲别的条目就提醒（不挡发布）")
+                  "check_listen_text：'听这一段'跳到的地方转写一遍，像在讲别的条目就提醒、跳点之前已经在讲这一条也提醒（不挡发布）")
     fix_text = "任何一项不过：标'验收没过，不要发布'，停下来叫人（现在本来也不自动发布）"
 
     def outputs(self, c):
@@ -1615,8 +1615,8 @@ class Accept(Step):
 
     def listen_text(self, c, env, res):
         """11-15 加：每个'听这一段'从跳点截 20 秒播客转写一遍，和这一条、别的条目的网页文字比
-        （site/tools/check_listen_text.py）。像在讲别的条目（11-15 E006 跳到上一条的尾巴、11-12 热点二三对调）就提醒，
-        不挡发布；转写没跑成也只提醒。结果写 logs/听这一段_转写核对.json，摘要放进验收.json。返回提醒列表。"""
+        （site/tools/check_listen_text.py）。像在讲别的条目（11-15 E006 跳到上一条的尾巴、11-12 热点二三对调）就提醒；
+        11-16 起要闻、快讯再转跳点之前 20 秒，跳点之前已经在讲这一条（跳到了第二段）也提醒可能跳晚了。都不挡发布；转写没跑成也只提醒。结果写 logs/听这一段_转写核对.json，摘要放进验收.json。返回提醒列表。"""
         out_json = c.p("logs/听这一段_转写核对.json")
         rc, out = c.run(self, c.py(TOOLS / "check_listen_text.py", c.issue, "--out", out_json),
                         "听这一段转写核对", timeout=600, env=env)
@@ -1639,6 +1639,12 @@ class Accept(Step):
                          % (k, float(r.get("跳点秒") or 0), float(r.get("之前在讲别的条目（秒）") or 0), r.get("在讲"),
                             "这一条约 %.1f 秒才开口" % (float(r.get("跳点秒") or 0) + on) if on is not None
                             else "%g 秒内没听到这一条" % float(jt.get("窗口秒") or 20)))
+        for k, r in each.items():            # 11-16 加：跳点之前已经在讲这一条（跳到了这一条的第二段）
+            if r.get("跳晚"):
+                t = float(r.get("跳点秒") or 0)
+                warns.append("'听这一段' %s 可能跳晚了：跳到 %.1f 秒，跳点之前约 %.0f 秒已经在讲这一条（约从 %.1f 秒起；"
+                             "转写核对，请耳听；logs/听这一段_转写核对.json）"
+                             % (k, t, float(r.get("跳点前在讲这一条（秒）") or 0), t - float(r.get("这一条约从（跳点前几秒）") or 0)))
         return warns
 
 
