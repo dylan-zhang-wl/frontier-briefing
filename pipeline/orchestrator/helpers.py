@@ -160,10 +160,12 @@ def weekend_warnings(issue, sb):
 
 def stop_lines(e):
     """核对、旁白检查、时长检查停下来的原因（SystemExit 的话）逐条写成"✗ 要改"放在最后，返回退出码 1（2026-11-07 补）。
-    总调度第 7 步只摘末几行带 ✗ 的交回写稿；原来只摘得到"核对失败""旁白不合规则"那一行标题，看不出是哪一句原话、哪个数字。"""
+    总调度第 7 步只摘末几行带 ✗ 的交回写稿；原来只摘得到"核对失败""旁白不合规则"那一行标题，看不出是哪一句原话、哪个数字。
+    2026-11-16 改：原来只印最后 12 条（[-12:]），11-16 MiMo 备用稿第一轮实际 20 处，前 8 处写稿的人根本没收到；
+    现在一条不截，全部印出来（总调度第 7 步把全部 ✗ 行记进 logs/检查_稿子.json，屏幕上只列前 20 条）。"""
     lines = [x.strip() for x in str(e.code if e.code is not None else "").splitlines() if x.strip()]
     print("分镜检查没过：%s" % (lines[0] if lines else "检查没过"))
-    for x in (lines[1:] or lines)[-12:]:
+    for x in (lines[1:] or lines):
         print("  ✗ 要改：" + x)
     return 1
 
