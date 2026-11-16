@@ -70,7 +70,10 @@ CALL_DIR = "logs/备用写稿"
 # 三份稿子：名字 → (fd 要的文件, EDITIONS 指令里的键, 格式, 每次最多输出多少 token)
 KINDS = ("播客", "网页", "视频")
 FORMAT = {"播客": "text", "网页": "json", "视频": "json"}
-MAX_OUT = {"select": 24000, "播客": 24000, "网页": 48000, "视频": 40000, "review": 24000}
+# 每次最多输出多少 token（含思考）。11-16 真跑：选题那次思考就用了 20,899、合计 23,787，贴着原来 24,000 的上限；
+# 同一天试过 64,000 MiMo 接受。只是上限，按实际用量记账。
+MAX_OUT = {"select": 48000, "播客": 48000, "网页": 64000, "视频": 64000, "review": 48000}
+CALL_TIMEOUT = 1800       # 一次调用最多等多少秒（选题那次 439 秒；网页稿输出更长）
 
 FACT_RULES = """## 材料一　事实只能来自事件卡（硬规矩：写稿、审读、改稿都一样）
 - 唯一的事实依据是「材料六」里的事件卡：就是这一期 `03_事件卡/cards_写稿用.json` 里程序逐字核对过的卡（经 `04_文稿/写稿输入.json` 交给你）。除此之外没有别的事实来源：不用你自己记得的知识，不上网，不猜。
@@ -202,7 +205,7 @@ def default_chat():
 
     def chat(model, system, user, max_tokens, temperature):
         try:
-            return llm.chat(model, system, user, max_tokens=max_tokens, temperature=temperature, timeout=900, retries=1)
+            return llm.chat(model, system, user, max_tokens=max_tokens, temperature=temperature, timeout=CALL_TIMEOUT, retries=1)
         except Exception as e:      # noqa: BLE001  报错信息先抹密钥
             raise RuntimeError(keys.hide(str(e))[:300]) from None
     return chat

@@ -99,6 +99,12 @@ class Pure(unittest.TestCase):
         self.assertNotIn("编号", inp["cards"][0]["facts"][0])           # 文件里那份不动
         self.assertEqual(c["facts"][1]["quote"], "B")
 
+    def test_output_caps_leave_room_for_reasoning(self):
+        # 11-16 真跑：选题那次光思考就 20,899 token；上限要给正文留足地方
+        for k, v in BW.MAX_OUT.items():
+            self.assertGreaterEqual(v, 40000, k)
+        self.assertGreaterEqual(BW.CALL_TIMEOUT, 1200)
+
     def test_parse_json_reply(self):
         self.assertEqual(BW.parse_json_reply('```json\n{"a": 1}\n```'), {"a": 1})
         self.assertEqual(BW.parse_json_reply('好的，下面是 JSON：\n{"a": {"b": 2}}\n希望有用'), {"a": {"b": 2}})
