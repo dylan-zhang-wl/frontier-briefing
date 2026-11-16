@@ -360,6 +360,20 @@ class DriverLoop(unittest.TestCase):
             self.assertEqual(len(chat.got), 2)
             self.assertFalse(iss.p(BW.STORYBOARD).exists())
 
+    def test_after_runaway_same_kind_fix_starts_without_thinking(self):
+        with tempfile.TemporaryDirectory() as t:
+            iss = make_issue(t)
+            for k in BW.KINDS:
+                put(iss.files[k], POD if k == "播客" else json.dumps(SB if k == "视频" else WEB))(iss.dir)
+            m0 = BW.Mimo(iss.dir, chat=FakeChat([("x", "", "length", usage(1000, 64000, think=64003))]))
+            with self.assertRaises(BW.ThinkingRunaway):
+                m0.call(6, "写视频稿", "s", "x", 64000, 0.4)
+            write_check(iss.dir, [{"名字": "视频分镜", "要改": ["✗ 要改：数字 650 找不到"]}, {"名字": "稿子", "要改": ["第 1 行 [口吻] 我"]}])
+            chat = FakeChat([("按程序检查的问题改播客稿", POD, "stop"), ("按程序检查的问题改视频稿", json.dumps(SB), "stop")])
+            d, fd = self.driver(iss, chat, [(2, 7, BW.WAITING, None, None), (0, None, None, None, None)])
+            self.assertEqual(d.run(), 0)
+            self.assertEqual([g["thinking"] for g in chat.got], [None, "disabled"])     # 播客照旧开思考，视频直接关
+
     def test_long_answer_truncation_is_not_treated_as_runaway(self):
         with tempfile.TemporaryDirectory() as t:
             iss = make_issue(t)

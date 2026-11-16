@@ -298,6 +298,11 @@ class Mimo:
         return content
 
 
+def kind_of(what):
+    """调用的"做什么"属于哪份稿子（写播客稿、改视频稿_检查……）；选题、审读不属于哪份，返回 None。"""
+    return next((k for k in KINDS if k in str(what or "")), None)
+
+
 def thinking_ran_out(rec):
     """被截断，而且输出几乎全是思考（九成以上）：是思考跑过了头，不是正文太长。"""
     out = int(rec.get("输出token") or 0)
@@ -734,6 +739,9 @@ class Driver:
     def _ask(self, step, what, system, user, max_tokens, temperature, thinking=None):
         """调一次 MiMo。思考把输出上限用光、没写出正文（ThinkingRunaway）时，同一个任务关掉深度思考再要一次（只一次，记账、
         在用量记录里标"深度思考：关"）；还不行就停。不改任何检查，只改 MiMo 这一次怎么写。"""
+        k = kind_of(what)
+        if thinking is None and k and any(thinking_ran_out(c) for c in self.mimo.calls if kind_of(c.get("做什么")) == k):
+            thinking = "disabled"           # 这一份稿子之前思考就跑过头：后面写它、改它都直接关思考（省一次白跑，前后同一种写法）
         try:
             return self.mimo.call(step, what if not thinking else what + "_关思考", system, user, max_tokens, temperature,
                                   thinking=thinking)
