@@ -134,6 +134,29 @@ class Lexicon(unittest.TestCase):
         self.assertNotIn("配音写法（待启用）", rows["微软"])
         self.assertIn("11-14 用户耳听整块试配", rows["微软"]["备注"])
 
+    def test_huangrenxun_active(self):
+        """11-16 用户耳听试配后启用：黄仁勋 → 黄仁薰（同音同调 xūn）。11-09、11-16 播客"勋"用户耳听声调不对；11-16 带前后句试配，
+        原写法 3 条里 2 条三个转写模型都写成二声字，"黄仁薰"3 条都写"勋"。只换送去配音的字；英文 Jensen Huang 不换；
+        对稿比原稿，转写写成"黄仁勋"的照样通过；专名读音清单"黄仁荀"那道自动重录保险不动。"""
+        import yaml
+        import tts_qc as Q
+        active = {f: t for f, t, _ in tts.voice_forms()}
+        self.assertEqual(active.get("黄仁勋"), "黄仁薰")
+        s = "起因是有报道称，创始人兼 CEO 黄仁勋成了外国情报活动的目标；公司网站还发布了黄仁勋写给员工的一份备忘录。"
+        out, subs = tts.voice_text(s)
+        self.assertEqual(out, s.replace("黄仁勋", "黄仁薰"))
+        self.assertEqual(out.count("黄仁薰"), 2)
+        self.assertEqual([(x["写法"], x["处数"]) for x in subs], [("黄仁勋", 2)])
+        self.assertEqual(say("Jensen Huang 和英伟达"), "Jensen Huang 和英伟达")
+        res = Q.check(tts.spoken(s), s)
+        self.assertFalse(res["需重录"], res["原因"])
+        hyp = "起因是有报道称创始人兼CEO黄仁荀成了外国情报活动的目标公司网站还发布了黄仁勋写给员工的一份备忘录"
+        self.assertEqual([(x["名字"], x["转写成"]) for x in Q.name_misreads(s, hyp)], [("黄仁勋", "黄仁荀")])
+        d = yaml.safe_load(tts.LEXICON.read_text(encoding="utf-8"))
+        rows = {x["写法"]: x for x in d["人名"] if isinstance(x, dict)}
+        self.assertNotIn("配音写法（待启用）", rows["黄仁勋"])
+        self.assertIn("11-16 用户耳听试配后定启用", rows["黄仁勋"]["备注"])
+
     def test_bytedance_chuanqi_check_uses_script(self):
         """对稿比的是原稿：转写写成"字节跳动""传奇"的（11-14 试配就是这样）照样通过，送去模型的才是"自节跳动""船奇"。"""
         import tts_qc as Q
