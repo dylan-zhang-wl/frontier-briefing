@@ -42,14 +42,15 @@ class FakeChat:
         self.replies = replies          # [(提示里要有的一句, 回答文字或 Exception, finish)]
         self.got = []
 
-    def __call__(self, model, system, user, max_tokens, temperature):
-        self.got.append({"system": system, "user": user, "max_tokens": max_tokens})
-        for i, (needle, reply, finish) in enumerate(self.replies):
+    def __call__(self, model, system, user, max_tokens, temperature, **kw):
+        self.got.append({"system": system, "user": user, "max_tokens": max_tokens, "thinking": kw.get("thinking")})
+        for i, row in enumerate(self.replies):
+            needle, reply, finish = row[:3]
             if needle in user:
                 self.replies.pop(i)
                 if isinstance(reply, Exception):
                     raise reply
-                return {"content": reply, "usage": usage(), "finish": finish, "model": model}
+                return {"content": reply, "usage": row[3] if len(row) > 3 else usage(), "finish": finish, "model": model}
         raise AssertionError("假 MiMo 没准备这一问：" + user[-200:])
 
 
@@ -330,6 +331,61 @@ class DriverLoop(unittest.TestCase):
             d, fd = self.driver(iss, chat, [(2, 6, BW.WAITING, None, None)])
             self.assertEqual(d.run(), 2)
             self.assertFalse(iss.p(BW.WEB_DRAFT).exists())
+            self.assertEqual(json.loads(iss.p(BW.USAGE).read_text(encoding="utf-8"))["合计"]["次数"], 2)
+
+    def test_thinking_runaway_retries_once_without_thinking(self):
+        with tempfile.TemporaryDirectory() as t:
+            iss = make_issue(t)
+            put(iss.files["播客"], POD)(iss.dir)
+            put(iss.files["网页"], json.dumps(WEB))(iss.dir)
+            runaway = usage(1000, 64000, think=64003)
+            chat = FakeChat([("写这一期的视频稿", "", "length", runaway), ("写这一期的视频稿", json.dumps(SB), "stop")])
+            d, fd = self.driver(iss, chat, [(2, 6, BW.WAITING, None, None), (0, None, None, None, None)])
+            self.assertEqual(d.run(), 0)
+            self.assertEqual([g["thinking"] for g in chat.got], [None, "disabled"])
+            self.assertTrue(iss.p(BW.STORYBOARD).exists())
+            calls = json.loads(iss.p(BW.USAGE).read_text(encoding="utf-8"))["调用"]
+            self.assertEqual([c["做什么"] for c in calls], ["写视频稿", "写视频稿_关思考"])
+            self.assertEqual(calls[1]["深度思考"], "关")
+
+    def test_thinking_runaway_twice_stops(self):
+        with tempfile.TemporaryDirectory() as t:
+            iss = make_issue(t)
+            put(iss.files["播客"], POD)(iss.dir)
+            put(iss.files["网页"], json.dumps(WEB))(iss.dir)
+            runaway = usage(1000, 64000, think=64003)
+            chat = FakeChat([("写这一期的视频稿", "", "length", runaway), ("写这一期的视频稿", "", "length", runaway)])
+            d, fd = self.driver(iss, chat, [(2, 6, BW.WAITING, None, None)])
+            self.assertEqual(d.run(), 2)
+            self.assertEqual(len(chat.got), 2)
+            self.assertFalse(iss.p(BW.STORYBOARD).exists())
+
+    def test_long_answer_truncation_is_not_treated_as_runaway(self):
+        with tempfile.TemporaryDirectory() as t:
+            iss = make_issue(t)
+            put(iss.files["播客"], POD)(iss.dir)
+            put(iss.files["网页"], json.dumps(WEB))(iss.dir)
+            chat = FakeChat([("写这一期的视频稿", "{半截", "length", usage(1000, 64000, think=20000))])
+            d, fd = self.driver(iss, chat, [(2, 6, BW.WAITING, None, None)])
+            self.assertEqual(d.run(), 2)                    # 正文太长被截断：不关思考重来，停下
+            self.assertEqual(len(chat.got), 1)
+
+    def test_resume_after_runaway_rewrites_without_thinking(self):
+        with tempfile.TemporaryDirectory() as t:
+            iss = make_issue(t)
+            put(iss.files["播客"], POD)(iss.dir)
+            put(iss.files["网页"], json.dumps(WEB))(iss.dir)
+            # 上一个进程：写视频稿那次思考用光了上限，程序停了（还没来得及关思考重写）
+            first = FakeChat([("写这一期的视频稿", "", "length", usage(1000, 64000, think=64003))])
+            m0 = BW.Mimo(iss.dir, chat=first)
+            with self.assertRaises(BW.ThinkingRunaway):
+                m0.call(6, "写视频稿", "s", "写这一期的视频稿", 64000, 0.4)
+            (iss.dir / "logs").mkdir(exist_ok=True)
+            (iss.p(BW.RECORD)).write_text(json.dumps({"次数": {"write_视频": 1}, "经过": []}), encoding="utf-8")
+            chat = FakeChat([("写这一期的视频稿", json.dumps(SB), "stop")])
+            d, fd = self.driver(iss, chat, [(2, 6, BW.WAITING, None, None), (0, None, None, None, None)])
+            self.assertEqual(d.run(), 0)
+            self.assertEqual([g["thinking"] for g in chat.got], ["disabled"])
             self.assertEqual(json.loads(iss.p(BW.USAGE).read_text(encoding="utf-8"))["合计"]["次数"], 2)
 
     def test_call_cap_stops_midway(self):

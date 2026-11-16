@@ -93,6 +93,10 @@ class CallFailed(Stop):
     pass
 
 
+class ThinkingRunaway(CallFailed):
+    """思考把输出上限用光了（finish=length，几乎全是思考 token）：MiMo 没有"思考预算"参数，只能开关（文档 deep-thinking）。"""
+
+
 def now_iso():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -203,9 +207,11 @@ def default_chat():
     if not all(ok.values()):
         raise CallFailed("没有 MiMo 密钥（MIMO_API_KEY、MIMO_BASE_URL 不全；本机用 FD_ENV_FILE 指 .env）")
 
-    def chat(model, system, user, max_tokens, temperature):
+    def chat(model, system, user, max_tokens, temperature, thinking=None):
+        extra = {"thinking": {"type": thinking}} if thinking else None
         try:
-            return llm.chat(model, system, user, max_tokens=max_tokens, temperature=temperature, timeout=CALL_TIMEOUT, retries=1)
+            return llm.chat(model, system, user, max_tokens=max_tokens, temperature=temperature, timeout=CALL_TIMEOUT,
+                            retries=1, extra=extra)
         except Exception as e:      # noqa: BLE001  报错信息先抹密钥
             raise RuntimeError(keys.hide(str(e))[:300]) from None
     return chat
@@ -239,7 +245,8 @@ class Mimo:
         self.log["合计"] = self.totals()
         write_json(self.issue / USAGE, self.log)
 
-    def call(self, step, what, system, user, max_tokens, temperature):
+    def call(self, step, what, system, user, max_tokens, temperature, thinking=None):
+        """thinking：None＝MiMo 默认（v2.6 默认开深度思考）；"disabled"＝关思考（只在思考把上限用光以后重写那一次用）。"""
         tot = self.totals()
         if tot["次数"] >= self.max_calls:
             raise Stop("MiMo 调用已到上限 %d 次，不再调用" % self.max_calls)
@@ -257,11 +264,12 @@ class Mimo:
         if not pre.exists():
             write_text(pre, system)
         write_text(d / (base + "_提示.md"), "<!-- 系统提示＝%s -->\n\n%s" % (pre.name, user))
-        rec = {"序号": n, "步": step, "做什么": what, "模型": self.model, "开始": now_iso(),
+        rec = {"序号": n, "步": step, "做什么": what, "模型": self.model, "开始": now_iso(), "深度思考": "关" if thinking == "disabled" else "默认（开）",
                "系统提示指纹": sha16(system), "系统提示字节": len(system.encode("utf-8")), "任务字节": len(user.encode("utf-8"))}
         t0, at = time.time(), datetime.now(timezone.utc)
         try:
-            r = self._chat(self.model, system, user, max_tokens, temperature)
+            r = (self._chat(self.model, system, user, max_tokens, temperature, thinking=thinking) if thinking
+                 else self._chat(self.model, system, user, max_tokens, temperature))
         except Exception as e:      # noqa: BLE001
             rec.update({"秒": round(time.time() - t0, 1), "结果": "失败：%s" % str(e)[:200]})
             self.calls.append(rec)
@@ -284,8 +292,16 @@ class Mimo:
             step, what, n, format(rec["输入token"], ","), format(rec["其中缓存命中"], ","), format(rec["输出token"], ","),
             format(rec["其中思考"], ","), format(rec["credits约"], ","), rec["秒"], rec["结果"]))
         if rec["结果"] != "成":
+            if thinking_ran_out(rec):
+                raise ThinkingRunaway("MiMo 回答不能用（%s）：思考用光了 %s token 的输出上限，没写出正文" % (what, format(max_tokens, ",")))
             raise CallFailed("MiMo 回答不能用（%s）：%s" % (what, rec["结果"]))
         return content
+
+
+def thinking_ran_out(rec):
+    """被截断，而且输出几乎全是思考（九成以上）：是思考跑过了头，不是正文太长。"""
+    out = int(rec.get("输出token") or 0)
+    return str(rec.get("结果") or "").startswith("被截断") and out > 0 and int(rec.get("其中思考") or 0) >= 0.9 * out
 
 
 # ---------------------------------------------------------------- 这一期
@@ -699,30 +715,53 @@ class Driver:
         if not miss:
             raise Stop("fd 停在写稿，三份稿子却都在（%s）" % (rec.get("说明") or "")[:60])
         for k in miss:
-            key = "write_" + k
+            key, what = "write_" + k, "写%s稿" % k
             if self.count(key) >= 1:
+                # 接着跑：上一次是思考把上限用光（没写出正文），而且还没关思考重写过，就直接关思考重写这一次；别的情况停下
+                if self.last_runaway(what) and self.count(key + "_关思考") == 0:
+                    self.bump(key + "_关思考", "上次%s思考用光了上限，接着跑时关思考重写" % what)
+                    self._write_file(k, write_task(self.iss, k, self.sec), 6, what, thinking="disabled")
+                    continue
                 raise Stop("%s稿已经写过一次，文件却不在" % k)
-            self.bump(key, "MiMo 写%s稿" % k)
-            self._write_file(k, write_task(self.iss, k, self.sec), 6, "写%s稿" % k)
+            self.bump(key, "MiMo " + what)
+            self._write_file(k, write_task(self.iss, k, self.sec), 6, what)
 
-    def _write_file(self, kind, task, step, what):
+    def last_runaway(self, what):
+        """用量记录里"做什么"是 what 的最后一次调用，是不是思考把上限用光了。"""
+        rows = [c for c in self.mimo.calls if c.get("做什么") == what]
+        return bool(rows) and thinking_ran_out(rows[-1])
+
+    def _ask(self, step, what, system, user, max_tokens, temperature, thinking=None):
+        """调一次 MiMo。思考把输出上限用光、没写出正文（ThinkingRunaway）时，同一个任务关掉深度思考再要一次（只一次，记账、
+        在用量记录里标"深度思考：关"）；还不行就停。不改任何检查，只改 MiMo 这一次怎么写。"""
+        try:
+            return self.mimo.call(step, what if not thinking else what + "_关思考", system, user, max_tokens, temperature,
+                                  thinking=thinking)
+        except ThinkingRunaway:
+            if thinking == "disabled" or self.count("关思考_" + what) >= 1:
+                raise
+            self.bump("关思考_" + what, "%s：思考用光了 %s token 的上限，关思考重写" % (what, format(max_tokens, ",")))
+            return self.mimo.call(step, what + "_关思考", system, user, max_tokens, temperature, thinking="disabled")
+
+    def _write_file(self, kind, task, step, what, thinking=None):
         if FORMAT[kind] == "json":
-            obj = self._json_call(step, what, self.material, task, MAX_OUT[kind], 0.4)
+            obj = self._json_call(step, what, self.material, task, MAX_OUT[kind], 0.4, thinking=thinking)
             write_json(self.iss.p(self.iss.files[kind]), obj)
         else:
-            txt = clean_text_reply(self.mimo.call(step, what, self.material, task, MAX_OUT[kind], 0.6))
+            txt = clean_text_reply(self._ask(step, what, self.material, task, MAX_OUT[kind], 0.6, thinking=thinking))
             if "## " not in txt:
                 raise Stop("%s稿回答里没有 ## 章节（不像一份稿子），不写进去" % kind)
             write_text(self.iss.p(self.iss.files[kind]), txt)
 
-    def _json_call(self, step, what, system, user, max_tokens, temperature):
+    def _json_call(self, step, what, system, user, max_tokens, temperature, thinking=None):
         """要 JSON 的调用：解析不了，补一句提醒再要一次（算一次调用，记账）；还不行就停。"""
-        txt = self.mimo.call(step, what, system, user, max_tokens, temperature)
+        txt = self._ask(step, what, system, user, max_tokens, temperature, thinking=thinking)
         try:
             obj = parse_json_reply(txt)
         except ValueError:
-            txt = self.mimo.call(step, what + "_重给JSON", system,
-                                 user + "\n\n（再次提醒：只输出一个合法的 JSON 对象，不要任何说明文字。）", max_tokens, temperature)
+            txt = self._ask(step, what + "_重给JSON", system,
+                            user + "\n\n（再次提醒：只输出一个合法的 JSON 对象，不要任何说明文字。）", max_tokens, temperature,
+                            thinking=thinking)
             try:
                 obj = parse_json_reply(txt)
             except ValueError as e:
@@ -787,7 +826,7 @@ class Driver:
             if not any(i["_must"] for i in mine):
                 continue                    # 这份稿子没有必须改的：不为建议改单花一次调用
             draft = self.iss.p(self.iss.files[kind]).read_text(encoding="utf-8")
-            reply = self.mimo.call(9, "改%s稿_审读" % kind, self.material,
+            reply = self._ask(9, "改%s稿_审读" % kind, self.material,
                                    revise_task(self.iss, kind, self.sec, mine, draft), MAX_OUT[kind], 0.3)
             try:
                 parts = split_marked(reply, ["处理", "稿子"])
