@@ -301,6 +301,87 @@ class Run(unittest.TestCase):
             self.assertIn("| 11 | 查不了 |", md)
 
 
+class BackupDayGate(unittest.TestCase):
+    """合并 feat/mimo-release 以后（11-17）：备用那天放行判定第 9 条多了"MiMo 备用""MiMo 审片"两类备注，
+    没开自动放行时第 9 条又会因为 gate.NO_AUTO_RELEASE 那一句不过。审片程序写完结论用放行判定的读法自查，要认得这两件事。"""
+
+    def backup_day(self, d, auto=None):
+        wj(d / "备用写稿.json", {"写稿": "MiMo（备用）", "结果": "第 4–9 步做完",
+                                "视频": "关：这一期不出视频，只写了播客和网页（FD_VIDEO=off）"})
+        if auto is not None:
+            wj(d / "Claude不能用.json", {"原因": "登录失效", "认法": "原话", "哪一步": ["写稿", "审片"], "连续第几天": 1,
+                                         "自动放行": auto, "写于": "2026-11-18T04:20:00Z"})
+
+    def record(self, d):
+        return json.loads((d / BR.RECORD).read_text(encoding="utf-8"))["gate 读法自查"]
+
+    def kinds(self, d):
+        g = gate.Gate(d)
+        g.c9()
+        r = g.results[-1]
+        return r, [n.get("类") for n in r["备注"]]
+
+    def test_no_autorelease_counts_as_match(self):
+        for auto in (None, False):                      # Claude不能用.json 没有、写着 false：都不自动放行
+            with tempfile.TemporaryDirectory() as t:
+                d = make_issue(t)
+                self.backup_day(d, auto)
+                rc, v, md = run_review(d, FakeChat(a=Run.a_reply(None, d), b=b_all(), c=C_OK))
+                self.assertEqual(rc, 0)
+                self.assertTrue(v["放行"])
+                r, kinds = self.kinds(d)
+                self.assertFalse(r["过"])
+                self.assertEqual(r["说明"], gate.NO_AUTO_RELEASE)
+                self.assertIn(gate.BACKUP_KIND, kinds)
+                self.assertIn(gate.MIMO_REVIEW_KIND, kinds)
+                self.assertEqual(kinds.count(gate.LISTEN), len(v["请你耳听"]))
+                self.assertGreater(len(kinds), len(v["请你耳听"]))      # 备注总数比请你耳听多：只数"请你耳听"那类才对得上
+                self.assertTrue(self.record(d)["对得上"], self.record(d))
+
+    def test_autorelease_passes(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = make_issue(t)
+            self.backup_day(d, True)
+            rc, v, md = run_review(d, FakeChat(a=Run.a_reply(None, d), b=b_all(), c=C_OK))
+            self.assertEqual(rc, 0)
+            r, kinds = self.kinds(d)
+            self.assertTrue(r["过"], r["说明"])
+            self.assertEqual(kinds[:2], [gate.BACKUP_KIND, gate.MIMO_REVIEW_KIND])
+            self.assertTrue(self.record(d)["对得上"])
+
+    def test_not_released_still_matches(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = make_issue(t, accept_fail=True)          # 第 40 项立即 → 结论不放行；第 9 条两条理由都在
+            self.backup_day(d, None)
+            rc, v, md = run_review(d, FakeChat(a=Run.a_reply(None, d), b=b_all(), c=C_OK))
+            self.assertEqual(rc, 0)
+            self.assertFalse(v["放行"])
+            self.assertTrue(self.record(d)["对得上"])
+
+    def test_other_reason_still_caught(self):
+        """第 9 条除了"没开自动放行"还有别的理由（这里是结论日期写错）：不能当成对得上。"""
+        with tempfile.TemporaryDirectory() as t:
+            d = make_issue(t)
+            self.backup_day(d, None)
+            v = {"日期": "2026-11-17", "版别": "工作日版", "放行": True, "立即": [], "请你耳听": [], "过": 1, "不过": 0,
+                 "查不了": 0, "写于": "05:00", "审片": BR.REVIEWER}
+            wj(d / BR.VERDICT, v)
+            ok, why = BR.gate_check(BR.Issue(DAY, d), v)
+            self.assertFalse(ok)
+            self.assertIn(gate.NO_AUTO_RELEASE, why)
+            self.assertIn("日期", why)
+
+    def test_listen_count_mismatch_caught(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = make_issue(t)
+            self.backup_day(d, True)
+            x = {"位置": "播客 0:01", "说明": "“甲”→“乙”", "判断": BR.LISTEN_REAL, "依据": "假的", "关乎事实": False}
+            wj(d / BR.VERDICT, {"日期": DAY, "版别": "工作日版", "放行": True, "立即": [], "请你耳听": [x],
+                                "过": 1, "不过": 0, "查不了": 0, "写于": "05:00", "审片": BR.REVIEWER})
+            ok, _ = BR.gate_check(BR.Issue(DAY, d), {"放行": True, "请你耳听": [x, x]})
+            self.assertFalse(ok)
+
+
 class CardsText(unittest.TestCase):
     def test_quotes_and_newlines_found(self):
         cards = [{"facts": [{"quote": 'He said "hello"\nand left'}]}]

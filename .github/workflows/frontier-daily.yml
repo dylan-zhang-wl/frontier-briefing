@@ -195,6 +195,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360        # GitHub 自带机器的上限（6 小时）：写稿最多 150、制作最多 200（第 14 步含视频导演，最坏约 1 小时）、审片最多 60；
                                 # MiMo 备用那天（不出视频）：备用写稿过了 job 开始后 200 分钟不再新开 MiMo 调用，MiMo 审片最多 45
+                                # （那一步开始 28 分钟后、job 开始 330 分钟后都不再新开 MiMo 调用）
     # 正式运行（含接着跑）同一组 frontier-daily：一次只跑一个，免得两期同时配音。（排队组只在本仓库里算；发布在私有仓库的
     # "放行发布"里，它在私有仓库自己排同名的组。）job 一级和流程一级的组名在整个仓库里是同一套（GitHub 文档："a single job or workflow using the same concurrency group"）。
     # queue: max：排队的依次等着（最多 100 个），不会像默认那样被后来的挤掉（被挤掉的那一期标签已认领却没跑，当天就没了）。
@@ -883,11 +884,18 @@ jobs:
           fi
           exit $rc
 
-      # ---- MiMo 审片（11-17 加）：Claude 审片那一步认出 Claude 不能用、开关开着才跑。程序 cloud/backup_review.py 在分支 feat/mimo-review 上做；
+      # ---- MiMo 审片（11-17 加）：Claude 审片那一步认出 Claude 不能用、开关开着才跑。程序 cloud/backup_review.py（11-17 合进来，命令已核对）；
       #      它写 审片.md、审片结论.json（字段和 Claude 那份一样，另加 "审片": "MiMo（备用）"），日志写进 logs/备用审片*。
       #      照抄上面 Claude 审片的保护：期目录里别的文件先设成只读，审完核对有没有别的文件变了、多了。钥匙只有 MiMo 的两把。
       #      程序的屏幕输出写进 logs/备用审片_屏幕输出.log（跟着文件包进私有仓库），公开日志只印退出码、写没写。
       #      第 10–17 步没跑完（fd 退出码不是 0）的不审：这一期本来就出不了刊（"出刊了没有"判没出），不白花 MiMo。
+      #      现在只审"视频：关"那天（MiMo 备用写的那一期）：视频开着、只是审片时 Claude 才不能用的那天，程序不审、一个文件不写（退出码 2），
+      #      没有审片结论，放行判定第 9 条不过，不自动放行、发邮件（改动清单第 7 节第 5 条的 (b)）。
+      #      退出码照 Claude 审片那一步的做法：这一步 continue-on-error，过不过、放不放行都由放行判定第 9 条读 审片结论.json 来定——
+      #        0  两份文件写好了：审片没过（"立即"不空、"放行"是 false）也是 0，第 9 条读到"不放行"就不过；
+      #        2  没审（视频开着、期目录不对），一个文件没写：第 9 条"没有 审片结论.json"不过；
+      #        1  程序自己出错（含写完后用放行判定的读法自查对不上、期目录里别的文件变了）：和 Claude 审片退出码不是 0 一样，
+      #           这一步记失败、往下走；写好的 审片结论.json 照旧交给第 9 条判，公开日志印一句提醒。
       - name: 审片备用：MiMo（Claude 审片不能用时；只许写 审片.md、审片结论.json、logs/备用审片*）
         id: review_backup
         if: always() && steps.day.outputs.produce == 'true' && steps.produce.outcome == 'success' && steps.review.outputs.claude_down != '' && hashFiles(format('测试版/{0}/logs/fd_state.json', steps.day.outputs.day)) != ''
@@ -901,17 +909,22 @@ jobs:
         run: |
           D="测试版/$DAY"
           unset ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
-          if [ ! -f cloud/backup_review.py ]; then
-            echo "::warning::还没有 cloud/backup_review.py（分支 feat/mimo-review 还没合进来），MiMo 审片没做"; exit 1
-          fi
           mkdir -p "$RUNNER_TEMP/review_backup" "$D/logs"
+          # 视频关着（MiMo 备用写的那一期）才明说 --no-video；开着时不加，程序照 FD_VIDEO 和 fd_开关.json 认出"开着"就不审（退出码 2）
+          NV=(); [ "$FD_VIDEO" = "off" ] && NV=(--no-video)
+          # 时限：一次 MiMo 调用最长约 15 分钟（对方约 900 秒断开），这一步 45 分钟，所以这一步开始 28 分钟后不再新开调用；
+          # 也不晚于 job 开始后 330 分钟（job 最多 360 分钟，后面还要放行判定、打包、提交、叫放行发布）。过了时限没调成的那几项记"查不了"，
+          # 三次都没调成就"立即"写一条、不放行（程序自己的做法）。调用次数、token 上限用程序默认（8 次、40 万；11-17 本机试 3 次、24.7 万）
+          now=$(date -u +%s); dl=$(( now + 28 * 60 )); jl=$(( JOB_T0 + 330 * 60 )); [ "$jl" -lt "$dl" ] && dl=$jl
+          NO_CALLS_AFTER=$(date -u -d "@$dl" +%Y-%m-%dT%H:%M)
           # 只许写 审片.md、审片结论.json、logs/备用审片*：别的文件先设成只读（目录不动），审完前后比对
           others() { find "$D" -type f ! -name 审片.md ! -name 审片结论.json ! -path "$D/logs/备用审片*" "$@"; }
           others -exec sha256sum {} + | sort -k2 > "$RUNNER_TEMP/review_backup/before.txt"
           others -exec chmod a-w {} +
           set +e
-          # 等 feat/mimo-review 合进来时核对这一行命令（参数、退出码以那个分支上的 cloud/backup_review.py 为准）
-          ~/.venvs/frontier-daily/bin/python -u cloud/backup_review.py run --issue "测试版/$DAY" > "$D/logs/备用审片_屏幕输出.log" 2>&1
+          # 11-17 合并时核对过：参数照 cloud/backup_review.py 的 run 子命令（--date 定期目录 测试版/<日期>），退出码见上面
+          ~/.venvs/frontier-daily/bin/python -u cloud/backup_review.py run --date "$DAY" "${NV[@]}" \
+            --max-calls 8 --max-tokens 400000 --no-calls-after "$NO_CALLS_AFTER" > "$D/logs/备用审片_屏幕输出.log" 2>&1
           rc=$?
           set -e
           find "$D" -type f -exec chmod u+w {} +
@@ -921,6 +934,12 @@ jobs:
             diff "$RUNNER_TEMP/review_backup/before.txt" "$RUNNER_TEMP/review_backup/after.txt" | head -20
           fi
           echo "MiMo 审片结束：退出码 $rc；审片.md $([ -s "$D/审片.md" ] && echo 写了 || echo 没写)，审片结论.json $([ -s "$D/审片结论.json" ] && echo 写了 || echo 没写)（屏幕输出在 logs/备用审片_屏幕输出.log）"
+          case "$rc" in
+            0) r="写好了（放不放行由放行判定第 9 条读结论定）" ;;
+            2) r="没审（视频开着或期目录不对），第 9 条不过、不自动放行" ;;
+            *) r="程序出错（退出码 $rc）"; echo "::warning::MiMo 审片程序出错（退出码 $rc），原因在期目录 logs/备用审片_屏幕输出.log；写好的审片结论照旧交给放行判定第 9 条" ;;
+          esac
+          echo "### 审片备用：MiMo $r" >> "$GITHUB_STEP_SUMMARY"
           exit $rc
 
       # ---------------- 放行判定（只在"跑到第 17 步"时做）。打包、发布、存往期、发邮件在私有仓库的"放行发布"（publish.yml，它再判一遍）----------------

@@ -1015,12 +1015,21 @@ def build_report(iss, verdict, listen, items, resp, single, asks, notes, usage, 
 
 
 def gate_check(iss, verdict):
-    """用放行判定的读法（gate.Gate.c9）读一遍刚写的结论。"""
+    """用放行判定的读法（gate.Gate.c9）读一遍刚写的结论。
+    对得上＝读得懂；第 9 条过没过和结论的"放行"一样；第 9 条备注里"类"是"请你耳听"的条数和结论的"请你耳听"一样；
+    每处"判断"都是认得出的三个词之一。合并 feat/mimo-release 以后（11-17）放行判定在备用那天多两件事，这里跟着认：
+      - 第 9 条备注另有"MiMo 备用""MiMo 审片"两类（gate.BACKUP_KIND、MIMO_REVIEW_KIND），只数"请你耳听"那类；
+      - 期目录有 备用写稿.json、Claude不能用.json 没写"自动放行": true 时，第 9 条不过，理由只有 gate.NO_AUTO_RELEASE
+        那一句。这是设定（等你看过再手动放行），不是结论读错了：结论"放行"是 true、第 9 条只因为这一句不过，算对得上。"""
     g = gate.Gate(iss.dir)
     g.c9()
     r = g.results[-1]
     rv = read_json(iss.p(VERDICT), None)
-    ok = (isinstance(rv, dict) and r["过"] == bool(verdict["放行"]) and len(r["备注"]) == len(verdict["请你耳听"])
+    listen_notes = [n for n in r["备注"] if isinstance(n, dict) and n.get("类") == gate.LISTEN]
+    passed = r["过"]
+    if not passed and verdict["放行"] is True and str(r["说明"]).split("；") == [gate.NO_AUTO_RELEASE]:
+        passed = True                     # 只因为没开自动放行而不过：结论本身读得懂、"放行"对得上
+    ok = (isinstance(rv, dict) and passed == bool(verdict["放行"]) and len(listen_notes) == len(verdict["请你耳听"])
           and all(gate.listen_classified(x) for x in rv.get("请你耳听") or []))
     return ok, r["说明"]
 
