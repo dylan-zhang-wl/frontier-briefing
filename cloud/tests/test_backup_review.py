@@ -301,6 +301,14 @@ class Run(unittest.TestCase):
             self.assertIn("| 11 | 查不了 |", md)
 
 
+class CardsText(unittest.TestCase):
+    def test_quotes_and_newlines_found(self):
+        cards = [{"facts": [{"quote": 'He said "hello"\nand left'}]}]
+        flat = BR.cards_text(cards)
+        self.assertIn('Hesaid"hello"andleft', flat)               # 照抄的原文带直引号、换行也找得到
+        self.assertNotIn("\\", flat)
+
+
 class Cli(unittest.TestCase):
     def test_video_on_writes_nothing(self):
         with tempfile.TemporaryDirectory() as t:

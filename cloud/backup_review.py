@@ -660,6 +660,24 @@ def slim_cards(cards):
     return walk(cards)
 
 
+def cards_text(cards):
+    """事件卡里所有字符串值去掉空白后拼成一串，给第 11 项核"卡里原文"用。不用 json.dumps：那样引号、换行会变成 \\" \\n，
+    MiMo 照抄的原文里有引号就会被错判成找不到。"""
+    out = []
+
+    def walk(x):
+        if isinstance(x, dict):
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+        elif isinstance(x, str):
+            out.append(re.sub(r"\s", "", x))
+    walk(cards)
+    return "\n".join(out)
+
+
 def task_c(iss, rows, script):
     cards = slim_cards(read_json(iss.p("03_事件卡/cards_写稿用.json"), []) or [])
     people = [dump_yaml(e) for cat, e in lexicon_used(script) if cat == "人名"]
@@ -1038,7 +1056,7 @@ class Review:
         self.sys_bc = ab_common(iss, self.rules, self.rows, self.common, self.settled, todo_b | CALL_C_ITEMS)
         self.user_b = task_b(iss, self.rows, todo_b, self.lm)
         self.user_c = task_c(iss, self.rows, self.script)
-        self.cards_flat = re.sub(r"\s", "", json.dumps(read_json(iss.p("03_事件卡/cards_写稿用.json"), []) or [], ensure_ascii=False))
+        self.cards_flat = cards_text(read_json(iss.p("03_事件卡/cards_写稿用.json"), []) or [])
         if self.lm:
             self.sys_a = system_a(self.rules, self.rows)
             self.user_a = task_a(iss, self.lm, self.script, self.resp)
