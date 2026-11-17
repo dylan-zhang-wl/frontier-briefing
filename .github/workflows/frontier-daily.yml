@@ -647,6 +647,24 @@ jobs:
           echo "### 第 4–9 步备用：MiMo 写稿$r" >> "$GITHUB_STEP_SUMMARY"
           exit $rc
 
+      # 这一期出不出视频（11-17 加）：第 4–9 步刚交给了 MiMo，或者接着跑的这一期本来就是 MiMo 备用写的（期目录里 备用写稿.json 的"视频"
+      # 以"关"开头，比如从第 10 步接着跑、写稿那一步没跑），就不出视频。后面配图、第 10–17 步、审片、MiMo 审片都看这里的 off：
+      # 平常是空的，那几步和以前一样。
+      - name: 定这一期出不出视频（MiMo 备用写的那一期不出）
+        id: video
+        if: always() && steps.day.outputs.day != ''
+        env:
+          DOWN: ${{ steps.write.outputs.claude_down }}
+        run: |
+          off=""
+          if [ -n "$DOWN" ]; then
+            off=true
+          elif python -c "import json,sys; d=json.load(open(sys.argv[1], encoding='utf-8')); sys.exit(0 if str(d.get('视频') or '').startswith('关') else 1)" "测试版/$DAY/备用写稿.json" 2>/dev/null; then
+            off=true
+          fi
+          echo "off=$off" >> "$GITHUB_OUTPUT"
+          if [ "$off" = "true" ]; then echo "这一期不出视频（MiMo 备用写稿）：配图不打包分镜，第 10–17 步带 FD_VIDEO=off、视频导演关"; fi
+
       # ---- 配图（2026-11 起在私有仓库画）：这边不装 Codex、没有 Codex 登录。
       #      把画图材料（网页稿、视频分镜，和 06_配图/ 里已经有的图，免得重画）打成小包放进私有仓库发行版 run-<运行编号>（草稿），
       #      叫私有仓库的"配图"（images.yml）：它照旧用 cloud/web_images.py 画网页图、site/tools/video3_images.py 画视频图，
@@ -662,7 +680,7 @@ jobs:
           GH_TOKEN: ${{ secrets.STATE_REPO_TOKEN }}
           IS_TEST: ${{ steps.day.outputs.test }}
           # MiMo 备用那天不出视频（11-17 加）：不打包分镜（私有仓库"有分镜才画视频图"，免得白花 Codex 额度）。平常是空的，和以前一样
-          NO_VIDEO: ${{ steps.write.outputs.claude_down != '' && 'true' || '' }}
+          NO_VIDEO: ${{ steps.video.outputs.off == 'true' && 'true' || '' }}
         run: |
           D="测试版/$DAY"
           if [ ! -f "$D/04_文稿/claude_网页.json" ]; then echo "没有网页稿，不画图（第 10–17 步用程序封面）"; exit 0; fi
@@ -755,9 +773,9 @@ jobs:
           FD_DIRECTOR_EFFORT: ${{ vars.FD_DIRECTOR_EFFORT }}
           # 输入 review 关掉时，视频导演也关（只管这一次）；开着时不设，按 fd_开关.json 的"视频导演"（现在是开）。
           # MiMo 备用那天（第 4–9 步交给了 MiMo，11-17 加）也关：不出视频，也不该再叫 Claude
-          FD_DIRECTOR: ${{ (steps.day.outputs.review != 'true' || steps.write.outputs.claude_down != '') && 'off' || '' }}
+          FD_DIRECTOR: ${{ (steps.day.outputs.review != 'true' || steps.video.outputs.off == 'true') && 'off' || '' }}
           # MiMo 备用那天不出视频（11-17 用户定）：FD_VIDEO=off；平常是空的（按 fd_开关.json 的"视频"，现在是开），和以前一样
-          FD_VIDEO: ${{ steps.write.outputs.claude_down != '' && 'off' || '' }}
+          FD_VIDEO: ${{ steps.video.outputs.off == 'true' && 'off' || '' }}
           # 只有正式（gemini=default）才给令牌；off、trial 这里是空的，配音程序也带着 --use-backup --budget-usd 0
           GCP_ACCESS_TOKEN: ${{ steps.day.outputs.gemini == 'default' && steps.gcp.outputs.access_token || '' }}
           FD_FW_TIMING: "1"
@@ -805,8 +823,8 @@ jobs:
           GEMINI_MODE: ${{ steps.day.outputs.gemini }}
           BACKUP_ON: ${{ steps.day.outputs.backup }}
           FD_MIMO_AUTORELEASE: ${{ vars.FD_MIMO_AUTORELEASE }}
-          # 第 4–9 步交给了 MiMo（不出视频）的那天才是 true；平常是空的
-          NO_VIDEO: ${{ steps.write.outputs.claude_down != '' && 'true' || '' }}
+          # 这一期是 MiMo 备用写的（不出视频）才是 true；平常是空的
+          NO_VIDEO: ${{ steps.video.outputs.off == 'true' && 'true' || '' }}
         run: |
           D="测试版/$DAY"
           # 告诉审片这一期是测试还是正式（11-09 改：原来不分情况一律说"云端测试"，正式那次会让审片按测试的标准放过缺图、换声音）
@@ -878,8 +896,8 @@ jobs:
         env:
           MIMO_API_KEY: ${{ secrets.MIMO_API_KEY }}
           MIMO_BASE_URL: ${{ secrets.MIMO_BASE_URL }}
-          # 第 4–9 步交给了 MiMo 的那天不出视频；只是审片时 Claude 才不能用的那天，视频照常（空＝按 fd_开关.json）
-          FD_VIDEO: ${{ steps.write.outputs.claude_down != '' && 'off' || '' }}
+          # MiMo 备用写的那一期不出视频；只是审片时 Claude 才不能用的那天，视频照常（空＝按 fd_开关.json）
+          FD_VIDEO: ${{ steps.video.outputs.off == 'true' && 'off' || '' }}
         run: |
           D="测试版/$DAY"
           unset ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
