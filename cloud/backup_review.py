@@ -32,7 +32,8 @@ MiMo 调用用 cloud/backup_writer.py 的 Mimo 类（记用量、守上限、屏
 思考把输出上限用光或 850 秒以上被断开，同一个任务关思考再要一次；回答不是合法 JSON，补一句提醒再要一次。
 某次调用最后还是不成：那几项记"查不了"（调用 A 不成时，程序按 B2 的规矩自己分拣）；三次都不成，就算"审片没做完"，
 "立即"写一条、不放行（每日审片.md"出错怎么办"）。
-11-17 晚加：有调用最后没成（时间到了、上限到了、两次都不是合法 JSON……），审片结论.json 多一栏
+11-17 晚加：有调用最后没成（时间到了、上限到了、两次都不是合法 JSON……），或调用成了、回答里却没有某一项可用的
+结果（没有这一项、"结果"认不出；第 11 项还有：判过但摘的原文对不上卡、没交逐个人名的核对、MiMo 自己写查不了），审片结论.json 多一栏
 "MiMo没查成": [{"项": 11, "是什么": "人名、头衔在原文里", "为什么": "时间到了"}]（调用 A 没成记第 25 项），审片.md 的
 一句话结论和"要你留意的"都写哪几项没查。"放行"照旧只看"立即"；挡不挡自动放行由放行判定第 9 条按
 gate.MIMO_REVIEW_INCOMPLETE_BLOCKS 定（默认挡）。全查成了就没有这一栏，结论和以前一样。
@@ -94,6 +95,11 @@ VIDEO_ITEMS = {15, 16, 22, 24} | set(range(29, 40)) | set(range(45, 54)) | {55, 
 DAYS_ONLY = {9: ("saturday_deep", "sunday_deep"), 17: ("saturday_deep", "sunday_deep"), 27: ("sunday_deep",),
              42: ("saturday_deep", "sunday_deep")}
 NOW_ITEMS = {3, 5, 32, 36, 40, 45, 55}     # 清单标"立即"的项（每日审片.md B 步第 8 条；check_plan 核对）
+# MiMo 自己写"查不了"也算没查成的项（11-17 晚第二轮加）：只有第 11 项。它是纯文字对事件卡的事实检查，材料（稿子、卡、名字核实）
+# 都给了 MiMo，写"查不了"就是事实没核。B 那批不算：提示里明说要看图、要人耳的写"查不了"（如第 41 项"听这一段"），
+# 那是设计内的，算进去几乎每天都挡，程序也分不出它写"查不了"是设计内还是没做。
+MIMO_CANT_COUNTS = CALL_C_ITEMS
+ANSWER_MISSING = "MiMo 回答里没有这一项能认的结果"
 VIDEO_NOTE = "视频那半不适用（视频：关）"
 PART_NOTE = {14: VIDEO_NOTE + "；只看播客每块第一句", 23: VIDEO_NOTE, 26: VIDEO_NOTE, 54: VIDEO_NOTE}
 
@@ -887,7 +893,12 @@ def order_listen(items):
 
 def merge_items(iss, rows, prog, lm_items, b_reply, c_reply, c_cards_text, failed, missed=None):
     """58 项每项一个结果：(结果, 证据, 建议, 建议类)。
-    missed（列表）：调用 B、C 没成、因此没查的那几项，按 (项, 哪一次调用) 加进去（今天不审的项本来就不查，不算）。"""
+    missed（列表）：交给 MiMo、却没拿到可用结果的那几项，按 (项, 哪一次调用, 为什么) 加进去；为什么是 None 时用调用没成的原因。
+      算：调用 B、C 没成（11-17 晚）；调用成了，可回答里没有这一项、或"结果"认不出（11-17 晚第二轮加，B、C 都算）；
+          第 11 项 MiMo 判"过"、摘的卡里原文却有在卡里逐字找不到的，或没交逐个人名的核对（"人名头衔"不是列表）；
+          第 11 项 MiMo 自己写"查不了"（见 MIMO_CANT_COUNTS）。
+      不算（设计上就查不了、或本来不审）：程序先定下的那些——不看图的第 20、21、58 项（周末 42）、"不适用（视频：关）"、
+          今天不审、第 27 项、周日第 24 项、程序判的项读不到文件；还有 B 那批里 MiMo 自己写的"查不了"。"""
     res = {}
     ed = iss.edition
     for n in sorted(rows):
@@ -918,7 +929,7 @@ def merge_items(iss, rows, prog, lm_items, b_reply, c_reply, c_cards_text, faile
             if reply is None:
                 res[n] = (CANT, "查不了：MiMo 调用 %s 没成（%s）" % (key, failed.get(key, "?")), "", "")
                 if missed is not None:
-                    missed.append((n, key))
+                    missed.append((n, key, None))
                 continue
             if key == "B":
                 got = next((x for x in reply.get("各项") or [] if isinstance(x, dict) and str(x.get("编号")).strip() == str(n)), None)
@@ -926,17 +937,32 @@ def merge_items(iss, rows, prog, lm_items, b_reply, c_reply, c_cards_text, faile
                 got = c_reply
             if not got or str(got.get("结果") or "").strip() not in (PASS, FAIL, CANT):
                 res[n] = (CANT, "查不了：MiMo 没给这一项能认的结果", "", "")
+                if missed is not None:
+                    missed.append((n, key, ANSWER_MISSING))
                 continue
             r, ev = str(got["结果"]).strip(), str(got.get("证据") or "").strip()
+            why = None
             if key == "C":
-                bad = [p for p in got.get("人名头衔") or [] if isinstance(p, dict) and p.get("对得上") and
+                people = got.get("人名头衔")
+                plist = people if isinstance(people, list) else []
+                bad = [p for p in plist if isinstance(p, dict) and p.get("对得上") and
                        re.sub(r"\s", "", str(p.get("卡里原文") or "")) not in c_cards_text]
-                ok = [p for p in got.get("人名头衔") or [] if isinstance(p, dict) and p not in bad]
+                ok = [p for p in plist if isinstance(p, dict) and p not in bad]
                 ev += "（程序核过：MiMo 列了 %d 个名字，摘的原文 %d 条在卡里逐字找得到%s）" % (
-                    len(got.get("人名头衔") or []), sum(1 for p in ok if p.get("对得上")),
+                    len(plist), sum(1 for p in ok if p.get("对得上")),
                     "，%d 条找不到：%s" % (len(bad), "、".join(str(p.get("名字")) for p in bad)) if bad else "")
-                if bad and r == PASS:
+                if r == PASS and bad:
                     r = CANT
+                    why = "MiMo 判过，但它摘的卡里原文有 %d 条在卡里逐字找不到（%s）" % (
+                        len(bad), "、".join(str(p.get("名字")) for p in bad[:5]))
+                elif r == PASS and not isinstance(people, list):
+                    r = CANT
+                    why = "MiMo 判过，但回答里没有逐个人名的核对（“人名头衔”一栏）"
+                    ev += "；回答里没有“人名头衔”一栏，程序核不了"
+            if r == CANT and n in MIMO_CANT_COUNTS and why is None:
+                why = "MiMo 自己判这一项查不了：%s" % (str(got.get("证据") or "").strip()[:80] or "没写原因")
+            if why and missed is not None:
+                missed.append((n, key, why))
             if n in PART_NOTE:
                 ev += "；" + PART_NOTE[n]
             res[n] = (r, ev, str(got.get("建议") or "").strip(), str(got.get("建议类") or "").strip())
@@ -1005,7 +1031,7 @@ def build_report(iss, verdict, listen, items, resp, single, asks, notes, usage, 
     na = sum(1 for r, *_ in items.values() if r == NA_VIDEO)
     nt = sum(1 for r, *_ in items.values() if r == NOT_TODAY)
     fails = [(n, v) for n, v in sorted(items.items()) if v[0] == FAIL]
-    missed = gate.mimo_missed(d)                  # 11-17 晚：调用没成、没查的那几项
+    missed = gate.mimo_missed(d)                  # 11-17 晚：调用没成、或回答里没有可用结果的那几项
     after = ("，放行判定会等你看过再手动放行" if gate.MIMO_REVIEW_INCOMPLETE_BLOCKS else "，这几项要你自己看一眼")
     head = ("“立即”一栏是空的，但 MiMo 审片%s没查成%s" % (gate.missed_items(missed), after) if d["放行"] and missed else
             "“立即”一栏是空的，可以放行" if d["放行"] else "有 %d 处“立即”，不放行：%s" % (
@@ -1025,9 +1051,9 @@ def build_report(iss, verdict, listen, items, resp, single, asks, notes, usage, 
     for x in d["立即"]:
         attn.append("**立即：第 %s 项** %s" % (x["编号"], x["说明"]))
     if missed:                                    # 11-17 晚：没查成的放在请你耳听前面，挤不掉
-        attn.append("**MiMo 审片%s没查成**：%s。这几项没人查过%s（调用没成的原话：%s）" % (
+        attn.append("**MiMo 审片%s没查成**：%s。这几项没有可用的审片结果%s%s" % (
             gate.missed_items(missed, names=False), "；".join("第 %s 项 %s：%s" % (x["项"], x["是什么"], x["为什么"]) for x in missed),
-            after, "；".join("调用 %s：%s" % kv for kv in failed.items())))
+            after, "（调用没成的原话：%s）" % "；".join("调用 %s：%s" % kv for kv in failed.items()) if failed else ""))
     elif failed:
         attn.append("**MiMo 有调用没成**：%s" % "；".join("调用 %s：%s" % kv for kv in failed.items()))
     if real:
@@ -1178,15 +1204,19 @@ class Review:
 
     def missed(self, pairs):
         """没查成的那几项 → [{"项": 11, "是什么": "人名、头衔在原文里", "为什么": "时间到了"}]，按项号排。
-        pairs：merge_items 记下的 (项, 调用)。调用 A（请你耳听分拣）没成也算一项（第 25 项）：分拣改由程序按 B2 自己做，
-        但 MiMo 没看过，“单列核对”也没有。"""
-        out = []
+        pairs：merge_items 记下的 (项, 调用, 为什么)；为什么是 None 的是调用没成，用那次调用没成的原因。
+        调用 A（请你耳听分拣）没成也算一项（第 25 项）：分拣改由程序按 B2 自己做，但 MiMo 没看过，“单列核对”也没有。"""
+        out, seen = [], set()
         if "A" in self.failed and self.lm:
-            pairs = list(pairs) + [(25, "A")]
-        for n, key in sorted(set(pairs)):
-            why = self.why.get(key) or "调用没成"
-            if key == "A":
-                why += "（请你耳听改由程序按 B2 自己分拣，单列核对的读音没人看）"
+            pairs = list(pairs) + [(25, "A", None)]
+        for n, key, why in sorted(pairs, key=lambda x: x[0]):
+            if n in seen:
+                continue
+            seen.add(n)
+            if why is None:
+                why = self.why.get(key) or "调用没成"
+                if key == "A":
+                    why += "（请你耳听改由程序按 B2 自己分拣，单列核对的读音没人看）"
             out.append({"项": n, "是什么": item_name(self.rows[n]), "为什么": why})
         return out
 

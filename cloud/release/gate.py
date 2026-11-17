@@ -38,7 +38,8 @@ MiMo 备用那天（2026-11-17 加；Claude 不能用时由 MiMo 写稿、审片
     期目录有 备用写稿.json（这一期是 MiMo 写的）时，读 Claude不能用.json 的“自动放行”，不是 true（没写、读不出也算）就不放行，
     理由“MiMo 备用写稿：按设定等你看过再手动放行”，备注记一条“MiMo 备用”。手动放行（--manual）照旧不管过没过都放行。
     “MiMo 备用”“MiMo 审片”两类备注在 MAIL_KINDS 里：备用那天就算放行了也发邮件。
-    MiMo 审片有调用没成（时间到了、上限到了、几次都不合法；11-17 云端试跑第 11 项就这样没查）时，审片结论.json 多一个
+    MiMo 审片有调用没成（时间到了、上限到了、几次都不合法；11-17 云端试跑第 11 项就这样没查），或回答里没有某一项可用的结果时，
+    审片结论.json 多一个
     “MiMo没查成”: [{"项": 11, "是什么": "人名、头衔在原文里", "为什么": "时间到了"}]。审片是 MiMo 的那天第 9 条读它：
     有就记一条“MiMo 没查成”备注（在 MAIL_KINDS 里，邮件标题、正文都写哪几项没查）；开关 MIMO_REVIEW_INCOMPLETE_BLOCKS
     开着（默认）时第 9 条不过，理由“MiMo 审片第 N 项（……）没查成：等你看过再手动放行”，不管这一期是 MiMo 写的还是 Claude 写的。
@@ -83,7 +84,7 @@ QUIET = (LISTEN_ASR, LISTEN_UNSURE)                 # 这两类请你耳听不�
 SPEED = re.compile(r"语速")                          # 说明里是语速指标的：不进“念错”一栏（11-14，经验库第 67 件 ③）
 FACT_HINT = re.compile(r"版本号|数字|数量级|单位|人名|公司名|模型名|机构名")   # 审片没写“关乎事实”时，从依据里认
 BACKUP_KIND, MIMO_REVIEW_KIND = "MiMo 备用", "MiMo 审片"      # 11-17：MiMo 备用写稿、MiMo 审片那天的备注
-MIMO_MISSED_KIND = "MiMo 没查成"       # 11-17 晚：MiMo 审片有调用没成，那几项没查（邮件要写清是哪几项）
+MIMO_MISSED_KIND = "MiMo 没查成"       # 11-17 晚：MiMo 审片有调用没成、或回答里没有可用结果，那几项没查（邮件要写清是哪几项）
 # 已放行的那期有这几类备注才发邮件；“其他”（软规则放宽）不发。11-17 加 MiMo 备用、MiMo 审片：备用那天放行了也发
 MAIL_KINDS = (MIMO_MISSED_KIND, "备用声音", "配图退回", LISTEN, BACKUP_KIND, MIMO_REVIEW_KIND)
 BACKUP_MARK = "备用写稿.json"          # cloud/backup_writer.py 写在期目录根上：这一期第 4–9 步是 MiMo 备用写的
@@ -91,7 +92,8 @@ CLAUDE_DOWN = "Claude不能用.json"      # 认出“Claude 不能用”的程�
 NO_AUTO_RELEASE = "MiMo 备用写稿：按设定等你看过再手动放行"
 VIDEO_OFF_NOTE = "视频：关（MiMo 备用写稿那天按规矩不出视频）"
 MIMO_MISSED = "MiMo没查成"             # 审片结论.json 里的字段（cloud/backup_review.py 写；只在有没查成的项时才有）
-# 开关（11-17 晚加，主会话问过用户再定）：MiMo 审片有一项因调用没成没查，第 9 条就不过、等你看过再手动放行。
+# 开关（11-17 晚加；用户在会话里定"审完再发"，保持 True）：MiMo 审片有一项没查成（调用没成、或回答里没有可用结果），
+# 第 9 条就不过、等你看过再手动放行。
 # 改成 False：第 9 条过没过、说明和加这一段以前一字不差（只多一条“MiMo 没查成”备注，邮件照样写哪几项没查）。
 MIMO_REVIEW_INCOMPLETE_BLOCKS = True
 
@@ -226,7 +228,7 @@ def missed_note(missed):
     """“MiMo 没查成”那条备注：每一项写是什么、为什么没查；“项”另记编号，邮件标题用。"""
     each = "；".join("第 %s 项%s：%s" % (m["项"], "（%s）" % m["是什么"] if m["是什么"] else "", m["为什么"] or "原因没写")
                     for m in missed)
-    return {"类": MIMO_MISSED_KIND, "说明": "MiMo 审片有 %d 项没查成，没人查过，要你自己看一眼：%s" % (len(missed), each),
+    return {"类": MIMO_MISSED_KIND, "说明": "MiMo 审片有 %d 项没查成（没有可用的审片结果），要你自己看一眼：%s" % (len(missed), each),
             "项": [m["项"] for m in missed]}
 
 
@@ -548,7 +550,7 @@ class Gate:
         who = str(rv.get("审片") or "").strip()            # 11-17：MiMo 审片写“审片”: “MiMo（备用）”；Claude 审片不写这一栏
         mimo = "MiMo" in who
         if mimo:
-            missed = mimo_missed(rv)                       # 11-17 晚：有调用没成、没查的那几项（没有就是 []，一切照旧）
+            missed = mimo_missed(rv)                       # 11-17 晚：没查成的那几项（没有就是 []，一切照旧）
             notes = [{"类": MIMO_REVIEW_KIND, "说明": "审片是 %s%s做的：只看了文字，没听音频" % (who, "" if who.endswith("）") else " ")}] + (
                 [missed_note(missed)] if missed else []) + notes
         notes = pre + notes

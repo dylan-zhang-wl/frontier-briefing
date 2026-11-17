@@ -409,7 +409,7 @@ class Mail(Base):
         self.assertEqual(subject, "【前沿简报】%s 没放行：第 9 条没满足（MiMo 备用写稿、MiMo 审片；Claude 登录失效，连续第 1 天；"
                                   "MiMo 审片第 11 项没查成）" % GOOD_DAY)
         self.assertIn("- 第 9 条 %s：%s" % (gate.TITLES[9], WHY_11), body)
-        self.assertIn("- MiMo 没查成：MiMo 审片有 1 项没查成，没人查过，要你自己看一眼：第 11 项（人名、头衔在原文里）：时间到了", body)
+        self.assertIn("- MiMo 没查成：MiMo 审片有 1 项没查成（没有可用的审片结果），要你自己看一眼：第 11 项（人名、头衔在原文里）：时间到了", body)
         self.assertIn("（run_id）留空", body)
 
     def test_没查成_开关关着_放行了也写(self):

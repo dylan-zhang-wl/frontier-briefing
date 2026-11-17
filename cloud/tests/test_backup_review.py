@@ -522,6 +522,116 @@ class OrderAndMissed(unittest.TestCase):
         self.assertTrue(all("；" not in BR.item_name(rows[n]) and "[" not in BR.item_name(rows[n]) for n in rows))
 
 
+class AnswerMissing(unittest.TestCase):
+    """11-17 晚第二轮加：调用成了，可 MiMo 的回答没给出可用结果的，也记进“MiMo没查成”，走同一条挡放行、写邮件的路。
+    反例：设计上就查不了的（不看图、视频：关、程序读不到文件）和 B 那批里 MiMo 自己写的“查不了”不算。"""
+
+    def run_with(self, d, b=None, c=None, auto=True):
+        BackupDayGate.backup_day(None, d, auto)
+        rc, v, md = run_review(d, FakeChat(a=Run.a_reply(None, d), b=b if b is not None else b_all(), c=c if c is not None else C_OK))
+        g = gate.Gate(d)
+        g.c9()
+        rec = json.loads((d / BR.RECORD).read_text(encoding="utf-8"))
+        return rc, v, md, g.results[-1], rec["gate 读法自查"]["对得上"]
+
+    def only_11(self, v):
+        m = v.get(gate.MIMO_MISSED) or []
+        self.assertEqual([x["项"] for x in m], [11], m)
+        return m[0]["为什么"]
+
+    def test_c_no_result(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = make_issue(t)
+            c = {k: v for k, v in C_OK.items() if k != "结果"}           # 回答里没有“结果”
+            rc, v, md, r, ok = self.run_with(d, c=c)
+            self.assertEqual(self.only_11(v), BR.ANSWER_MISSING)
+            self.assertEqual((rc, ok), (0, True))
+            self.assertFalse(r["过"])
+            self.assertEqual(r["说明"], "MiMo 审片第 11 项（人名、头衔在原文里）没查成：等你看过再手动放行")
+            self.assertIn("第 11 项 人名、头衔在原文里：%s" % BR.ANSWER_MISSING, md)
+            self.assertNotIn("调用没成的原话", md)                         # 调用都成了
+
+    def test_c_unrecognized_result(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = make_issue(t)
+            rc, v, md, r, ok = self.run_with(d, c=dict(C_OK, 结果="基本都对"))
+            self.assertEqual(self.only_11(v), BR.ANSWER_MISSING)
+
+    def test_c_pass_but_quote_not_in_cards(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = make_issue(t)
+            c = json.loads(json.dumps(C_OK))
+            c["人名头衔"][0]["卡里原文"] = "卡里没有的一句话"
+            rc, v, md, r, ok = self.run_with(d, c=c)
+            self.assertIn("| 11 | 查不了 |", md)
+            self.assertEqual(self.only_11(v), "MiMo 判过，但它摘的卡里原文有 1 条在卡里逐字找不到（Andrew Feldman）")
+            self.assertFalse(r["过"])
+            self.assertTrue(ok)
+
+    def test_c_pass_without_people_list(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = make_issue(t)
+            c = {k: v for k, v in C_OK.items() if k != "人名头衔"}
+            rc, v, md, r, ok = self.run_with(d, c=c)
+            self.assertIn("没有逐个人名的核对", self.only_11(v))
+
+    def test_c_says_cant(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = make_issue(t)
+            rc, v, md, r, ok = self.run_with(d, c=dict(C_OK, 结果="查不了", 证据="出处链接打不开"))
+            self.assertEqual(self.only_11(v), "MiMo 自己判这一项查不了：出处链接打不开")
+            self.assertFalse(r["过"])
+
+    def test_c_fail_is_a_result_not_missed(self):
+        """MiMo 判“不过”是查出了问题，不是没查成（摘的原文对不上卡也一样）：不进这一栏。"""
+        with tempfile.TemporaryDirectory() as t:
+            d = make_issue(t)
+            c = json.loads(json.dumps(C_OK))
+            c["结果"] = "不过"
+            c["人名头衔"][0]["卡里原文"] = "卡里没有的一句话"
+            rc, v, md, r, ok = self.run_with(d, c=c)
+            self.assertNotIn(gate.MIMO_MISSED, v)
+            self.assertIn("| 11 | 不过 |", md)
+            self.assertTrue(r["过"], r["说明"])
+
+    def test_b_items_missing_or_unrecognized(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = make_issue(t)
+            b = b_all()
+            b["各项"] = [x for x in b["各项"] if x["编号"] != "41"]          # 漏了第 41 项
+            next(x for x in b["各项"] if x["编号"] == "43")["结果"] = "大致没问题"
+            rc, v, md, r, ok = self.run_with(d, b=b)
+            m = v[gate.MIMO_MISSED]
+            self.assertEqual([x["项"] for x in m], [41, 43])
+            self.assertEqual({x["为什么"] for x in m}, {BR.ANSWER_MISSING})
+            self.assertEqual(r["说明"], "MiMo 审片第 41 项（\"听这一段\"）、第 43 项（新名字）没查成：等你看过再手动放行")
+            self.assertTrue(ok)
+
+    def test_b_without_items_list(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = make_issue(t)
+            rc, v, md, r, ok = self.run_with(d, b={"材料里要人做事的话": []})
+            self.assertEqual([x["项"] for x in v[gate.MIMO_MISSED]], B_TODAY)
+
+    def test_design_cant_does_not_block(self):
+        """反例：不看图的项、视频：关的项、程序读不到文件判的查不了（第 4 项没有月度账本）、B 那批 MiMo 自己写的查不了，
+        都不进“MiMo没查成”，第 9 条照常放行。"""
+        with tempfile.TemporaryDirectory() as t:
+            d = make_issue(t)
+            (d.parent / "月度账本/2026-11.json").rename(d.parent / "账本挪开.json")
+            b = b_all()
+            for x in b["各项"]:
+                if x["编号"] in ("41", "44"):
+                    x.update(结果="查不了", 证据="要人耳听、要看图")
+            rc, v, md, r, ok = self.run_with(d, b=b)
+            self.assertNotIn(gate.MIMO_MISSED, v)
+            for n in (4, 20, 21, 41, 44, 58):
+                self.assertIn("| %d | 查不了 |" % n, md)
+            self.assertIn("不适用（视频：关）", md)
+            self.assertTrue(r["过"], r["说明"])
+            self.assertEqual((rc, ok), (0, True))
+
+
 class ItemOne(unittest.TestCase):
     """第 1 项“当天这期在不在”：MiMo 备用写稿那天不要 自检.md（11-17 云端试跑因此误判不过、一句话结论写了“网页、播客不齐”），
     改核播客稿、网页稿、配音、网页；Claude 写稿那天照旧。"""
