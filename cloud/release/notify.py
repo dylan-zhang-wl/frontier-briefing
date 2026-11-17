@@ -41,6 +41,8 @@ chatgpt.com/codex/settings/usage”（11-14 定的说法），标题里写“Cod
     MiMo 审片只看了文字没听音频、备用写稿.json 里记的“要人看”。没放行时写清怎么手动放行（私有仓库的“放行发布”，
     运行编号留空，填日期和放行理由）；没出刊时“卡在哪”后面加一句“MiMo 备用写稿也停在第几步”。
     Claude不能用.json 读不到、字段缺失按最保守处理：自动放行当 false，连续天数当 1。三样都没有的日子，邮件和原来一字不差。
+11-17 晚加：MiMo 审片有调用没成、有几项没查（放行结论里“MiMo 没查成”那类备注，gate.py 读审片结论的“MiMo没查成”写的），
+    不管放没放行，标题括号里写“MiMo 审片第 11 项没查成”，正文备注里逐项写是什么、为什么没查。没有这类备注的日子一字不差。
 """
 import argparse
 import json
@@ -389,13 +391,22 @@ def manual_release_lines(day):
             "4. 点绿色的 Run workflow。它会照样逐条判一遍、写进放行结论，但不管过没过都放行，再发布到网站。"]
 
 
+def missed_tag(notes):
+    """“MiMo 没查成”备注 → 标题里那一段“MiMo 审片第 11 项没查成”；没有这类备注返回空字符串。"""
+    m = [n for n in notes or [] if isinstance(n, dict) and n.get("类") == gate.MIMO_MISSED_KIND]
+    if not m:
+        return ""
+    items = [str(i) for n in m for i in (n.get("项") if isinstance(n.get("项"), list) else [])]
+    return "MiMo 审片第 %s 项没查成" % "、".join(items) if items else "MiMo 审片有项没查成"
+
+
 def kinds_of(tell, codex=False, quota=False):
-    """标题括号里的几类：请你耳听写上几处。"""
+    """标题括号里的几类：请你耳听写上几处；MiMo 没查成写上哪几项（11-17 晚加）。"""
     out = []
     for k in NOTE_KINDS:
         m = [n for n in tell if n["类"] == k]
         if m:
-            out.append("%s %d 处" % (k, len(m)) if k == gate.LISTEN else k)
+            out.append("%s %d 处" % (k, len(m)) if k == gate.LISTEN else missed_tag(m) if k == gate.MIMO_MISSED_KIND else k)
     if codex:
         out.append("Codex 要重新登录")
     if quota:
@@ -467,10 +478,14 @@ def build(issue, kind="auto", published=None, claim=None, claim_tag=None, saturd
         rv = head_lines(issue / "审片.md", 12)
         lines += ["", "审片.md 开头：", "", rv or "（没有 审片.md：审片没跑或没写完）"]
         subject = "【前沿简报】%s 没放行：第 %s 条没满足" % (day, "、".join(str(c.get("编号")) for c in failed) or "?")
+        miss = missed_tag(v.get("备注"))        # 11-17 晚：MiMo 审片有没查成的项，标题里写哪几项
         if backup:          # 11-17：备用那天，手动放行写成一步一步的
             lines += [""] + manual_release_lines(day) + ["成品整期目录在%s，手动放行就从那里取。" % bundle_where(day)]
             lines = backup_lines(backup) + lines + later_todo(backup)
-            return True, backup_subject(backup, subject + "（%s）" % backup_tag(backup)), "\n".join(lines + tail)
+            return True, backup_subject(backup, subject + "（%s%s）" % (backup_tag(backup), "；" + miss if miss else "")), \
+                "\n".join(lines + tail)
+        if miss:
+            subject += "（%s）" % miss
         lines += ["", "你看过觉得能发：打开 %s → 左边选“放行发布” → Run workflow → 填日期 %s → Run（手动放行）。" % (actions_url(), day),
                   "成品整期目录在%s，手动放行就从那里取。" % bundle_where(day)]
         return True, subject, "\n".join(lines + tail)

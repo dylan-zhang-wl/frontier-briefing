@@ -212,6 +212,88 @@ class GateBackupDay(Base):
         self.assertIn("网页却带着视频", self.cond(res, 3)["说明"])
 
 
+MISSED_11 = [{"项": 11, "是什么": "人名、头衔在原文里", "为什么": "时间到了"}]
+WHY_11 = "MiMo 审片第 11 项（人名、头衔在原文里）没查成：等你看过再手动放行"
+
+
+class GateMimoMissed(Base):
+    """11-17 晚：审片结论的“MiMo没查成”。开关 gate.MIMO_REVIEW_INCOMPLETE_BLOCKS 开着（默认）第 9 条不过；
+    关着时过没过、说明、证据和没有这一栏时一字不差，只多一条“MiMo 没查成”备注。"""
+
+    def missed(self, missed=MISSED_11, who="MiMo（备用）"):
+        edit_json(self.issue / "审片结论.json", lambda x: x.update({"审片": who, gate.MIMO_MISSED: missed}))
+
+    def test_默认开着(self):
+        self.assertIs(gate.MIMO_REVIEW_INCOMPLETE_BLOCKS, True)
+
+    def test_备用那天_自动放行true_第11项没查成_不放行(self):
+        self.backup_day(auto=True)
+        self.missed()
+        res = self.judge()
+        self.assertFalse(res["放行"])
+        self.assertEqual(res["没过"], [9])
+        self.assertEqual(self.cond(res, 9)["说明"], WHY_11)
+        note = [n for n in res["备注"] if n["类"] == gate.MIMO_MISSED_KIND][0]
+        self.assertEqual(note["项"], [11])
+        self.assertIn("第 11 项（人名、头衔在原文里）：时间到了", note["说明"])
+        self.assertIn("第 9 条（%s）没满足：%s" % (gate.TITLES[9], WHY_11), res["给人看"])
+        self.assertIn("要你自己看一眼", res["给人看"])
+
+    def test_没开自动放行_两句理由先后一定(self):
+        self.backup_day(auto=None)
+        self.missed()
+        self.assertEqual(self.cond(self.judge(), 9)["说明"], gate.NO_AUTO_RELEASE + "；" + WHY_11)
+
+    def test_Claude写稿_MiMo审片_也挡(self):
+        self.missed()                                    # 没有 备用写稿.json：这一期是 Claude 写的，只有审片是 MiMo
+        res = self.judge()
+        self.assertEqual(res["没过"], [9])
+        self.assertEqual(self.cond(res, 9)["说明"], WHY_11)
+
+    def test_超过3项只写编号(self):
+        self.missed([{"项": n, "是什么": "某项", "为什么": "时间到了"} for n in (6, 7, 8, 11)])
+        self.assertEqual(self.cond(self.judge(), 9)["说明"], "MiMo 审片第 6、7、8、11 项没查成：等你看过再手动放行")
+
+    def test_开关关着_和没有这一栏一字不差_只多备注(self):
+        for backup in (True, False):
+            with self.subTest(backup=backup):
+                self.tearDown()
+                self.setUp()
+                if backup:
+                    self.backup_day(auto=True)
+                else:
+                    edit_json(self.issue / "审片结论.json", lambda x: x.update({"审片": "MiMo（备用）"}))
+                before = self.judge()
+                self.missed()
+                with mock.patch.object(gate, "MIMO_REVIEW_INCOMPLETE_BLOCKS", False):
+                    after = self.judge()
+                self.assertTrue(after["放行"])
+                for k in ("放行", "按条件放行", "没过"):
+                    self.assertEqual(before[k], after[k])
+                for a, b in zip(before["条件"], after["条件"]):
+                    self.assertEqual((a["编号"], a["过"], a["说明"], a["证据"]), (b["编号"], b["过"], b["说明"], b["证据"]))
+                extra = [n for n in after["备注"] if n not in before["备注"]]
+                self.assertEqual([n["类"] for n in extra], [gate.MIMO_MISSED_KIND])
+                self.assertEqual([n for n in after["备注"] if n["类"] != gate.MIMO_MISSED_KIND], before["备注"])
+
+    def test_没有这一栏_空列表_Claude审片写了_都照旧(self):
+        self.backup_day(auto=True)
+        base = self.judge()
+        self.missed([])
+        self.assertEqual(self.judge()["条件"], base["条件"])
+        self.missed(who="")                             # Claude 审片：不认这一栏
+        edit_json(self.issue / "审片结论.json", lambda x: x.pop("审片"))
+        res = self.judge()
+        self.assertTrue(res["放行"])
+        self.assertNotIn(gate.MIMO_MISSED_KIND, [n["类"] for n in res["备注"]])
+
+    def test_写坏了也挡(self):
+        self.missed("第 11 项")
+        res = self.judge()
+        self.assertEqual(res["没过"], [9])
+        self.assertIn("没查成：等你看过再手动放行", self.cond(res, 9)["说明"])
+
+
 # ================================================================ 邮件
 class Mail(Base):
     def build(self, **kw):
@@ -318,6 +400,29 @@ class Mail(Base):
         need, subject, body = self.build(published="yes")
         self.assertFalse(need)
 
+    def test_没查成_没放行_标题正文都写哪一项(self):
+        self.backup_day(auto=True)
+        edit_json(self.issue / "审片结论.json", lambda x: x.update({gate.MIMO_MISSED: MISSED_11}))
+        self.verdict()
+        need, subject, body = self.build()
+        self.assertTrue(need)
+        self.assertEqual(subject, "【前沿简报】%s 没放行：第 9 条没满足（MiMo 备用写稿、MiMo 审片；Claude 登录失效，连续第 1 天；"
+                                  "MiMo 审片第 11 项没查成）" % GOOD_DAY)
+        self.assertIn("- 第 9 条 %s：%s" % (gate.TITLES[9], WHY_11), body)
+        self.assertIn("- MiMo 没查成：MiMo 审片有 1 项没查成，没人查过，要你自己看一眼：第 11 项（人名、头衔在原文里）：时间到了", body)
+        self.assertIn("（run_id）留空", body)
+
+    def test_没查成_开关关着_放行了也写(self):
+        self.backup_day(auto=True)
+        edit_json(self.issue / "审片结论.json", lambda x: x.update({gate.MIMO_MISSED: MISSED_11}))
+        with mock.patch.object(gate, "MIMO_REVIEW_INCOMPLETE_BLOCKS", False):
+            res = self.verdict()
+        self.assertTrue(res["放行"])
+        need, subject, body = self.build(published="yes")
+        self.assertEqual(subject, "【前沿简报】%s 已发布（MiMo 备用写稿、MiMo 审片；Claude 登录失效，连续第 1 天；"
+                                  "MiMo 审片第 11 项没查成）" % GOOD_DAY)
+        self.assertIn("第 11 项（人名、头衔在原文里）：时间到了", body)
+
     def test_main_dry_run(self):
         self.backup_day(auto=True)
         self.verdict()
@@ -326,6 +431,21 @@ class Mail(Base):
         with redirect_stdout(io.StringIO()) as out:
             self.assertEqual(notify.main(["--issue", str(self.issue), "--published", "yes", "--dry-run"]), 0)
         self.assertIn("标题：【前沿简报】%s 已发布（MiMo 备用写稿" % GOOD_DAY, out.getvalue())
+
+    def test_main_dry_run_没查成(self):
+        """dry-run（放行 --published yes，和 auto）：标题、正文都提到第 11 项。"""
+        import io
+        from contextlib import redirect_stdout
+        self.backup_day(auto=True)
+        edit_json(self.issue / "审片结论.json", lambda x: x.update({gate.MIMO_MISSED: MISSED_11}))
+        self.verdict()
+        for args in (["--kind", "放行", "--published", "yes"], []):
+            with redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(notify.main(["--issue", str(self.issue), "--dry-run"] + args), 0)
+            text = out.getvalue()
+            title = [x for x in text.splitlines() if x.startswith("标题：")][0]
+            self.assertIn("MiMo 审片第 11 项没查成", title, args)
+            self.assertIn("第 11 项（人名、头衔在原文里）：时间到了", text.split("正文：", 1)[1], args)
 
 
 if __name__ == "__main__":

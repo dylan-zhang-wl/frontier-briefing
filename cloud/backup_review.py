@@ -16,18 +16,26 @@
   调用 C    第 11 项"人名、头衔在原文里"：对着事件卡逐个查。MiMo 摘的卡里原文，程序逐字核在不在卡里。
   不看图    第 20、21、58 项（周末另加 42）记"查不了：MiMo 审片这一项不看图"。
   视频      第 15、16、22、24、29–39、45–53、55–57 项记"不适用（视频：关）"，不算进过、不过、查不了。
-B、C 两次的系统提示一字不差（规矩、清单、稿子、审读），MiMo 按前缀缓存，第二次多半命中。
+  第 1 项   MiMo 备用写稿那天（期目录有 备用写稿.json，"写稿"是 MiMo（备用））不要 自检.md（备用写稿不写它），改核播客稿、
+            网页稿、播客配音、播客 mp3、网页在不在（11-17 晚改：那天第 1 项因为缺 自检.md 误判不过）；Claude 写稿那天照旧。
+调用顺序 A → C → B（11-17 晚改，原来 A → B → C：那天 A、B 都慢，B 又重给了一次 JSON，过了时限，事实检查 C 就没跑）。
+B、C 两次的系统提示一字不差（规矩、清单、稿子、审读），MiMo 按前缀缓存，先跑的 C 留下缓存，B 第二个跑多半命中。
 
 提示里只原样摘已有的规矩和清单，外加说明输入是什么、输出什么格式的话；不写任何针对某一期内容的字。
 只许写三处：审片.md、审片结论.json、logs/备用审片*（MiMo 每次调用的提示、回答、用量在 logs/备用审片_MiMo/ 下）。
 程序前后比对整个期目录，别的文件变了就报错（退出码 1）。
 审片结论.json 的字段和 Claude 审片一样（日期、版别、放行、立即、请你耳听、过、不过、查不了、写于），另加一个
-"审片": "MiMo（备用）"（2026-11-17 主会话定的做法 (a)：gate.py、notify.py 只读认得的字段，多一个不坏）。写完用
+"审片": "MiMo（备用）"（2026-11-17 主会话定的做法 (a)：gate.py、notify.py 只读认得的字段，多一个不坏），有没查成的项时
+再加"MiMo没查成"（见下）。写完用
 gate.py 的读法（Gate.c9）读一遍，确认读得懂、"放行"对得上。
 MiMo 调用用 cloud/backup_writer.py 的 Mimo 类（记用量、守上限、屏幕只印数字），它的文件根指到 logs/备用审片_MiMo/。
 思考把输出上限用光或 850 秒以上被断开，同一个任务关思考再要一次；回答不是合法 JSON，补一句提醒再要一次。
 某次调用最后还是不成：那几项记"查不了"（调用 A 不成时，程序按 B2 的规矩自己分拣）；三次都不成，就算"审片没做完"，
 "立即"写一条、不放行（每日审片.md"出错怎么办"）。
+11-17 晚加：有调用最后没成（时间到了、上限到了、两次都不是合法 JSON……），审片结论.json 多一栏
+"MiMo没查成": [{"项": 11, "是什么": "人名、头衔在原文里", "为什么": "时间到了"}]（调用 A 没成记第 25 项），审片.md 的
+一句话结论和"要你留意的"都写哪几项没查。"放行"照旧只看"立即"；挡不挡自动放行由放行判定第 9 条按
+gate.MIMO_REVIEW_INCOMPLETE_BLOCKS 定（默认挡）。全查成了就没有这一栏，结论和以前一样。
 
 用法（仓库根目录；$PY＝~/.venvs/frontier-daily/bin/python）：
   $PY cloud/backup_review.py run --date 2026-11-17 [--issue-dir <副本>/2026-11-17] --no-video [--max-calls 8] [--max-tokens 400000]
@@ -55,6 +63,7 @@ import tts_qc as Q                                           # noqa: E402  pipel
 from orchestrator.common import EDITIONS, TESTDIR, read_json, video_switch, write_json, write_text  # noqa: E402
 
 REVIEWER = "MiMo（备用）"
+BACKUP_WRITER = "MiMo（备用）"            # 备用写稿.json 的“写稿”（cloud/backup_writer.py 写的）：这一期是 MiMo 写的
 REPORT = "审片.md"
 VERDICT = "审片结论.json"
 LOG_PREFIX = "logs/备用审片"
@@ -473,6 +482,12 @@ def respell_count(iss, script):
 
 
 # ---------------------------------------------------------------- 程序判的几项
+def mimo_wrote(iss):
+    """这一期第 4–9 步是 MiMo 备用写的：期目录根上有 备用写稿.json，“写稿”写着 MiMo（备用）（cloud/backup_writer.py 写的）。"""
+    d = read_json(iss.p(gate.BACKUP_MARK), None)
+    return isinstance(d, dict) and str(d.get("写稿") or "").strip() == BACKUP_WRITER
+
+
 def program_items(iss, script):
     st = iss.state()
     steps = st.get("步骤") or {}
@@ -485,15 +500,30 @@ def program_items(iss, script):
     human_mix = iss.ed["混音"]
     mp3 = iss.p(human_mix + "/episode.mp3")
     web_mp3 = sorted(iss.p("10_网页v3/issues/%s/audio" % iss.day).glob("podcast*.mp3"))
-    miss = [x for x, ok in (("10_网页v3/index.html", iss.p("10_网页v3/index.html").exists()), ("自检.md", iss.p("自检.md").exists()),
-                            (human_mix + "/episode.mp3（或网页里的 audio/podcast.mp3）", mp3.exists() or bool(web_mp3))) if not ok]
     daylog = iss.p("每日运行日志_云端.md").exists() or iss.day in (
         (iss.dir.parent / "每日运行日志.md").read_text(encoding="utf-8") if (iss.dir.parent / "每日运行日志.md").exists() else "")
-    if not daylog:
-        miss.append("每日运行日志里当天那一行")
-    res[1] = (FAIL if miss else PASS, ("缺：" + "；".join(miss)) if miss else
-              "网页 index.html、自检.md、播客 mp3（%s）、当天运行日志都在；视频文件不要求（视频：关）" % (
-                  "episode.mp3" if mp3.exists() else "网页里的 audio/podcast.mp3"))
+    if mimo_wrote(iss):
+        # 11-17 晚：MiMo 备用写稿那天没有 自检.md（自检是 Claude 主会话第 9 步写的，备用写稿不写它），不再要它；
+        # 改成直接核这一天实际该有的：播客稿、网页稿、播客配音（人声）、播客 mp3、网页
+        pod, voice = iss.ed["播客稿"], iss.ed["人声"] + "/episode.mp3"
+        miss = [x for x, ok in ((pod, iss.p(pod).exists()), ("04_文稿/claude_网页.json", iss.p("04_文稿/claude_网页.json").exists()),
+                                (voice, iss.p(voice).exists()),
+                                (human_mix + "/episode.mp3（或网页里的 audio/podcast.mp3）", mp3.exists() or bool(web_mp3)),
+                                ("10_网页v3/index.html", iss.p("10_网页v3/index.html").exists())) if not ok]
+        if not daylog:
+            miss.append("每日运行日志里当天那一行")
+        res[1] = (FAIL if miss else PASS, ("缺：" + "；".join(miss)) if miss else
+                  "MiMo 备用写稿那天：播客稿、网页稿、播客配音、播客 mp3（%s）、网页 index.html、当天运行日志都在；"
+                  "不要 自检.md（备用写稿不写它）；视频文件不要求（视频：关）" % (
+                      "episode.mp3" if mp3.exists() else "网页里的 audio/podcast.mp3"))
+    else:
+        miss = [x for x, ok in (("10_网页v3/index.html", iss.p("10_网页v3/index.html").exists()), ("自检.md", iss.p("自检.md").exists()),
+                                (human_mix + "/episode.mp3（或网页里的 audio/podcast.mp3）", mp3.exists() or bool(web_mp3))) if not ok]
+        if not daylog:
+            miss.append("每日运行日志里当天那一行")
+        res[1] = (FAIL if miss else PASS, ("缺：" + "；".join(miss)) if miss else
+                  "网页 index.html、自检.md、播客 mp3（%s）、当天运行日志都在；视频文件不要求（视频：关）" % (
+                      "episode.mp3" if mp3.exists() else "网页里的 audio/podcast.mp3"))
 
     # 2 17 步都做完（第 10 步配图跳过、第 14、15 步因"视频：关"跳过，算做完）
     bad, skipped = [], []
@@ -855,8 +885,9 @@ def order_listen(items):
     return sorted(items, key=lambda x: (rank.get(x["判断"], 0), x.get("_秒", 0)))
 
 
-def merge_items(iss, rows, prog, lm_items, b_reply, c_reply, c_cards_text, failed):
-    """58 项每项一个结果：(结果, 证据, 建议, 建议类)。"""
+def merge_items(iss, rows, prog, lm_items, b_reply, c_reply, c_cards_text, failed, missed=None):
+    """58 项每项一个结果：(结果, 证据, 建议, 建议类)。
+    missed（列表）：调用 B、C 没成、因此没查的那几项，按 (项, 哪一次调用) 加进去（今天不审的项本来就不查，不算）。"""
     res = {}
     ed = iss.edition
     for n in sorted(rows):
@@ -886,6 +917,8 @@ def merge_items(iss, rows, prog, lm_items, b_reply, c_reply, c_cards_text, faile
                 continue
             if reply is None:
                 res[n] = (CANT, "查不了：MiMo 调用 %s 没成（%s）" % (key, failed.get(key, "?")), "", "")
+                if missed is not None:
+                    missed.append((n, key))
                 continue
             if key == "B":
                 got = next((x for x in reply.get("各项") or [] if isinstance(x, dict) and str(x.get("编号")).strip() == str(n)), None)
@@ -919,14 +952,49 @@ def counts(items):
     return c
 
 
-def build_verdict(iss, now_list, listen, items, written_at):
+def build_verdict(iss, now_list, listen, items, written_at, missed=()):
+    """missed：没查成的那几项（见 Review.missed）。有才加“MiMo没查成”这一栏，全查成了结论和以前一样。
+    “放行”照旧只看“立即”空不空；没查成挡不挡放行由放行判定第 9 条按 gate.MIMO_REVIEW_INCOMPLETE_BLOCKS 定。"""
     c = counts(items)
     clean = [{k: v for k, v in x.items() if not k.startswith("_")} for x in listen]
     for x in clean:
         if x.get("判断") not in JUDGES:           # 写之前再查一遍：不是那三个词一律当多半真念错
             x["判断"] = LISTEN_REAL
-    return {"日期": iss.day, "版别": iss.edition_name(), "放行": not now_list, "立即": now_list, "请你耳听": clean,
-            "过": c[PASS], "不过": c[FAIL], "查不了": c[CANT], "写于": written_at, "审片": REVIEWER}
+    v = {"日期": iss.day, "版别": iss.edition_name(), "放行": not now_list, "立即": now_list, "请你耳听": clean,
+         "过": c[PASS], "不过": c[FAIL], "查不了": c[CANT], "写于": written_at, "审片": REVIEWER}
+    if missed:
+        v[gate.MIMO_MISSED] = [dict(x) for x in missed]
+    return v
+
+
+def item_name(row):
+    """清单那一行“查什么”的短说法：去掉 [经验] 编号、（11-09 改）这类来历，只留第一个“；”前面那句。"""
+    s = row_cells(row)[1]
+    s = re.sub(r"\s*\[[^\]]*\]", "", s)
+    s = re.sub(r"（[^（）]*\d+-\d+[^（）]*）", "", s)
+    return s.split("；")[0].strip()
+
+
+def why_short(e):
+    """调用没成的原因，说成一句人话（写进“MiMo没查成”的“为什么”）。"""
+    m = str(e)
+    if isinstance(e, ValueError):
+        return "回答的 JSON 不是一个对象" if "不是一个对象" in m else "两次回答都不是合法的 JSON"
+    if isinstance(e, bw.ThinkingRunaway):
+        return "思考跑太久被断开（关思考重来也没成）"
+    if "不再新开 MiMo 调用" in m:
+        return "时间到了"
+    if "调用已到上限" in m:
+        return "调用次数到上限"
+    if "用量已到上限" in m or "这一段" in m:
+        return "用量到上限"
+    if "输入约" in m and "没调用" in m:
+        return "输入太长，没调用"
+    if "密钥" in m:
+        return "没有 MiMo 密钥"
+    if "回答不能用" in m:
+        return "回答不能用（被截断或是空的）"
+    return "调用失败"
 
 
 def build_report(iss, verdict, listen, items, resp, single, asks, notes, usage, failed, lm):
@@ -937,8 +1005,11 @@ def build_report(iss, verdict, listen, items, resp, single, asks, notes, usage, 
     na = sum(1 for r, *_ in items.values() if r == NA_VIDEO)
     nt = sum(1 for r, *_ in items.values() if r == NOT_TODAY)
     fails = [(n, v) for n, v in sorted(items.items()) if v[0] == FAIL]
-    head = ("“立即”一栏是空的，可以放行" if d["放行"] else "有 %d 处“立即”，不放行：%s" % (
-        len(d["立即"]), "；".join("第 %s 项 %s" % (x["编号"], x["说明"]) for x in d["立即"])))
+    missed = gate.mimo_missed(d)                  # 11-17 晚：调用没成、没查的那几项
+    after = ("，放行判定会等你看过再手动放行" if gate.MIMO_REVIEW_INCOMPLETE_BLOCKS else "，这几项要你自己看一眼")
+    head = ("“立即”一栏是空的，但 MiMo 审片%s没查成%s" % (gate.missed_items(missed), after) if d["放行"] and missed else
+            "“立即”一栏是空的，可以放行" if d["放行"] else "有 %d 处“立即”，不放行：%s" % (
+                len(d["立即"]), "；".join("第 %s 项 %s" % (x["编号"], x["说明"]) for x in d["立即"])))
     L = ["# 审片 %s（%s）" % (iss.day, d["版别"]), "",
          "> 本期审片由 MiMo（备用）做，只看了文字，没听音频：转写只有配音程序配音时自己转写的那一次，没有另跑；也没看图。"
          "这一期不出视频（视频：关），清单里视频那几项不适用。“立即”的三项（第 3、5、40 项）由程序照放行判定的同一套判法判。", "",
@@ -953,12 +1024,16 @@ def build_report(iss, verdict, listen, items, resp, single, asks, notes, usage, 
     attn = []
     for x in d["立即"]:
         attn.append("**立即：第 %s 项** %s" % (x["编号"], x["说明"]))
+    if missed:                                    # 11-17 晚：没查成的放在请你耳听前面，挤不掉
+        attn.append("**MiMo 审片%s没查成**：%s。这几项没人查过%s（调用没成的原话：%s）" % (
+            gate.missed_items(missed, names=False), "；".join("第 %s 项 %s：%s" % (x["项"], x["是什么"], x["为什么"]) for x in missed),
+            after, "；".join("调用 %s：%s" % kv for kv in failed.items())))
+    elif failed:
+        attn.append("**MiMo 有调用没成**：%s" % "；".join("调用 %s：%s" % kv for kv in failed.items()))
     if real:
         rf = sorted(real, key=lambda x: (not x["关乎事实"], x.get("_秒", 0)))
         attn.append("**%d 处请你耳听多半真念错**：%s" % (len(real), "；".join(
             ("【事实】" if x["关乎事实"] else "") + "%s %s" % (x["位置"], x["说明"]) for x in rf[:4]) + ("……" if len(rf) > 4 else "")))
-    if failed:
-        attn.append("**MiMo 有调用没成**：%s" % "；".join("调用 %s：%s" % kv for kv in failed.items()))
     for n, v in fails:
         if n != 25:                       # 第 25 项不过就是上面那几处多半真念错，不重复
             attn.append("**清单第 %d 项不过**：%s" % (n, v[1][:200]))
@@ -1010,7 +1085,9 @@ def build_report(iss, verdict, listen, items, resp, single, asks, notes, usage, 
     for nline in notes:
         L.append("- " + nline)
     L += ["", "- %s 审片 %s，过 %d、不过 %d、查不了 %d，%s（MiMo 备用审片）" % (
-        iss.day, d["写于"], d["过"], d["不过"], d["查不了"], "能放行；“立即”为空" if d["放行"] else "不放行")]
+        iss.day, d["写于"], d["过"], d["不过"], d["查不了"],
+        ("“立即”为空，但%s没查成" % gate.missed_items(missed, names=False)) if d["放行"] and missed else
+        "能放行；“立即”为空" if d["放行"] else "不放行")]
     return "\n".join(L) + "\n"
 
 
@@ -1020,17 +1097,21 @@ def gate_check(iss, verdict):
     每处"判断"都是认得出的三个词之一。合并 feat/mimo-release 以后（11-17）放行判定在备用那天多两件事，这里跟着认：
       - 第 9 条备注另有"MiMo 备用""MiMo 审片"两类（gate.BACKUP_KIND、MIMO_REVIEW_KIND），只数"请你耳听"那类；
       - 期目录有 备用写稿.json、Claude不能用.json 没写"自动放行": true 时，第 9 条不过，理由只有 gate.NO_AUTO_RELEASE
-        那一句。这是设定（等你看过再手动放行），不是结论读错了：结论"放行"是 true、第 9 条只因为这一句不过，算对得上。"""
+        那一句。这是设定（等你看过再手动放行），不是结论读错了：结论"放行"是 true、第 9 条只因为这一句不过，算对得上。
+    11-17 晚：结论里有"MiMo没查成"时，第 9 条要记一条"MiMo 没查成"备注（读到了）；开关 gate.MIMO_REVIEW_INCOMPLETE_BLOCKS
+    开着时第 9 条另有一句 gate.missed_block 的理由，也是设定。理由只有这两句（照第 9 条的先后，用"；"连起来一字不差）才算对得上。"""
     g = gate.Gate(iss.dir)
     g.c9()
     r = g.results[-1]
     rv = read_json(iss.p(VERDICT), None)
     listen_notes = [n for n in r["备注"] if isinstance(n, dict) and n.get("类") == gate.LISTEN]
     passed = r["过"]
-    if not passed and verdict["放行"] is True and str(r["说明"]).split("；") == [gate.NO_AUTO_RELEASE]:
-        passed = True                     # 只因为没开自动放行而不过：结论本身读得懂、"放行"对得上
+    setting = [x for x in (g.backup_release()[1], gate.missed_block(rv)) if x]
+    if not passed and verdict["放行"] is True and setting and r["说明"] == "；".join(setting):
+        passed = True                     # 只因为设定（没开自动放行、有没查成的项）而不过：结论本身读得懂、"放行"对得上
+    missed_read = not gate.mimo_missed(rv) or any(isinstance(n, dict) and n.get("类") == gate.MIMO_MISSED_KIND for n in r["备注"])
     ok = (isinstance(rv, dict) and passed == bool(verdict["放行"]) and len(listen_notes) == len(verdict["请你耳听"])
-          and all(gate.listen_classified(x) for x in rv.get("请你耳听") or []))
+          and all(gate.listen_classified(x) for x in rv.get("请你耳听") or []) and missed_read)
     return ok, r["说明"]
 
 
@@ -1049,6 +1130,7 @@ class Review:
         self.iss, self.mimo = iss, mimo
         self.caller = Caller(mimo)
         self.failed = {}
+        self.why = {}               # 每次没成的调用：原因的一句人话（why_short）
 
     def prepare(self):
         iss = self.iss
@@ -1083,14 +1165,30 @@ class Review:
     def call(self, key, what, system, user):
         if tokens_est(system, user) > MAX_INPUT_TOKENS:
             self.failed[key] = "输入约 %s token，超过每次 %s 的上限，没调用" % (format(tokens_est(system, user), ","), format(MAX_INPUT_TOKENS, ","))
+            self.why[key] = why_short(self.failed[key])
             say("调用 %s：%s" % (key, self.failed[key]))
             return None
         try:
             return self.caller.ask_json(key, what, system, user, MAX_OUT[key])
         except (bw.Stop, ValueError) as e:
             self.failed[key] = str(e)[:160]
+            self.why[key] = why_short(e)
             say("调用 %s 没成：%s" % (key, str(e)[:80]))
             return None
+
+    def missed(self, pairs):
+        """没查成的那几项 → [{"项": 11, "是什么": "人名、头衔在原文里", "为什么": "时间到了"}]，按项号排。
+        pairs：merge_items 记下的 (项, 调用)。调用 A（请你耳听分拣）没成也算一项（第 25 项）：分拣改由程序按 B2 自己做，
+        但 MiMo 没看过，“单列核对”也没有。"""
+        out = []
+        if "A" in self.failed and self.lm:
+            pairs = list(pairs) + [(25, "A")]
+        for n, key in sorted(set(pairs)):
+            why = self.why.get(key) or "调用没成"
+            if key == "A":
+                why += "（请你耳听改由程序按 B2 自己分拣，单列核对的读音没人看）"
+            out.append({"项": n, "是什么": item_name(self.rows[n]), "为什么": why})
+        return out
 
     def run(self):
         iss = self.iss
@@ -1107,14 +1205,20 @@ class Review:
             say("17 步没做完：不审，结论写了“不放行”")
             return self.finish(before, v, {"没做完": prog["_没做完"]})
         say("%s · %s · 视频：关 · 程序判了 %d 项" % (iss.day, iss.edition_name(), len([k for k in prog if isinstance(k, int)])))
+        # 顺序 A → C → B（11-17 晚改，原来是 A → B → C）：11-17 云端试跑 A、B 都慢，B 回答不是合法 JSON 又重要了一次，
+        # 过了时限，第 11 项（C，对着事件卡核人名、头衔，是事实检查）就没跑。C 只有一项、又是事实检查，排在 B 前面，
+        # 只会被 A 挤；B 的“重给 JSON”照旧紧跟着 B（Caller.ask_json 不动）。B、C 系统提示还是同一份 sys_bc，
+        # 先跑的 C 留下前缀缓存，B 第二个跑照样命中。
         a = self.call("A", "审片A_请你耳听分拣", self.sys_a, self.user_a) if self.lm else None
-        b = self.call("B", "审片B_清单各项", self.sys_bc, self.user_b)
         c = self.call("C", "审片C_人名头衔", self.sys_bc, self.user_c)
+        b = self.call("B", "审片B_清单各项", self.sys_bc, self.user_b)
         listen, lnotes = (merge_listen(self.lm, a, "".join(x["原稿"] for x in self.lm["块"]), self.script) if self.lm else ([], []))
         if self.lm:
             listen += [dict(x, _秒=0, _编号=[], _谁判="程序") for x in self.lm["指标"]]
         listen = order_listen(listen)
-        items = merge_items(iss, self.rows, prog, listen if self.lm else None, b, c, self.cards_flat, self.failed)
+        pairs = []
+        items = merge_items(iss, self.rows, prog, listen if self.lm else None, b, c, self.cards_flat, self.failed, pairs)
+        missed = self.missed(pairs)
         now_list = [{"编号": str(n), "说明": items[n][1][:200]} for n in sorted(NOW_ITEMS) if items.get(n, (PASS,))[0] == FAIL]
         tried = ["A", "B", "C"] if self.lm else ["B", "C"]
         if all(k in self.failed for k in tried):
@@ -1126,20 +1230,21 @@ class Review:
                     asks.append(str(x).strip())
         single = [s for s in (a or {}).get("单列核对") or [] if isinstance(s, dict)]
         written_at = datetime.now(timezone.utc).strftime("%H:%M")
-        v = build_verdict(iss, now_list, listen, items, written_at)
+        v = build_verdict(iss, now_list, listen, items, written_at, missed)
         write_json(iss.p(VERDICT), v)
         notes = self.caller.notes + lnotes
         if self.lm and self.lm["只差空格"]:
             notes.append("另有 %d 处差异只差空格（英文词连写、分写），是归一化的毛病，没算请你耳听" % self.lm["只差空格"])
         write_text(iss.p(REPORT), build_report(iss, v, listen, items, self.resp, single, asks, notes, self.mimo.totals(),
                                                self.failed, self.lm))
-        say("写好了：放行 %s；立即 %d；请你耳听 %d；过 %d、不过 %d、查不了 %d" % (
-            "是" if v["放行"] else "否", len(v["立即"]), len(v["请你耳听"]), v["过"], v["不过"], v["查不了"]))
+        say("写好了：放行 %s；立即 %d；请你耳听 %d；过 %d、不过 %d、查不了 %d%s" % (
+            "是" if v["放行"] else "否", len(v["立即"]), len(v["请你耳听"]), v["过"], v["不过"], v["查不了"],
+            "；没查成第 %s 项" % "、".join(str(x["项"]) for x in missed) if missed else ""))
         extra = {"程序判": {str(k): v_ for k, v_ in prog.items() if isinstance(k, int)},
                  "请你耳听_内部": [{k: x.get(k) for k in ("位置", "判断", "_编号", "_谁判", "_MiMo判断")} for x in listen],
                  "差异": [{k: d[k] for k in ("编号", "位置", "原稿", "转写", "listen_pinyin", "程序拆开看", "最低判断", "程序分拣")}
                         for d in (self.lm or {}).get("处", [])],
-                 "单列核对": self.resp, "MiMo 没成": self.failed, "说明": notes}
+                 "单列核对": self.resp, "MiMo 没成": self.failed, "没查成": missed, "说明": notes}
         return self.finish(before, v, extra)
 
     def finish(self, before, v, extra):
