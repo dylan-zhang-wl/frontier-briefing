@@ -170,18 +170,80 @@ def stop_lines(e):
     return 1
 
 
+MORE_HEAD = ("（下面是一次报全多查出来的：原来前一道没过就不往下查，2026-11-17 起后面几道照查、一起报出来；"
+             "过不过和原来一模一样，每一道怎么判也没改）")
+
+
+def values_relations(sb, V):
+    """数值字段、关系画面两道（只回结果，不印）：(要改的行, 提醒, 标题)。"""
+    # 数值字段（2026-11-03 补）：播放器当数字读的 value 等写成了字（11-03 bill.yield 柱子塌掉、数字没出来）→ 要改
+    vals = V.SB.check_values(sb)
+    # 关系画面（2026-11-02 晚补）：一排小卡撑场、章里没有画关系的模板、国内外章没用 split、同排小卡有图没图混着 → 要改
+    must, warn = V.SB.check_relations(sb)
+    what = (["数值字段 %d 处" % len(vals)] if vals else []) + (["关系画面 %d 处" % len(must)] if must else [])
+    head = "分镜检查没过：%s要改（规则见 写稿_视频v3.md「分镜 JSON：模板目录」%s）" % ("、".join(what), "「画面要画出关系」" if must else "")
+    return vals + must, warn, head
+
+
+def report_rest(issue, sb, V, lint_done, length_done):
+    """一次报全（2026-11-17）：第一道没过以后，把后面原来不再查的几道照查，没过的照原样格式接着印。"""
+    rules = V.load_rules()
+    if not lint_done:
+        try:
+            V.lint_narration(issue)                      # 旁白禁用说法、"我"、读音表
+        except SystemExit as e:
+            stop_lines(e)
+    if not length_done:
+        try:
+            V.check_length(sb, rules)                    # 按字数估，超过 3 分钟就 SystemExit
+        except SystemExit as e:
+            stop_lines(e)
+    rows, warn, head = values_relations(sb, V)
+    for w in warn:
+        print("  提醒：" + w)
+    if rows:
+        print(head)
+        for m in rows:
+            print("  ✗ 要改：" + m)
+
+
 def cmd_storyboard(a):
+    """第 7 步的分镜检查。2026-11-17 起"一次报全"：哪一道没过，原来印的那些字（提醒和第一道没过的那几行）照原样印，
+    后面原来不再查的几道也照查，没过的接在 MORE_HEAD 那一行后面印出来。过不过（退出码）和原来一模一样：有一道没过就是 1。
+    起因：11-16 MiMo 备用稿分镜改了一道才露出下一道，改满三轮还剩四类没报出来。"""
     issue = Path(a.issue_dir).expanduser().resolve()
     import video3_build as V
     import video3_storyboard as SB
     buf = io.StringIO()
+    fails = []                                           # (道名, SystemExit；None＝依赖的那一道没过、这一道没查, 那时已印的长度)
+
+    def on_fail(name, e):
+        fails.append((name, e, len(buf.getvalue())))
     try:
         with contextlib.redirect_stdout(buf):
-            sb, cards, facts = V.prepare(issue, gen=False)       # 结构、事实、数字、触发词；核不上会 SystemExit
-    except SystemExit as e:
+            sb, cards, facts = V.prepare(issue, gen=False, on_fail=on_fail)    # 结构、事实、数字、触发词
+    except SystemExit as e:                              # 分镜读不出来之类（不是哪一道核对没过）：照旧
         print(tidy_warnings(buf.getvalue(), later_images(issue)), flush=True)
         return stop_lines(e)
-    print(tidy_warnings(buf.getvalue(), later_images(issue)), flush=True)
+    text = buf.getvalue()
+    hard = [f for f in fails if f[1] is not None]
+    if hard:
+        first = fails.index(hard[0])
+        _, e0, pos = hard[0]
+        print(tidy_warnings(text[:pos], later_images(issue)), flush=True)      # 到这里和原来逐字相同
+        stop_lines(e0)
+        print(MORE_HEAD)
+        rest = tidy_warnings(text[pos:], later_images(issue))
+        if rest.strip():
+            print(rest, flush=True)
+        for name, e, _ in fails[first + 1:]:
+            if e is None:
+                print("  提醒：%s要用事实核对的结果，事实核对没过，这几道等事实核对过了再查" % name)
+            else:
+                stop_lines(e)
+        report_rest(issue, sb, V, lint_done=False, length_done=False)
+        return 1
+    print(tidy_warnings(text, later_images(issue)), flush=True)
     weekend_warnings(issue, sb)
     if SB.motion_off():
         print("新动效开关关着（%s）：分镜里的新块和新字段这一期不用" % SB.motion_switch()[1])
@@ -189,23 +251,23 @@ def cmd_storyboard(a):
         ms = motion_summary(sb)
         if ms:
             print("新动效：" + ms)
+    lint_passed = False
     try:
         V.lint_narration(issue)                          # 旁白禁用说法、"我"、读音表
+        lint_passed = True
         rules = V.load_rules()
         V.check_length(sb, rules)                        # 按字数估，超过 3 分钟就 SystemExit
     except SystemExit as e:
-        return stop_lines(e)
-    # 数值字段（2026-11-03 补）：播放器当数字读的 value 等写成了字（11-03 bill.yield 柱子塌掉、数字没出来）→ 要改
-    vals = V.SB.check_values(sb)
-    # 关系画面（2026-11-02 晚补）：一排小卡撑场、章里没有画关系的模板、国内外章没用 split、同排小卡有图没图混着 → 要改
-    must, warn = V.SB.check_relations(sb)
+        stop_lines(e)                                    # 到这里和原来逐字相同
+        print(MORE_HEAD)
+        report_rest(issue, sb, V, lint_done=True, length_done=lint_passed)   # 旁白没过时，时长原来没查
+        return 1
+    rows, warn, head = values_relations(sb, V)
     for w in warn:
         print("  提醒：" + w)
-    if vals or must:         # 总调度只摘日志最后几行要紧的，所以"要改"放在最后
-        what = (["数值字段 %d 处" % len(vals)] if vals else []) + (["关系画面 %d 处" % len(must)] if must else [])
-        print("分镜检查没过：%s要改（规则见 写稿_视频v3.md「分镜 JSON：模板目录」%s）"
-              % ("、".join(what), "「画面要画出关系」" if must else ""))
-        for m in vals + must:
+    if rows:                 # 总调度只摘日志最后几行要紧的，所以"要改"放在最后
+        print(head)
+        for m in rows:
             print("  ✗ 要改：" + m)
         return 1
     print("分镜检查通过：%d 章" % len(sb.get("chapters") or []))
