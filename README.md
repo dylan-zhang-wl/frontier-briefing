@@ -170,7 +170,7 @@ $PY site/tools/test_video3_director.py                          # site/tools/ �
 python3 -m unittest discover -s cloud/release/tests -v          # 放行、邮件
 python3 -m unittest discover -s cloud/deploy/tests -v           # 上线包、往期存档
 python3 -m unittest discover -s cloud/trigger/tests -v          # 认领（同一天只出一期）
-python3 -m unittest discover -s cloud/tests -v                  # 本机取回成品（cloud/取回成品.py）、Codex 登录失效、额度用完判定（cloud/codex_login_check.py）
+python3 -m unittest discover -s cloud/tests -v                  # 本机取回成品（cloud/取回成品.py）、Codex 登录失效、额度用完判定（cloud/codex_login_check.py）、备用写稿、MiMo 备用审片（cloud/backup_review.py）
 cd cloud/deploy && node --test tests/worker.test.js             # 网站 Worker
 cd cloud/trigger && node --test tests/worker.test.js            # 保底触发器 Worker
 ```
