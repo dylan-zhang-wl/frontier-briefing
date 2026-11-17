@@ -133,10 +133,13 @@ class Pure(unittest.TestCase):
         self.assertEqual(must_fix_count(md0), 0)
 
     def test_review_items_default_all_files(self):
-        items = BW.review_items({"must": [{"where": "a"}], "suggest": [{"where": "b", "files": ["视频", "瞎写"]}]})
+        items = BW.review_items({"must": [{"where": "a"}, {"where": "b", "files": ["视频", "瞎写"]}],
+                                 "suggest": [{"where": "c", "files": ["播客"]}], "better": [{"where": "d"}]})
         self.assertEqual(items[0]["_files"], list(BW.KINDS))
         self.assertEqual(items[1]["_files"], ["视频"])
-        self.assertEqual([i["_label"] for i in items], ["必须改 1", "建议改 1"])
+        # 11-17 改：备用模式改稿只交必须改，建议改、可以更好不交
+        self.assertEqual([i["_label"] for i in items], ["必须改 1", "必须改 2"])
+        self.assertTrue(all(i["_must"] for i in items))
 
     def test_credits(self):
         noon = datetime(2026, 11, 16, 12, tzinfo=timezone.utc)
@@ -559,7 +562,11 @@ class DriverLoop(unittest.TestCase):
             rv = BW.review_task(iss, sec, {"播客": POD, "网页": "{}", "视频": "{}"})
             title, src = BW.REVIEW_EXTRA
             self.assertIn("7. " + title, rv)
-            self.assertIn("一律算必须改", rv)
+            # 11-17 改：对不上摘录的先去抓取材料原文里核，核得到的不算必须改；原来那两句（一律算必须改、原始材料给不了）都不在了
+            self.assertNotIn("一律算必须改", rv)
+            self.assertNotIn("这一次给不了你", rv)
+            self.assertIn("核得到的不算必须改", title)
+            self.assertIn("材料原文里也核不到的才算必须改", rv)
             for f, start in src:
                 line = [x.strip() for x in (BW.ROOT / f).read_text(encoding="utf-8").splitlines() if x.strip().startswith(start)][0]
                 self.assertIn("原文（%s）：%s" % (f, line), rv)          # 原样摘
@@ -730,6 +737,249 @@ class NoVideo(unittest.TestCase):
         words = lambda t: set(re.findall(r"[A-Za-z_]+", t))          # noqa: E731
         self.assertLessEqual(words(BW.review_out(False)), words(BW.REVIEW_OUT))
         self.assertIsNone(re.search(r"\bE\d{3}\b", BW.review_out(False).replace("E002 的 body_zh", "")))
+
+
+
+# Claude 写的审读意见（合成的，和真的一样分"## 必须改""## 建议改"，每条一个"### "）
+CLAUDE_REVIEW = """必须改：3
+
+# 2026-11-16 独立审读意见（示例）
+
+- 审读人：示例
+
+## 必须改
+
+### 1. 播客开场把甲说成乙
+
+- 原句：……
+- 依据：E001 F0
+
+### 2. 网页 E001 标题丢了限定词
+
+- 原句：……
+
+### 3. 视频第二章画面把并列画成先后
+
+- 原句：……
+
+## 建议改
+
+### 1. 网页某处可以更顺（这一条不交给改稿）
+"""
+
+
+def han_pod(n):
+    """一份播客稿：正文恰好 n 个汉字（章名、注释、语气表不算）。"""
+    body = "甲" * n
+    return "## 开场\n\n" + body + "\n\n<!-- 语气\n{\"开场\": \"calm and steady\"}\n-->\n"
+
+
+class Takeover1117(unittest.TestCase):
+    """11-17 加：Claude 写到一半倒下时 MiMo 接手；只交必须改；审读核材料原文；改稿后数播客字数。"""
+
+    def driver(self, iss, chat, script, video=False, **kw):
+        fd = FakeFd(iss.dir, script)
+
+        def sb_runner():
+            raise AssertionError("这几个测试不做分镜预查")
+        d = BW.Driver(iss, BW.Mimo(iss.dir, chat=chat, **kw), fd_runner=fd, sel_inputs=lambda: ("选题系统提示", "候选事件……"),
+                      rerun=lambda n: [], sb_runner=sb_runner, video=video)
+        return d, fd
+
+    def marker(self, iss):
+        return json.loads(iss.p(BW.MARKER).read_text(encoding="utf-8"))
+
+    def test_review_task_has_materials_only_in_review(self):
+        with tempfile.TemporaryDirectory() as t:
+            iss = make_issue(t)
+            mats = [{"id": "s1", "name": "示例来源", "title": "T", "text": "founder of Example Corp said hello"}]
+            put("03_事件卡/材料/E001.json", json.dumps(mats, ensure_ascii=False))(iss.dir)
+            sec = BW.task_sections()
+            rv = BW.review_task(iss, sec, {"播客": POD, "网页": "{}"}, BW.KINDS_NO_VIDEO)
+            i = rv.find("## 抓取材料原文")
+            self.assertGreater(i, rv.find("## 要审的网页稿"))                     # 附在任务最后、稿子后面
+            self.assertIn("### E001（03_事件卡/材料/E001.json）", rv)
+            self.assertIn(json.dumps(mats, ensure_ascii=False, separators=(",", ":")), rv)   # 原样
+            self.assertNotIn("抓取材料原文（", BW.common_material(iss))              # 共同材料不变（缓存）
+            self.assertNotIn("founder of Example", BW.write_task(iss, "播客", sec))
+            # 没存下材料的卡写明"没有"
+            (iss.dir / "03_事件卡" / "材料" / "E001.json").rename(iss.dir / "挪开.json")
+            self.assertIn("E001：没有存下这张卡的材料", BW.review_task(iss, sec, {"播客": POD, "网页": "{}"}, BW.KINDS_NO_VIDEO))
+
+    def test_revise_task_only_must_wording(self):
+        with tempfile.TemporaryDirectory() as t:
+            iss = make_issue(t)
+            sec = BW.task_sections()
+            for video in (True, False):
+                task = BW.revise_task(iss, "播客", sec, [{"_label": "必须改 1"}], POD, video)
+                mine = task[task.find("# 你这一次的任务：按独立审读"):task.find("## 审读意见")]
+                self.assertNotIn("建议改的，能直接替换", mine)       # 程序自己写的这段不再叫它采纳建议改
+                self.assertIn("这一次只交必须改的几条", mine)
+                # 任务说明_云端.md 第 9 步那一段原样摘（里面有"建议改的……就采纳"），这次不改原文；交过去的条目里没有建议改
+                self.assertIn(sec["改稿"], task)
+
+    def test_suggest_not_sent_to_revise(self):
+        with tempfile.TemporaryDirectory() as t:
+            iss = make_issue(t)
+            for k in BW.KINDS_NO_VIDEO:
+                put(iss.files[k], POD if k == "播客" else json.dumps(WEB))(iss.dir)
+            chat = FakeChat([
+                ("独立审读", json.dumps({"must": [{"where": "必须改的位置甲", "files": ["播客"], "fix": "改"}],
+                                     "suggest": [{"where": "建议改的位置乙", "files": ["播客", "网页"], "fix": "压缩"}],
+                                     "better": [{"where": "可以更好的位置丙", "files": ["网页"]}]}, ensure_ascii=False), "stop"),
+                ("按独立审读的意见改播客稿", '===处理===\n[{"条": "必须改 1", "怎么处理": "改了", "说明": "E001 F0"}]\n'
+                                       "===稿子===\n" + POD + "===完===", "stop"),
+            ])
+            script = [(2, 8, BW.WAITING, None, None), (2, 9, BW.WAITING, None, None), (0, None, None, None, None)]
+            d, fd = self.driver(iss, chat, script)
+            self.assertEqual(d.run(), 0)
+            rev = [g["user"] for g in chat.got if "按独立审读的意见改" in g["user"]]
+            self.assertEqual(len(rev), 1)                                         # 网页只有建议改、可以更好：不花一次调用
+            self.assertIn("必须改的位置甲", rev[0])
+            self.assertNotIn("建议改的位置乙", rev[0])
+            self.assertNotIn("建议改 1", iss.p(BW.HANDLED).read_text(encoding="utf-8"))
+            self.assertEqual(self.marker(iss)["审读"], "MiMo（备用）：另起一次调用")
+
+    def test_claude_review_revised_without_rereview(self):
+        with tempfile.TemporaryDirectory() as t:
+            iss = make_issue(t)
+            for k in BW.KINDS:
+                put(iss.files[k], POD if k == "播客" else json.dumps(WEB))(iss.dir)
+            put(BW.REVIEW, CLAUDE_REVIEW)(iss.dir)
+            chat = FakeChat([
+                ("按独立审读的意见改播客稿", '===处理===\n[{"条": "必须改 1", "怎么处理": "改了", "说明": "E001 F0"}]\n'
+                                       "===稿子===\n" + POD + "===完===", "stop"),
+                ("按独立审读的意见改网页稿", '===处理===\n[{"条": "必须改 2", "怎么处理": "改了", "说明": "E001 F1"}]\n'
+                                       "===稿子===\n" + json.dumps(WEB) + "\n===完===", "stop"),
+            ])
+            script = [(2, 9, BW.WAITING, None, None), (0, None, None, None, None)]
+            d, fd = self.driver(iss, chat, script)
+            self.assertEqual(d.run(), 0)
+            self.assertFalse(any("稿子不是你写的" in g["user"] for g in chat.got))   # 没有重审
+            self.assertEqual(len(chat.got), 2)
+            pod = [g["user"] for g in chat.got if "按独立审读的意见改播客稿" in g["user"]][0]
+            self.assertIn("### 1. 播客开场把甲说成乙", pod)                       # 那一条原样交过去
+            self.assertNotIn("### 2. 网页", pod)
+            self.assertNotIn("这一条不交给改稿", pod)                              # 建议改不交
+            web = [g["user"] for g in chat.got if "按独立审读的意见改网页稿" in g["user"]][0]
+            self.assertIn("### 2. 网页 E001 标题丢了限定词", web)
+            handled = iss.p(BW.HANDLED).read_text(encoding="utf-8")
+            self.assertIn("只涉及视频分镜：这一期不出视频", handled)                # 第 3 条只涉及视频，无视频时不改
+            self.assertIn("播客稿：改了", handled)
+            mk = self.marker(iss)
+            self.assertIn("Claude（备用接手前写好的）", mk["审读"])
+            self.assertEqual(mk["谁写的"], {"播客": "Claude（备用接手前写好的）", "网页": "Claude（备用接手前写好的）"})
+            self.assertEqual(mk["接手时"]["审读意见"], "接手前就在（Claude 写的）")
+            self.assertNotIn("播客开场", json.dumps(mk, ensure_ascii=False))     # 记号里没有审读的字
+
+    def test_claude_review_count_mismatch_stops(self):
+        with tempfile.TemporaryDirectory() as t:
+            iss = make_issue(t)
+            for k in BW.KINDS_NO_VIDEO:
+                put(iss.files[k], POD if k == "播客" else json.dumps(WEB))(iss.dir)
+            put(BW.REVIEW, CLAUDE_REVIEW.replace("必须改：3", "必须改：4"))(iss.dir)
+            chat = FakeChat([])
+            d, fd = self.driver(iss, chat, [(2, 9, BW.WAITING, None, None)])
+            self.assertEqual(d.run(), 2)
+            self.assertEqual(chat.got, [])
+            self.assertIn("对不上", self.marker(iss)["结果"])
+            n, items = BW.claude_review_items(CLAUDE_REVIEW, BW.KINDS)
+            self.assertEqual((n, len(items)), (3, 3))
+            self.assertEqual([i["_files"] for i in items], [["播客"], ["网页"], ["视频"]])
+
+    def test_claude_used_fix_round_mimo_gets_one_more(self):
+        with tempfile.TemporaryDirectory() as t:
+            iss = make_issue(t)
+            for k in BW.KINDS_NO_VIDEO:
+                put(iss.files[k], POD if k == "播客" else json.dumps(WEB))(iss.dir)
+            # 接手前：fd 第 7 步已记了两版没过的稿子（Claude 写一版、交回改一版，还没过）
+            put("logs/fd_state.json", json.dumps({"步骤": {"check": {"状态": BW.WAITING, "附加": {"没过时的产出指纹": ["a", "b"]}}},
+                                                  "运行记录": [{"结果": "停在第 7 步：示例"}]}, ensure_ascii=False))(iss.dir)
+            write_check(iss.dir, [{"名字": "网页数字", "要改": ["E001 的 3 找不到"]}])
+            chat = FakeChat([("按程序检查的问题改网页稿", json.dumps(WEB), "stop")])
+            script = [(2, 7, BW.WAITING, None, None), (0, None, None, None, None)]
+            d, fd = self.driver(iss, chat, script)
+            self.assertEqual(d.run(), 0)
+            self.assertEqual(len(chat.got), 1)                                    # MiMo 接手再给了一轮
+            mk = self.marker(iss)
+            self.assertEqual(mk["接手时"]["第 7 步没过几版"], 2)
+            self.assertTrue(any("Claude 已用掉 fd 的交回改一轮" in x and "用了 1 轮" in x for x in mk["交回改"]))
+
+    def test_partial_write_who_wrote(self):
+        with tempfile.TemporaryDirectory() as t:
+            iss = make_issue(t)
+            put(iss.files["播客"], POD)(iss.dir)                                   # Claude 写好了播客，网页还没写
+            chat = FakeChat([("写这一期的网页稿", json.dumps(WEB), "stop")])
+            script = [(2, 6, BW.WAITING, None, None), (2, 7, BW.WAITING, None, None)]
+            write_check(iss.dir, [{"名字": "稿子", "要改": ["script_check 没给出结果：示例"]}])
+            d, fd = self.driver(iss, chat, script)
+            self.assertEqual(d.run(), 2)
+            self.assertEqual(len(chat.got), 1)
+            self.assertNotIn("写这一期的播客稿", chat.got[0]["user"])
+            mk = self.marker(iss)
+            self.assertEqual(mk["谁写的"], {"播客": "Claude（备用接手前写好的）", "网页": "MiMo"})
+            self.assertEqual(mk["接手时"]["已有的稿子"], ["播客"])
+            self.assertEqual(mk["要人看"], [])
+
+    def test_podcast_length_out_of_range_needs_look_no_extra_call(self):
+        with tempfile.TemporaryDirectory() as t:
+            iss = make_issue(t)
+            lo, hi, f = BW.podcast_range(iss)
+            for k in BW.KINDS_NO_VIDEO:
+                put(iss.files[k], han_pod(lo + 10) if k == "播客" else json.dumps(WEB))(iss.dir)
+            for short, want_note in ((lo - 1, True), (lo, False)):
+                with tempfile.TemporaryDirectory() as t2:
+                    import shutil
+                    d2 = Path(t2) / DAY
+                    shutil.copytree(iss.dir, d2)
+                    iss2 = BW.Issue(DAY, str(d2))
+                    chat = FakeChat([
+                        ("独立审读", json.dumps({"must": [{"where": "开场", "files": ["播客"], "fix": "改"}],
+                                             "suggest": [{"where": "全篇压缩到四千字以下", "files": ["播客"]}]},
+                                            ensure_ascii=False), "stop"),
+                        ("按独立审读的意见改播客稿", '===处理===\n[{"条": "必须改 1", "怎么处理": "改了", "说明": "E001 F0"}]\n'
+                                               "===稿子===\n" + han_pod(short) + "===完===", "stop"),
+                    ])
+                    script = [(2, 8, BW.WAITING, None, None), (2, 9, BW.WAITING, None, None), (0, None, None, None, None)]
+                    d, fd = self.driver(iss2, chat, script)
+                    self.assertEqual(d.run(), 0)
+                    self.assertEqual(len(chat.got), 2)                            # 出了区间也不再调 MiMo
+                    mk = self.marker(iss2)
+                    self.assertEqual(mk["播客字数"]["改稿后"], short)
+                    self.assertEqual(mk["播客字数"]["区间"], [lo, hi])
+                    self.assertEqual(bool(mk["要人看"]), want_note, short)
+                    if want_note:
+                        self.assertIn("不在《%s》写的总长" % f, mk["要人看"][0])
+
+    def test_podcast_range_read_from_prompt_verbatim(self):
+        """区间照这一期播客写稿指令的原文读（工作日、周六、周日各一份），不在程序里写数。"""
+        for day in ("2026-11-16", "2026-11-14", "2026-11-15"):
+            with tempfile.TemporaryDirectory() as t:
+                d = Path(t) / day
+                d.mkdir()
+                iss = BW.Issue(day, str(d))
+                lo, hi, f = BW.podcast_range(iss)
+                line = [x for x in BW.prompt_text(f).splitlines() if x.startswith("总长")][0]
+                self.assertIn(format(lo, ","), line)
+                self.assertIn(format(hi, ","), line)
+                self.assertLess(lo, hi)
+
+    def test_han_count_like_script_check(self):
+        text = ("# 标题不算\n\n> 备注不算\n\n## 开场\n\n今天 AI 很忙。\n\n<!-- 注释不算 -->\n"
+                "甲：对谈的甲乙标签不算，正文算\n乙：好\n")
+        self.assertEqual(BW.han_count(text), len("今天很忙") + len("对谈的甲乙标签不算正文算") + len("好"))
+
+    def test_new_prompt_text_is_generic(self):
+        """这次加、改的提示字只说做法，不带哪一期的内容（没有事件号、人名、数字）。"""
+        import re
+        with tempfile.TemporaryDirectory() as t:
+            iss = make_issue(t)
+            task = BW.revise_task(iss, "播客", BW.task_sections(), [], POD, False)
+            new = [BW.REVIEW_EXTRA[0], task[task.find("# 你这一次的任务：按独立审读"):task.find("## 审读意见")],
+                   BW.materials_text(iss).splitlines()[0]]
+        for x in new:
+            x = re.sub(r"第 \d 步|03_事件卡|最多 3 篇", "", x)     # 步号、目录名、"每张卡最多 3 篇"不算内容
+            self.assertIsNone(re.search(r"\bE\d{3}\b|\d", x), x[:80])
 
 
 if __name__ == "__main__":

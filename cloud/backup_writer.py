@@ -11,8 +11,19 @@ fd 要的那几样文件，再接着跑。fd 自己的检查和"第一次没过�
   第 5 步 事件卡    → fd 自己调 MiMo（run_mimo.py cards），这里不管；fd 说失败就停下
   第 6 步 写稿      → 播客稿、网页稿 JSON、视频分镜 JSON，各一次 MiMo 调用（指令按 EDITIONS[版别]["指令"]）
   第 7 步 稿子检查  → 没过：把问题清单交回 MiMo 改涉及的那几份（这一步最多一轮）
-  第 8 步 独立审读  → 另起一次 MiMo 调用（不带写稿的对话），程序把回答写成 审读意见.md，第一行"必须改：N"按条数数
-  第 9 步 改稿      → 按审读意见改涉及的稿子（每份一次调用），程序写 审读处理.md；改后复查没过再交回改一轮
+  第 8 步 独立审读  → 另起一次 MiMo 调用（不带写稿的对话），程序把回答写成 审读意见.md，第一行"必须改：N"按条数数；
+                     审读任务最后附每张卡对应的抓取材料原文（03_事件卡/材料/<卡号>.json）：概括句对不上卡的原文摘录时，
+                     去材料原文里核，核得到的不算必须改（可以记建议改），核不到的才算（11-17 改）
+  第 9 步 改稿      → 只按审读的必须改改涉及的稿子（每份一次调用；建议改、可以更好不交，11-17 改），程序写 审读处理.md；
+                     改后复查没过再交回改一轮。改完数播客汉字，出了写稿指令里"总长"的区间就在 备用写稿.json 记"要人看"
+                     （不再调 MiMo）
+Claude 写到一半倒下时（2026-11-17 加，云端"第 4–9 步备用"那一步）：不另判从哪接，照旧按 fd 状态走——fd 跳过做完的步，
+  停在第一步没做完的地方等稿子。第一次跑时记下接手那一刻的样子（logs/备用写稿_记录.json 的"接手时"），备用写稿.json 里写明
+  谁写了哪份、审读是谁做的。主会话定的两条默认：
+  - Claude 已经用掉 fd 的"交回改一轮"（fd_state.json 里第 7 步记了两版以上没过的稿子），MiMo 接手时照样再给一轮（备用写稿
+    自己的计数从 0 算），记进 备用写稿.json 的"交回改"；
+  - Claude 已写完 审读意见.md、还没改稿就倒下：MiMo 不重审，直接照 Claude 那份的"## 必须改"一条一条（按"### "拆，原样交过去）
+    改稿；第一行写的条数和拆出来的对不上就停下。无视频时只涉及视频的那几条不改，审读处理.md 里写明。
 无视频（2026-11-17 用户定：备用那天只出播客和网页，视频以后另测）：--no-video，或 fd_开关.json 的"视频"写"关"（同一个开关，
   orchestrator.common.video_switch）。这时不写视频分镜、不做分镜预查，审读和改稿的任务里只有播客、网页两份；每一次 ./fd 都带
   FD_VIDEO=off，fd 第 6–9 步不要求分镜、第 7 步不查分镜。检查本身一条不放松。
@@ -24,6 +35,7 @@ fd 要的那几样文件，再接着跑。fd 自己的检查和"第一次没过�
 日志：屏幕上只印步骤、状态和用量数字，不印选题、稿子、事件卡、审读的字（公开仓库的运行日志谁都能看）；
   提示和回答存在期目录 logs/备用写稿/（跟着整期文件包进私有仓库）。fd 的屏幕输出写进 logs/备用写稿_fd输出.log。
 标记：期目录根上写 备用写稿.json（谁写的稿、做到哪、调用几次、用了多少；不含稿子的字），给放行和邮件读。
+  无视频时"视频"一栏以"关"开头；"要人看"是一个字符串列表（比如播客改稿后出了总长区间），没有就是空列表。
 密钥：只按 pipeline/keys.py 的办法从环境变量读（本机由 FD_ENV_FILE 指向 .env），不打印、不写进文件。
 
 用法（仓库根目录；$PY＝~/.venvs/frontier-daily/bin/python）：
@@ -121,7 +133,13 @@ KEY_RULES = [
 
 # 审读多一项必查（2026-11-17 用户定）：稿子用到的事件卡概括句、英文名、拼音，逐条拿卡里的原文摘录（quote）对。
 # 只放进审读的任务（不进写稿共用的材料），依据同样只原样摘已有条文。
-REVIEW_EXTRA = ("稿子用到的事件卡概括句（text_zh、why_it_matters）、英文名和拼音，逐条拿卡里的原文摘录（quote）对，对不上的算必须改",
+# 11-17 无视频续跑后改（主会话定）：原来"对不上的算必须改"太死，MiMo 把材料原文里有、只是卡的摘录没摘到的真事实（头衔、
+# 人名、日期）都判成必须改删掉了。现在对不上的先去这张卡对应的抓取材料原文（03_事件卡/材料/<卡号>.json，附在审读任务最后）
+# 里核：核得到的不算必须改（可以记建议改），核不到的才算必须改。依据仍是下面这几行已有规矩的原文（第一行"必要时去看
+# 01_获取/ 里的原始材料"就是这一条的出处），运行时逐字找整行、找不到就停。
+REVIEW_EXTRA = ("稿子用到的事件卡概括句（text_zh、why_it_matters）、英文名和拼音，逐条拿卡里的原文摘录（quote）对；"
+                "对不上的，去这张卡对应的抓取材料原文（任务最后附的「抓取材料原文」）里核：核得到的不算必须改"
+                "（可以记建议改，写明在材料原文哪一篇），核不到的才算必须改",
                 [("cloud/任务说明_云端.md", "**依据**：唯一的事实依据是"),
                  ("cloud/任务说明_云端.md", "- **第 5 步事件卡**"),
                  ("文档/经验/问题与解决办法.md", "10. 西方人名、没有通行中文名的机构写英文原名"),
@@ -214,6 +232,29 @@ def rule_parts(path=RULES_DOC):
 
 def prompt_text(name):
     return (PROMPTS / name).read_text(encoding="utf-8")
+
+
+# 播客总长（2026-11-17 加）：改稿后数一下播客的汉字，对照这一期播客写稿指令里"总长 A–B 个汉字"那一行（照原文读，不自己写数）。
+# 出了区间只在 备用写稿.json 记一条"要人看"，不再调 MiMo。数法和 script_check（fd 第 7 步）一样：lexicon_check.body_mask
+# 去掉注释、# 标题、> 备注、对谈稿行首的"甲：""乙："，只数汉字。
+LENGTH_LINE = re.compile(r"^总长\s*([\d,，]+)\s*[–—\-~～至到]+\s*([\d,，]+)\s*个汉字")
+
+
+def podcast_range(iss):
+    """这一期播客写稿指令里写的总长区间：(下限, 上限, 指令文件名)；找不到返回 None。"""
+    for f in iss.prompt_files("播客"):
+        for ln in prompt_text(f).splitlines():
+            m = LENGTH_LINE.match(ln.strip())
+            if m:
+                num = lambda s: int(re.sub(r"[,，]", "", s))          # noqa: E731
+                return num(m.group(1)), num(m.group(2)), f
+    return None
+
+
+def han_count(text):
+    """播客正文的汉字数（和 script_check 的"汉字数"同一个数法）。"""
+    from lexicon_check import body_mask
+    return len(re.findall(r"[一-鿿]", body_mask(text)))
 
 
 def numbered_input(inp):
@@ -623,19 +664,46 @@ def review_task(iss, sec, drafts, kinds=KINDS):
              + "\n".join("%d. %s" % (i, k) for i, k in enumerate(checks, 1))
              + ("\n\n每一项对三份稿子（播客、网页中英文、视频旁白和画面）都要查；" if video else "\n\n每一项对两份稿子（播客、网页中英文）都要查；")
              + "查出来的按上面审读任务的分法放进必须改或建议改"
-             + "（最后一项对不上的一律算必须改）。\n\n" + review_extra_text(),
+             + "（最后一项照它自己写的分法：材料原文里也核不到的才算必须改）。\n\n" + review_extra_text(),
              "---\n\n# 补充（备用写稿）\n\n这一次的审读由 MiMo 另起一次调用来做，和写稿不共用对话。稿子不是你写的。"
-             "「材料六」的事件卡就是 `03_事件卡/cards_写稿用.json`；`01_获取/` 里的原始材料这一次给不了你，判断以卡的原文摘录（quote）为准。"
+             "「材料六」的事件卡就是 `03_事件卡/cards_写稿用.json`。`01_获取/` 里的原始材料这一次只附了每张卡对应的那几篇"
+             "（任务最后的「抓取材料原文」，就是做卡时抓下来的 `03_事件卡/材料/<卡号>.json`）；判断以卡的原文摘录（quote）为准，"
+             "核必查项最后一项时再去看材料原文。"
              + ("" if video else "\n\n" + NO_VIDEO_NOTE),
              review_out(video)]
     for kind in kinds:
         parts.append("## 要审的%s稿（%s）\n\n%s" % (kind, iss.files[kind], drafts[kind]))
+    parts.append(materials_text(iss))
     return "\n\n".join(parts)
+
+
+MATERIALS_DIR = "03_事件卡/材料"
+
+
+def materials_text(iss):
+    """审读任务最后附的「抓取材料原文」：写稿输入里每张卡对应的 03_事件卡/材料/<卡号>.json，原样（紧凑 JSON）。
+    只进审读的任务，不进共同材料（共同材料要一字不差，缓存才命中）。没有存下的写明"没有"。"""
+    inp = read_json(iss.p(WRITE_INPUT), None) or {}
+    out = ["## 抓取材料原文（%s/<卡号>.json：做事件卡时抓下来的原文，每张卡最多 3 篇；只用来核必查项最后一项）" % MATERIALS_DIR]
+    for c in inp.get("cards") or []:
+        eid = str(c.get("event_id") or "")
+        if not eid:
+            continue
+        mats = read_json(iss.p("%s/%s.json" % (MATERIALS_DIR, eid)), None)
+        if mats is None:
+            out.append("### %s：没有存下这张卡的材料（核不到）" % eid)
+        else:
+            out.append("### %s（%s/%s.json）\n\n%s" % (eid, MATERIALS_DIR, eid,
+                                                      json.dumps(mats, ensure_ascii=False, separators=(",", ":"))))
+    return "\n\n".join(out)
 
 
 def revise_task(iss, kind, sec, items, draft, video=True):
     rows = []
     for it in items:
+        if it.get("_text"):                 # Claude 写的审读意见：那一条原样交过去（程序不改写它）
+            rows.append("- [%s]（独立审读的原文，照抄）\n\n%s\n" % (it["_label"], it["_text"].strip()))
+            continue
         rows.append("- [%s] 位置：%s\n  原句：%s\n  问题：%s\n  依据：%s\n  改法：%s" % (
             it["_label"], it.get("where", ""), it.get("original", ""), it.get("problem", ""), it.get("basis", ""), it.get("fix", "")))
     fmt = "Markdown 正文＋语气表" if FORMAT[kind] == "text" else "一个合法的 JSON 对象"
@@ -643,9 +711,9 @@ def revise_task(iss, kind, sec, items, draft, video=True):
         instructions(iss, kind),
         "---\n\n# 写稿要求（cloud/任务说明_云端.md「写稿子代理的任务」）\n\n" + sec["写稿"],
         "---\n\n# 改稿要求（cloud/任务说明_云端.md）\n\n" + sec["改稿"],
-        "---\n\n# 你这一次的任务：按独立审读的意见改%s稿（第 9 步）\n\n下面是审读里涉及这份%s稿的几条，和你上一版的全文。"
-        "必须改的逐条核对「材料六」的事件卡：属实就改，审读说错了的不改、写明理由和卡号；建议改的，能直接替换、又不添新事实的就采纳。"
-        "别的地方不动。" % (kind, kind),
+        "---\n\n# 你这一次的任务：按独立审读的意见改%s稿（第 9 步）\n\n下面是审读里涉及这份%s稿的必须改，和你上一版的全文。"
+        "逐条核对「材料六」的事件卡：属实就改，审读说错了的不改、写明理由和卡号。这一次只交必须改的几条；"
+        "审读里的建议改、可以更好不在这里，不要照着它们改。别的地方不动。" % (kind, kind),
         "## 审读意见（涉及%s稿的）\n\n%s" % (kind, "\n".join(rows)),
         "## 你上一版的%s稿\n\n%s" % (kind, draft),
         "# 输出\n\n按下面三段输出，段名原样写，不要代码块围栏：\n===处理===\n"
@@ -716,14 +784,40 @@ def render_review(rv, files_fp, model=PRO):
 
 
 def review_items(rv, kinds=KINDS):
-    """要交给改稿的条目：必须改（全部）＋建议改；每条标上"必须改 1""建议改 2"，没写涉及哪份的按这一期的几份都涉及
+    """要交给改稿的条目：只有必须改（2026-11-17 改：备用模式改稿只交必须改，建议改、可以更好不交。11-17 无视频续跑时
+    一条依据错的建议改让 MiMo 把播客压到写稿规矩的下限以下）。每条标上"必须改 1"，没写涉及哪份的按这一期的几份都涉及
     （无视频时只有播客、网页两份；写了"视频"的不算）。"""
     out = []
-    for key, name in (("must", "必须改"), ("suggest", "建议改")):
-        for i, r in enumerate(rv.get(key) or [], 1):
-            files = [f for f in (r.get("files") or []) if f in kinds] or list(kinds)
-            out.append(dict(r, _label="%s %d" % (name, i), _files=files, _must=key == "must"))
+    for i, r in enumerate(rv.get("must") or [], 1):
+        files = [f for f in (r.get("files") or []) if f in kinds] or list(kinds)
+        out.append(dict(r, _label="必须改 %d" % i, _files=files, _must=True))
     return out
+
+
+# Claude 写的审读意见（备用接手时已经在，2026-11-17 主会话定：MiMo 直接照它的必须改改稿，不重审）
+KIND_WORDS = (("播客", ("播客",)), ("网页", ("网页",)), ("视频", ("视频", "分镜", "旁白", "画面")))
+
+
+def _kinds_named(text):
+    return [k for k, words in KIND_WORDS if any(w in text for w in words)]
+
+
+def claude_review_items(text, kinds=KINDS):
+    """审读意见.md（Claude 写的）的"## 必须改"一节按"### "拆成一条一条，每条原样交给改稿（程序不改写）。
+    涉及哪几份：先看那一条的标题提到哪几份，标题没提再看正文，都没提按这一期的几份都涉及；无视频时只涉及视频的那几条
+    不改（_files 为空）。返回 (第一行写的条数, 条目)；第一行读不出条数时条数是 None。"""
+    from orchestrator.steps import must_fix_count
+    n = must_fix_count(text)
+    m = re.search(r"^##\s*必须改[^\n]*\n(.*?)(?=^##\s|\Z)", text, re.M | re.S)
+    chunks = re.split(r"(?m)^###\s+", m.group(1))[1:] if m else []
+    items = []
+    for i, ch in enumerate(chunks, 1):
+        head, _, body = ch.partition("\n")
+        named = _kinds_named(head) or _kinds_named(body) or list(KINDS)
+        items.append({"_label": "必须改 %d" % i, "where": re.sub(r"^\d+[.、]\s*", "", head.strip()),
+                      "problem": "（独立审读原文见 审读意见.md 必须改第 %d 条）" % i, "_text": "### " + ch.rstrip(),
+                      "_files": [k for k in named if k in kinds], "_must": True, "_from": "Claude"})
+    return n, items
 
 
 def render_handled(items, results):
@@ -733,6 +827,8 @@ def render_handled(items, results):
          "- 依据：只用 03_事件卡/cards_写稿用.json 的原文摘录；不添新事实、新数字", ""]
     for it in items:
         L += ["## %s：%s" % (it["_label"], it.get("where") or ""), "- 问题：%s" % (it.get("problem") or "")]
+        if not it["_files"]:
+            L.append("- 只涉及视频分镜：这一期不出视频（视频：关），不改")
         for kind in it["_files"]:
             got = [r for r in results.get(kind) or [] if str(r.get("条") or "").replace(" ", "") == it["_label"].replace(" ", "")]
             if got:
@@ -872,11 +968,93 @@ class Driver:
         steps = self.iss.state().get("步骤") or {}
         return "，".join("%d %s" % (n, (steps.get(k) or {}).get("状态") or "没做") for n, k in sorted(STEP_KEYS.items()))
 
+    # -- 接手：Claude 写到一半倒下时，MiMo 从 fd 状态里第一步没做完的接（2026-11-17 加）
+    def takeover(self):
+        """第一次跑时记下接手那一刻的样子（只记一次，重开程序不改）：fd 每一步的状态、哪几份稿子已经在、审读意见是谁写的、
+        第 7 步和第 9 步复查 fd 已经记了几版没过的稿子。只有状态和数字，不含稿子的字。"""
+        if self.rec.get("接手时"):
+            return self.rec["接手时"]
+        steps = self.iss.state().get("步骤") or {}
+
+        def failed_versions(key):
+            return len(((steps.get(key) or {}).get("附加") or {}).get("没过时的产出指纹") or [])
+        rv = self.iss.p(REVIEW)
+        tk = {"时间": now_iso(), "fd 每一步": self.brief(),
+              "已有的稿子": [k for k in KINDS if self.iss.p(self.iss.files[k]).exists()],
+              "选题在不在": self.iss.p(LINEUP).exists(),
+              "审读意见": ("没有" if not rv.exists() else
+                         "备用写稿写的" if self.iss.p("logs/备用写稿_审读.json").exists() else "接手前就在（Claude 写的）"),
+              "审读处理在不在": bool(sorted(self.iss.dir.glob("审读处理*.md"))),
+              "第 7 步没过几版": failed_versions("check"), "第 9 步复查没过几版": failed_versions("revise")}
+        self.rec["接手时"] = tk
+        write_json(self.iss.p(RECORD), self.rec)
+        return tk
+
+    def who_wrote(self):
+        """每份稿子是谁写的：备用写稿写过的是 MiMo；接手时就在的是 Claude（备用接手前写好的）。"""
+        tk = self.rec.get("接手时") or {}
+        out = {}
+        for k in self.kinds:
+            if self.count("write_" + k) >= 1:
+                out[k] = "MiMo"
+            elif k in (tk.get("已有的稿子") or []):
+                out[k] = "Claude（备用接手前写好的）"
+            else:
+                out[k] = "还没写" if not self.iss.p(self.iss.files[k]).exists() else "不知道（备用写稿没写过，接手时也不在）"
+        return out
+
+    def review_by(self):
+        if self.count("review") >= 1:
+            return "MiMo（备用）：另起一次调用"
+        if self.iss.p(REVIEW).exists() and not self.iss.p("logs/备用写稿_审读.json").exists():
+            return "Claude（备用接手前写好的）：MiMo 照它的必须改改稿，没有重审"
+        return "还没做"
+
+    def fix_notes(self):
+        """交回改：Claude 已经用掉 fd 的交回改一轮时，MiMo 接手再给一轮（主会话定的默认），这里如实记下。"""
+        tk = self.rec.get("接手时") or {}
+        out = []
+        for step, key, fix in ((7, "第 7 步没过几版", "check_fix"), (9, "第 9 步复查没过几版", "revise_fix")):
+            n = int(tk.get(key) or 0)
+            if n >= 1:
+                out.append("第 %d 步：接手前 fd 已记了 %d 版没过的稿子%s；MiMo 接手另给一轮交回改（用了 %d 轮）" % (
+                    step, n, "（Claude 已用掉 fd 的交回改一轮）" if n >= 2 else "（Claude 还没改）", self.count(fix)))
+            elif self.count(fix):
+                out.append("第 %d 步：MiMo 交回改了 %d 轮" % (step, self.count(fix)))
+        return out
+
+    def need_look(self, key, note=None):
+        """"要人看"：key 相同的只留最新一条；note 为 None 就去掉这一条。存进记录，重开程序也在。"""
+        d = self.rec.setdefault("要人看", {})
+        if note:
+            d[key] = note
+        else:
+            d.pop(key, None)
+        write_json(self.iss.p(RECORD), self.rec)
+
+    def check_podcast_length(self):
+        """改稿后数播客汉字，对照写稿指令里的总长区间；出了区间记"要人看"，不再调 MiMo。"""
+        p = self.iss.p(self.iss.files["播客"])
+        if not p.exists():
+            return
+        rng = podcast_range(self.iss)
+        if not rng:
+            self.need_look("播客字数", "改稿后没数播客字数：这一期播客的写稿指令里找不到\"总长 … 个汉字\"那一行")
+            return
+        lo, hi, f = rng
+        n = han_count(p.read_text(encoding="utf-8"))
+        self.rec["播客字数"] = {"改稿后": n, "区间": [lo, hi], "依据": "pipeline/prompts/" + f, "时间": now_iso()}
+        ok = lo <= n <= hi
+        self.need_look("播客字数", None if ok else "播客改稿后 %d 个汉字，不在《%s》写的总长 %d–%d 个汉字里（改稿压短或拉长了），"
+                                                  "请人看一下；程序没有再调 MiMo" % (n, f, lo, hi))
+        say("播客改稿后 %d 个汉字，指令写的总长 %d–%d：%s" % (n, lo, hi, "在区间里" if ok else "出了区间，记一条要人看"))
+
     # -- 主循环
     def run(self):
         started = now_iso()
         result, code = "", 2
         try:
+            self.takeover()
             for _ in range(self.max_loops):
                 rc = self.fd_runner()
                 say("fd 跑完一轮（退出码 %s）：%s" % (rc, self.brief()))
@@ -909,6 +1087,16 @@ class Driver:
                   "credits约": tot["credits约"], "每一步": self.brief()}
             if not self.video:
                 mk["视频"] = "关：这一期不出视频，只写了播客和网页（FD_VIDEO=off）"
+            # 2026-11-17 加：Claude 写到一半倒下时谁写了哪份、审读是谁做的、交回改用了几轮、要人看的（都只有状态和数字）
+            tk = self.rec.get("接手时") or {}
+            mk["接手时"] = {k: tk.get(k) for k in ("时间", "fd 每一步", "已有的稿子", "审读意见", "第 7 步没过几版", "第 9 步复查没过几版")
+                         if k in tk}
+            mk["谁写的"] = self.who_wrote()
+            mk["审读"] = self.review_by()
+            mk["交回改"] = self.fix_notes()
+            if self.rec.get("播客字数"):
+                mk["播客字数"] = self.rec["播客字数"]
+            mk["要人看"] = list((self.rec.get("要人看") or {}).values())
             write_json(self.iss.p(MARKER), mk)
             say("合计：调用 %d 次，输入 %s token（缓存命中 %s），输出 %s，约 %s credits" % (
                 tot["次数"], format(tot["输入token"], ","), format(tot["其中缓存命中"], ","), format(tot["输出token"], ","),
@@ -1029,6 +1217,8 @@ class Driver:
             if kind == "视频":
                 self.bump("sb_fix", "第 %d 步 fd 交回改分镜（分镜第 %d 轮）" % (step, self.sb_used() + 1))
             self._write_file(kind, task, step, "改%s稿_%s" % (kind, "检查" if step == 7 else "复查"))
+            if kind == "播客" and step == 9:
+                self.check_podcast_length()
         if "视频" in probs:
             self.precheck_storyboard(step)
 
@@ -1104,16 +1294,29 @@ class Driver:
         if self.count("revise") >= 1:
             raise Stop("改稿已经做过一次，审读处理.md 却不在")
         rv = read_json(self.iss.p("logs/备用写稿_审读.json"), None)
-        if rv is None:
-            raise Stop("审读意见不是备用写稿写的（没有 logs/备用写稿_审读.json），备用写稿不接着改")
-        items = review_items(rv, self.kinds)
-        self.bump("revise", "按审读改：必须改 %d 条、建议改 %d 条" % (sum(1 for i in items if i["_must"]),
-                                                           sum(1 for i in items if not i["_must"])))
+        if rv is not None:
+            items = review_items(rv, self.kinds)
+            src = "MiMo 审读"
+        else:
+            # 2026-11-17 主会话定：Claude 写完审读意见、还没改稿就倒下的，MiMo 直接照它的必须改改稿，不重审
+            p = self.iss.p(REVIEW)
+            if not p.exists():
+                raise Stop("fd 停在改稿，审读意见.md 却不在")
+            n, items = claude_review_items(p.read_text(encoding="utf-8"), self.kinds)
+            if n is None:
+                raise Stop("审读意见.md（备用接手前就在）第一行没写\"必须改：N\"，读不出几条，停下等人")
+            if n != len(items):
+                raise Stop("审读意见.md（备用接手前就在）第一行写必须改 %d 条，\"## 必须改\"下面拆出来 %d 条，对不上，停下等人"
+                           % (n, len(items)))
+            src = "接手前就在的审读意见（Claude 写的），不重审"
+            say("第 9 步：照接手前就在的审读意见（Claude 写的）改稿，不重审；必须改 %d 条，其中只涉及视频、这一期不改的 %d 条"
+                % (len(items), sum(1 for i in items if not i["_files"])))
+        self.bump("revise", "按审读改（%s）：必须改 %d 条（建议改、可以更好不交给改稿）" % (src, len(items)))
         results = {}
         for kind in self.kinds:
             mine = [i for i in items if kind in i["_files"]]
-            if not any(i["_must"] for i in mine):
-                continue                    # 这份稿子没有必须改的：不为建议改单花一次调用
+            if not mine:
+                continue                    # 这份稿子没有必须改的：不单花一次调用
             draft = self.iss.p(self.iss.files[kind]).read_text(encoding="utf-8")
             reply = self._ask(9, "改%s稿_审读" % kind, self.material,
                                    revise_task(self.iss, kind, self.sec, mine, draft, self.video), MAX_OUT[kind], 0.3)
@@ -1138,8 +1341,9 @@ class Driver:
             results[kind] = handled if isinstance(handled, list) else []
             if kind == "视频":
                 self.precheck_storyboard(9)
-        write_text(self.iss.p(HANDLED), render_handled([i for i in items if any(k in results for k in i["_files"]) or i["_must"]],
-                                                        results))
+            if kind == "播客":
+                self.check_podcast_length()
+        write_text(self.iss.p(HANDLED), render_handled(items, results))
 
 
 # ---------------------------------------------------------------- 估用量（不联网）
