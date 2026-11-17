@@ -467,6 +467,23 @@ class DriverLoop(unittest.TestCase):
             self.assertEqual(sum(1 for g in chat.got if "按程序检查的问题改视频稿" in g["user"]), BW.SB_ROUNDS)
             self.assertIn("改满 3 轮", json.loads(iss.p(BW.MARKER).read_text(encoding="utf-8"))["结果"])
 
+    def test_storyboard_problems_get_location_hints(self):
+        with tempfile.TemporaryDirectory() as t:
+            iss = make_issue(t)
+            card = {"event_id": "E001", "facts": [{"quote": "A said"}, {"quote": "B"}], "numbers": [{"quote": "3 units"}],
+                    "who_said": [{"quote": "hello world"}]}
+            (iss.dir / "03_事件卡").mkdir()
+            iss.p(BW.CARDS).write_text(json.dumps([card]), encoding="utf-8")
+            sb = dict(SB, facts={"n1.x": {"event": "E001", "field": "numbers", "index": 0, "check": "3 units"}})
+            iss.p(BW.STORYBOARD).write_text(json.dumps(sb), encoding="utf-8")
+            rows = BW.annotate_sb_problems(iss, ["✗ 要改：e.k：E001 facts[0] 里找不到「hello world」",
+                                                 "✗ 要改：「a.b(zh)」里的数字 650 在它引用的事件卡原文（n1.x）里找不到",
+                                                 "✗ 要改：别的问题"])
+            self.assertIn("在 E001 who_said[0] 里", rows[0])
+            self.assertIn("facts[0] 那一条的原文是「A said」", rows[0])
+            self.assertIn("n1.x 指向 E001 numbers[0]，原文「3 units」", rows[1])
+            self.assertEqual(rows[2], "✗ 要改：别的问题")
+
     def test_key_rules_are_verbatim_existing_lines(self):
         text = BW.key_rules_text()
         for kind, f, start in BW.KEY_RULES:

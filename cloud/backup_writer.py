@@ -383,6 +383,52 @@ def sb_kinds(rows):
     return out
 
 
+def annotate_sb_problems(iss, rows):
+    """分镜检查的"要改"行后面补一句：引用的那一条卡里原文是什么、要找的那段其实在哪一条（只读事件卡和分镜，不改检查）。
+    11-17 第二次真跑：分镜把 E001 facts[9] 写成了 facts[8]，检查说"facts[8] 里找不到「…」"，MiMo 关思考连改三轮都没动编号。"""
+    cards = {c.get("event_id"): c for c in read_json(iss.p(CARDS), []) or []}
+    sb = read_json(iss.p(STORYBOARD), {}) or {}
+    facts = sb.get("facts") or {}
+
+    def where(ev, text):
+        hits = []
+        for field in ("facts", "numbers", "who_said"):
+            for i, x in enumerate((cards.get(ev) or {}).get(field) or []):
+                if isinstance(x, dict) and any(text in str(v) for v in x.values()):
+                    hits.append("%s %s[%d]" % (ev, field, i))
+        return hits
+
+    def entry(ev, field, i):
+        lst = (cards.get(ev) or {}).get(field) or []
+        x = lst[i] if isinstance(i, int) and 0 <= i < len(lst) else None
+        return str((x or {}).get("quote") or (x or {}).get("text_zh") or "")[:120] if x else None
+
+    out = []
+    for r in rows:
+        note = ""
+        m = re.search(r"([A-Z]\d+) (facts|numbers|who_said)\[(\d+)\] 里找不到「(.+?)」", r)
+        if m:
+            ev, field, i, text = m.group(1), m.group(2), int(m.group(3)), m.group(4)
+            hits = where(ev, text)
+            here = entry(ev, field, i)
+            note = "（程序替你查了：这段原文%s；%s[%d] 那一条的原文是「%s」）" % (
+                "在 " + "、".join(hits) + " 里" if hits else "在 %s 的卡里哪一条都找不到，要换成卡里有的原文" % ev, field, i, here or "（没有这一条）")
+        else:
+            m = re.search(r"在它引用的事件卡原文（([^）]+)）里找不到", r)
+            if m:
+                keys = [k.strip() for k in m.group(1).split("、")]
+                bits = []
+                for k in keys:
+                    f = facts.get(k) or {}
+                    txt = entry(f.get("event"), f.get("field"), f.get("index"))
+                    if txt is not None:
+                        bits.append("%s 指向 %s %s[%s]，原文「%s」" % (k, f.get("event"), f.get("field"), f.get("index"), txt))
+                if bits:
+                    note = "（程序替你查了：" + "；".join(bits) + "）"
+        out.append(r + note)
+    return out
+
+
 def thinking_ran_out(rec):
     """被截断，而且输出几乎全是思考（九成以上）：是思考跑过了头，不是正文太长。"""
     out = int(rec.get("输出token") or 0)
@@ -816,8 +862,6 @@ class Driver:
                 if self.last_runaway(what) and self.count(key + "_关思考") == 0:
                     self.bump(key + "_关思考", "上次%s思考用光了上限，接着跑时关思考重写" % what)
                     self._write_file(k, write_task(self.iss, k, self.sec), 6, what, thinking="disabled")
-                    if k == "视频":
-                        self.precheck_storyboard(6)
                     continue
                 raise Stop("%s稿已经写过一次，文件却不在" % k)
             self.bump(key, "MiMo " + what)
@@ -892,7 +936,8 @@ class Driver:
             if kind not in probs:
                 continue
             draft = self.iss.p(self.iss.files[kind]).read_text(encoding="utf-8")
-            task = fix_task(self.iss, kind, self.sec, probs[kind], draft, why)
+            task = fix_task(self.iss, kind, self.sec,
+                            annotate_sb_problems(self.iss, probs[kind]) if kind == "视频" else probs[kind], draft, why)
             if kind == "视频":
                 self.bump("sb_fix", "第 %d 步 fd 交回改分镜（分镜第 %d 轮）" % (step, self.count("sb_fix") + 1))
             self._write_file(kind, task, step, "改%s稿_%s" % (kind, "检查" if step == 7 else "复查"))
@@ -932,7 +977,8 @@ class Driver:
             self.bump("sb_fix", "分镜预查没过（%d 处），交回改（分镜第 %d 轮）" % (len(rows), n))
             say("分镜预查：%d 处要改（%s），交回改（分镜第 %d 轮）" % (len(rows), "、".join("%s %d" % kv for kv in sb_kinds(rows).items()), n))
             draft = self.iss.p(self.iss.files["视频"]).read_text(encoding="utf-8")
-            task = fix_task(self.iss, "视频", self.sec, rows, draft, "交给 fd 以前的分镜检查没过，分镜第 %d 轮" % n)
+            task = fix_task(self.iss, "视频", self.sec, annotate_sb_problems(self.iss, rows), draft,
+                            "交给 fd 以前的分镜检查没过，分镜第 %d 轮" % n)
             self._write_file("视频", task, step, "改视频稿_预查%d" % n)
 
     def on_check(self, rec):
