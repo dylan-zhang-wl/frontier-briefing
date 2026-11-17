@@ -1607,6 +1607,8 @@ class Web2(Step):
         has_video = '"v":3' in js or '"v": 3' in js
         warns += [x.strip() for x in out.splitlines() if x.strip().startswith("注意")][:6]
         if not von:
+            # 关着时认得更严：上面那种认法会把图表里的 "v":3.98 这类数也当成视频（开着那条路没动）；真的视频是 "video":{"v":3,
+            has_video = re.search(r'"v":\s*3\s*[,}]', js) is not None
             return R(DONE, "网页%s视频（视频：关）" % ("带" if has_video else "不带"), warns,
                      extra={"带视频": has_video, "视频开关": "关"})
         return R(DONE, "网页%s视频" % ("带" if has_video else "不带"), warns, extra={"带视频": has_video})

@@ -334,6 +334,13 @@ class Step14And15(unittest.TestCase):
         self.assertEqual(r.extra, {"带视频": False, "视频开关": "关"})
         self.assertTrue(any("视频：关" in w for w in r.warns))
 
+    def test_web2_off_chart_number_is_not_video(self):
+        # 图表里的 "v":3.98 不算视频（11-17 云端那期就有）；真的视频 "video":{"v":3, 才算
+        r, _, _, _ = self.web2_rebuild("off", steps.DONE, '{"items":[{"label_zh":"x","v":3.98}]}')
+        self.assertEqual(r.extra["带视频"], False)
+        r, _, _, _ = self.web2_rebuild("off", steps.DONE, '{"media":{"video":{"v":3,"schema":"video3-storyboard/1"}}}')
+        self.assertEqual(r.extra["带视频"], True)
+
     def test_web2_on_as_before(self):
         r, labels, still, _ = self.web2_rebuild(None, steps.DONE, 'x={"v":3}')
         self.assertEqual((labels, still), (["再组装"], True))
