@@ -134,7 +134,13 @@ class CallFailed(Stop):
 
 
 class ThinkingRunaway(CallFailed):
-    """思考把输出上限用光了（finish=length，几乎全是思考 token）：MiMo 没有"思考预算"参数，只能开关（文档 deep-thinking）。"""
+    """思考把输出上限用光了（finish=length，几乎全是思考 token）：MiMo 没有"思考预算"参数，只能开关（文档 deep-thinking）。
+    也包括：一次调用跑了 DROP_SEC 秒以上、连接被对方断开（11-17 00:20 实测：写分镜那次在 900.6 秒断开，IncompleteRead；
+    客户端自己等 1,800 秒，所以是 MiMo 那头约 900 秒就断）——同样是思考跑太久，按同一个办法关思考重写。"""
+
+
+DROP_SEC = 850
+DROP_SIGNS = ("IncompleteRead", "RemoteDisconnected", "Connection reset", "Connection aborted", "timed out", "TimeoutError")
 
 
 def now_iso():
@@ -311,9 +317,13 @@ class Mimo:
             r = (self._chat(self.model, system, user, max_tokens, temperature, thinking=thinking) if thinking
                  else self._chat(self.model, system, user, max_tokens, temperature))
         except Exception as e:      # noqa: BLE001
-            rec.update({"秒": round(time.time() - t0, 1), "结果": "失败：%s" % str(e)[:200]})
+            rec.update({"秒": round(time.time() - t0, 1), "结果": "失败：%s" % str(e)[:200],
+                        "用量": "不知道（没拿到回答；MiMo 可能照样记了账）"})
             self.calls.append(rec)
             self.save()
+            say("第 %d 步 %s：第 %d 次调用失败，%s 秒（%s）" % (step, what, n, rec["秒"], str(e)[:80]))
+            if thinking_ran_out(rec):
+                raise ThinkingRunaway("MiMo 调用（%s）跑了 %s 秒被断开，按思考跑太久处理" % (what, rec["秒"])) from None
             raise CallFailed("MiMo 调用失败（%s）：%s" % (what, str(e)[:200])) from None
         u = r.get("usage") or {}
         rec.update({"秒": round(time.time() - t0, 1), "finish": r.get("finish"),
@@ -376,7 +386,10 @@ def sb_kinds(rows):
 def thinking_ran_out(rec):
     """被截断，而且输出几乎全是思考（九成以上）：是思考跑过了头，不是正文太长。"""
     out = int(rec.get("输出token") or 0)
-    return str(rec.get("结果") or "").startswith("被截断") and out > 0 and int(rec.get("其中思考") or 0) >= 0.9 * out
+    res = str(rec.get("结果") or "")
+    if res.startswith("失败") and float(rec.get("秒") or 0) >= DROP_SEC and any(s in res for s in DROP_SIGNS):
+        return True                 # 跑了很久被断开：没拿到回答，按思考跑太久算
+    return res.startswith("被截断") and out > 0 and int(rec.get("其中思考") or 0) >= 0.9 * out
 
 
 # ---------------------------------------------------------------- 这一期

@@ -379,6 +379,31 @@ class DriverLoop(unittest.TestCase):
             self.assertEqual(d.run(), 0)
             self.assertEqual([g["thinking"] for g in chat.got], [None, "disabled"])     # 播客照旧开思考，视频直接关
 
+    def test_long_call_dropped_by_server_counts_as_runaway(self):
+        with tempfile.TemporaryDirectory() as t:
+            iss = make_issue(t)
+            put(iss.files["播客"], POD)(iss.dir)
+            put(iss.files["网页"], json.dumps(WEB))(iss.dir)
+            clock = iter([0.0, 900.6, 1000.0, 1072.0])
+            orig = BW.time.time
+            BW.time.time = lambda: next(clock)
+            try:
+                chat = FakeChat([("写这一期的视频稿", RuntimeError("IncompleteRead(178 bytes read)"), None),
+                                 ("写这一期的视频稿", json.dumps(SB), "stop")])
+                d, fd = self.driver(iss, chat, [(2, 6, BW.WAITING, None, None), (0, None, None, None, None)])
+                self.assertEqual(d.run(), 0)
+            finally:
+                BW.time.time = orig
+            self.assertEqual([g["thinking"] for g in chat.got], [None, "disabled"])
+            calls = json.loads(iss.p(BW.USAGE).read_text(encoding="utf-8"))["调用"]
+            self.assertIn("不知道", calls[0]["用量"])
+
+    def test_short_transport_error_is_not_runaway(self):
+        rec = {"结果": "失败：IncompleteRead(10 bytes read)", "秒": 30}
+        self.assertFalse(BW.thinking_ran_out(rec))
+        self.assertTrue(BW.thinking_ran_out({"结果": "失败：IncompleteRead(178 bytes read)", "秒": 900.6}))
+        self.assertFalse(BW.thinking_ran_out({"结果": "失败：HTTP 400: bad", "秒": 900.6}))
+
     def test_long_answer_truncation_is_not_treated_as_runaway(self):
         with tempfile.TemporaryDirectory() as t:
             iss = make_issue(t)
