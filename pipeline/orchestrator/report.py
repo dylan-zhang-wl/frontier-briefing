@@ -2,6 +2,7 @@
 from pathlib import Path
 
 from .common import DONE, FAILED, SKIPPED, WAITING, TODO, RUNNING, stamp, rel, read_json, write_text, NO_PODCAST
+from .selfcheck import video_off, VIDEO_OFF_LINE
 from .steps import STEPS
 
 
@@ -12,7 +13,10 @@ def missing(c):
     v = st["voice"].get("附加") or {}
     if v.get("播客") == "没配成":
         out.append("播客音频（配音没成，主声音和备用都不行；网页不放'听'）")
-    if v.get("视频旁白") == "没配成" or st["video"].get("状态") in (FAILED, SKIPPED) or \
+    # 视频开关关着（2026-11-17 加；看第 14、15 步记的 附加.视频开关）：这一期按规矩不出视频，不算少了视频
+    if video_off(st):
+        pass
+    elif v.get("视频旁白") == "没配成" or st["video"].get("状态") in (FAILED, SKIPPED) or \
             (st["web2"].get("状态") == DONE and (st["web2"].get("附加") or {}).get("带视频") is False):
         if st["video"] or v.get("视频旁白"):
             out.append("视频（%s）" % (st["video"].get("说明") or "视频旁白没配成"))
@@ -52,11 +56,16 @@ def write(c, outcome, first, last):
         L.append("- **没跑完**：%s" % outcome["原因"])
     elif last < STEPS[-1].no:
         L.append("- 这次只跑到第 %d 步（--until）。" % last)
+    voff = video_off(st)                  # 视频开关关着（2026-11-17 加）
     if miss:
         L.append("- **这一期是保底的'数据版'，少了**：")
         L += ["  - " + m for m in miss]
     elif not stop and not outcome.get("原因") and last == STEPS[-1].no:
-        L.append("- **这一期齐了**：网页、播客、视频都有，各项检查都过了。")
+        L.append("- **这一期齐了**：网页、播客、视频都有，各项检查都过了。" if not voff else
+                 "- **这一期齐了**：网页、播客都有，各项检查都过了；%s。" % VIDEO_OFF_LINE)
+        voff = False                      # 上一行已经写了
+    if voff:
+        L.append("- " + VIDEO_OFF_LINE)
     web = c.p("10_网页v3/index.html")
     if web.exists():
         L.append("- 网页：`10_网页v3/index.html`（双击打开）")

@@ -34,6 +34,13 @@ chatgpt.com/codex/settings/usage”（11-14 定的说法），标题里写“Cod
     认领标签、接着跑的命令都在公开仓库（REPO）。
 11-11 加：期目录里有 logs/codex_额度用完.txt（cloud/codex_login_check.py 写的）就加一段“多半是 Codex 额度用完”，
     标题里写“Codex 额度用完”，放行了的那期光这一条也发；同时有登录失效的记号时只说登录失效（那个要你动手）。
+11-17 加（MiMo 备用）：期目录有 备用写稿.json（MiMo 备用写稿）、Claude不能用.json（认出 Claude 不能用的程序写的），
+    或 审片结论.json 的“审片”写着 MiMo，就是备用那天：不管放没放行都发信。标题写明 MiMo 备用写稿／MiMo 审片、Claude 为什么不能用、
+    连续第几天；第 3 天起标题前加【第 N 天，要处理】，正文第一段是照着做的步骤（登录失效：换令牌；额度用完：恢复时间、看用量页）。
+    正文开头一段写清：Claude 为什么不能用（额度用完写预计恢复时间）、MiMo 写了几次多少 token、这一期不出视频、
+    MiMo 审片只看了文字没听音频、备用写稿.json 里记的“要人看”。没放行时写清怎么手动放行（私有仓库的“放行发布”，
+    运行编号留空，填日期和放行理由）；没出刊时“卡在哪”后面加一句“MiMo 备用写稿也停在第几步”。
+    Claude不能用.json 读不到、字段缺失按最保守处理：自动放行当 false，连续天数当 1。三样都没有的日子，邮件和原来一字不差。
 """
 import argparse
 import json
@@ -42,6 +49,7 @@ import re
 import smtplib
 import sys
 import time
+from datetime import datetime, timezone
 from email.header import Header
 from email.mime.text import MIMEText
 from email.utils import formataddr
@@ -69,6 +77,11 @@ KEEP_DAYS = 14                                 # 私有仓库发行版 run-<编�
 TRIGGER_TIMES = "04:17、04:43、06:47"
 OFFICIAL_RUN = ("gh workflow run frontier-daily.yml -R %s -f until=17 -f review=true -f upload_media=false "
                 "-f test_mode=false -f gemini=default -f extra=none" % REPO)
+# MiMo 备用那天（11-17 加）
+PRIVATE_REPO = "dylan-zhang-wl/frontier-daily"        # 放行发布（publish.yml）、手动放行在这个仓库
+ESCALATE_DAY = 3                                      # 连续第几天起标题加【第 N 天，要处理】、正文第一段写照着做的步骤
+CLAUDE_USAGE_URL = "claude.ai/settings/usage"
+MIMO_KINDS = (gate.BACKUP_KIND, gate.MIMO_REVIEW_KIND)
 
 
 def read_json(p):
@@ -133,6 +146,8 @@ def stuck_at(issue):
         s = (steps.get(k) or {}).get("状态")
         if s == "做完" or (k == "images" and s == "跳过"):
             continue
+        if k in ("video", "web2") and s == "跳过" and ((steps.get(k) or {}).get("附加") or {}).get("视频开关") == "关":
+            continue            # 11-17：视频开关关着（MiMo 备用那天按规矩不出视频），这两步“跳过”不算卡
         why = (steps.get(k) or {}).get("说明") or ""
         return i, "第 %d 步%s：%s%s" % (i, STEP_NAMES[i - 1], s or "没做", "（%s）" % why[:200] if why else "")
     res = last.get("结果") or ""
@@ -229,6 +244,151 @@ def quota_line(q, published_ok):
         head, detail, QUOTA_URL, "，这一期照常发布" if published_ok else "")
 
 
+def _when(s):
+    """ISO 时间 → “2026-11-18 03:00 UTC”；认不出就原样。"""
+    s = str(s or "").strip()
+    if not s:
+        return ""
+    try:
+        d = datetime.fromisoformat(s[:-1] + "+00:00" if s.endswith("Z") else s)
+        d = d.astimezone(timezone.utc) if d.tzinfo else d
+        return d.strftime("%Y-%m-%d %H:%M UTC")
+    except ValueError:
+        return s
+
+
+def _big(n):
+    """大数写成“138.6 万”“4.63 亿”，好读。"""
+    if not isinstance(n, (int, float)) or isinstance(n, bool):
+        return ""
+    if n >= 1e8:
+        return "%.2f 亿" % (n / 1e8)
+    if n >= 1e4:
+        return "%.1f 万" % (n / 1e4)
+    return "%d" % n
+
+
+def _who(who):
+    """“MiMo（备用）”后面接中文不加空格，“MiMo”后面加一个。"""
+    return who if who.endswith("）") else who + " "
+
+
+def backup_info(issue):
+    """MiMo 备用那天的情况（11-17 加）。期目录有 备用写稿.json、Claude不能用.json，或审片结论写着 MiMo 审的，就返回一个字典；
+    三样都没有返回 None（平常的日子，邮件和原来一字不差）。Claude不能用.json 读不到、字段缺失按最保守处理：
+    自动放行当 false，连续天数当 1。"""
+    issue = Path(issue)
+    if not issue.is_dir():
+        return None
+    has_bw, has_down = (issue / gate.BACKUP_MARK).exists(), (issue / gate.CLAUDE_DOWN).exists()
+    rv = read_json(issue / "审片结论.json")
+    reviewer = str(rv.get("审片") or "").strip() if isinstance(rv, dict) else ""
+    if not has_bw and not has_down and "MiMo" not in reviewer:
+        return None
+    bw = read_json(issue / gate.BACKUP_MARK) if has_bw else None
+    bw = bw if isinstance(bw, dict) else {}
+    down = read_json(issue / gate.CLAUDE_DOWN) if has_down else None
+    down = down if isinstance(down, dict) else {}
+    try:
+        days = max(1, int(down.get("连续第几天")))
+    except (TypeError, ValueError):
+        days = 1
+    why = str(down.get("原因") or "").strip()
+    which = down.get("哪一步") if isinstance(down.get("哪一步"), list) else []
+    look = bw.get("要人看") if isinstance(bw.get("要人看"), list) else ([bw["要人看"]] if bw.get("要人看") else [])
+    res = str(bw.get("结果") or "").strip()
+    return {"写稿": has_bw, "审片": "MiMo" in reviewer, "审片人": reviewer, "有记号": has_down,
+            "原因": why if why in ("登录失效", "额度用完", "其他") else "", "原因原话": why,
+            "宽认": str(down.get("认法") or "").strip() == "宽认", "恢复时间": _when(down.get("恢复时间")),
+            "哪一步": [str(x) for x in which], "天": days, "自动放行": down.get("自动放行") is True,
+            "视频关": str(bw.get("视频") or "").strip().startswith("关"),
+            "要人看": [x if isinstance(x, str) else (x.get("说明") or json.dumps(x, ensure_ascii=False)) if isinstance(x, dict) else str(x)
+                     for x in look][:10],
+            "停下": res[3:].lstrip("：: ") if res.startswith("停下") else "",
+            "调用": bw.get("调用次数"), "token": bw.get("token合计"), "credits": bw.get("credits约")}
+
+
+def backup_tag(b):
+    """标题括号里那段：“MiMo 备用写稿、MiMo 审片；Claude 登录失效，连续第 2 天”。"""
+    who = "、".join(x for x, y in (("MiMo 备用写稿", b["写稿"]), ("MiMo 审片", b["审片"])) if y) or "MiMo 备用"
+    why = {"登录失效": "Claude 登录失效", "额度用完": "Claude 额度用完"}.get(b["原因"], "Claude 不能用")
+    return "%s；%s，连续第 %d 天" % (who, why, b["天"])
+
+
+def backup_subject(b, subject):
+    """第 3 天起标题前面加【第 N 天，要处理】。"""
+    return ("【第 %d 天，要处理】" % b["天"] + subject) if b["天"] >= ESCALATE_DAY else subject
+
+
+def todo_lines(b):
+    """要你动手的步骤（登录失效：换令牌；额度用完：等恢复、看用量页；原因没认出：看日志）。"""
+    if b["原因"] == "登录失效":
+        return ["1. 在你自己的 Mac 上打开终端，运行：", "", "    claude setup-token", "",
+                "   按提示在浏览器里登录 Claude，最后终端会显示一串新令牌（先别关这个窗口）。",
+                "2. 把新令牌换进公开仓库的 Secrets（运行下面这条，提示粘贴时把令牌粘进去、回车）：", "",
+                "    gh secret set CLAUDE_CODE_OAUTH_TOKEN -R %s" % REPO, "",
+                "3. 私有仓库里也有一份同名的，一起换：", "",
+                "    gh secret set CLAUDE_CODE_OAUTH_TOKEN -R %s" % PRIVATE_REPO, "",
+                "   （不用终端也行：GitHub 网页上进仓库 → Settings → Secrets and variables → Actions → CLAUDE_CODE_OAUTH_TOKEN → Update。）",
+                "4. 在 cloud/密钥与重置手册.md 补一行：哪天换了 CLAUDE_CODE_OAUTH_TOKEN（只写日期和名字，不写令牌）。"]
+    if b["原因"] == "额度用完":
+        return ["Claude 订阅的额度用完了，%s；额度会自己恢复，不用换令牌。" % (
+                    "预计 %s 恢复" % b["恢复时间"] if b["恢复时间"] else "恢复时间没记下"),
+                "打开 %s 看看用量。云端和你平时用的是同一份订阅，这几天你自己少用一点，云端就能用回 Claude。" % CLAUDE_USAGE_URL]
+    return ["原因没认出来（%s）：打开这次运行的日志，看 claude 那一步的报错（链接在邮件末尾）。" % (
+        "记下的原因是“%s”" % b["原因原话"] if b["原因原话"] else "没有 %s，或里面没写原因" % gate.CLAUDE_DOWN)]
+
+
+def later_todo(b):
+    """第 1、2 天：要动手的事放在邮件后面（第 3 天起已经放在第一段了）。额度用完会自己恢复，开头那段已经写了恢复时间，不另列。"""
+    if b["天"] >= ESCALATE_DAY or b["原因"] == "额度用完":
+        return []
+    head = "登录失效不会自己好，方便时照下面换令牌：" if b["原因"] == "登录失效" else "要你看一眼："
+    return ["", head, ""] + todo_lines(b)
+
+
+def backup_lines(b):
+    """正文开头那一段（第 3 天起前面先放照着做的步骤）。"""
+    lines = []
+    if b["天"] >= ESCALATE_DAY:
+        lines += ["【要你处理】Claude 已经连续 %d 天不能用，照下面做：" % b["天"], ""] + todo_lines(b) + [""]
+    if b["原因"] == "登录失效":
+        why = "云端的 Claude 登录失效（令牌过期或被撤销）"
+    elif b["原因"] == "额度用完":
+        why = "Claude 订阅的额度用完了，%s" % ("预计 %s 恢复" % b["恢复时间"] if b["恢复时间"] else "恢复时间没记下")
+    elif b["原因原话"]:
+        why = "原因没认出来（记下的是“%s”）" % b["原因原话"]
+    else:
+        why = "原因没记下（没有 %s，或里面没写）" % gate.CLAUDE_DOWN
+    lines.append("Claude 不能用：%s%s。这是连续第 %d 天。" % (why, "（按宽一点的认法判的，待核）" if b["宽认"] else "", b["天"]))
+    if b["哪一步"]:
+        lines.append("用不了 Claude 的是：%s。" % "、".join(b["哪一步"]))
+    if b["写稿"]:
+        use = "、".join(x for x in ("调用 %s 次" % b["调用"] if b["调用"] is not None else "",
+                                    "约 %s token" % _big(b["token"]) if _big(b["token"]) else "",
+                                    "约 %s credits" % _big(b["credits"]) if _big(b["credits"]) else "") if x)
+        lines.append("这一期第 4–9 步（选题到改稿）由 MiMo 备用写稿%s。" % ("（%s）" % use if use else ""))
+    if b["视频关"]:
+        lines.append("这一期不出视频：MiMo 备用那天按规矩只出播客和网页。")
+    if b["审片"]:
+        lines.append("审片由 %s做：只看了文字，没听音频。" % _who(b["审片人"]))
+    if b["要人看"]:
+        lines += ["MiMo 备用写稿记下的、要你看一眼的："] + ["- %s" % x for x in b["要人看"]]
+    return lines + [""]
+
+
+def manual_release_lines(day):
+    """备用那天没自动放行：怎么手动放行（输入名照私有仓库 .github/workflows/publish.yml 的 workflow_dispatch）。"""
+    return ["怎么手动放行（你看过觉得能发）：",
+            "1. 打开私有仓库 %s 的 Actions 页：https://github.com/%s/actions" % (PRIVATE_REPO, PRIVATE_REPO),
+            "2. 左边选“放行发布”，右上点 Run workflow；",
+            "3. “哪一期（YYYY-MM-DD）”（date）填 %s；" % day,
+            "   “公开仓库那次出刊运行的编号……”（run_id）留空——留空就是手动放行；",
+            "   “手动放行时：为什么放行”（reason）写放行理由，比如“看过了，MiMo 备用那期可以发”；",
+            "   其余几格（sha、claim、claim_tag 留空，几个勾选框不勾）都不动；",
+            "4. 点绿色的 Run workflow。它会照样逐条判一遍、写进放行结论，但不管过没过都放行，再发布到网站。"]
+
+
 def kinds_of(tell, codex=False, quota=False):
     """标题括号里的几类：请你耳听写上几处。"""
     out = []
@@ -251,6 +411,7 @@ def build(issue, kind="auto", published=None, claim=None, claim_tag=None, saturd
     if kind == "auto":
         kind = "没出刊" if verdict is None else ("放行" if verdict.get("放行") else "没放行")
     url = run_url()
+    backup = None if saturday else backup_info(issue)        # 11-17：MiMo 备用那天；平常的日子是 None，下面的邮件和原来一样
     tail = ["", "—— 这封邮件由 frontier-daily 云端流程自动发出（cloud/release/notify.py）。"]
     if url:
         tail.insert(1, "这次运行：%s" % url)
@@ -275,6 +436,8 @@ def build(issue, kind="auto", published=None, claim=None, claim_tag=None, saturd
         else:
             no, why = stuck_at(issue)
             lines.append("卡在哪：" + why)
+            if backup and backup["停下"]:
+                lines.append("Claude 不能用，MiMo 备用写稿也%s：%s" % ("停在第 %d 步" % no if no else "停下了", backup["停下"]))
             rep = head_lines(issue / "00_调度报告.md", 14)
             if not saturday:
                 lines += ["", "00_调度报告.md 开头：", "", rep or "（没有 00_调度报告.md）"]
@@ -287,6 +450,9 @@ def build(issue, kind="auto", published=None, claim=None, claim_tag=None, saturd
             subject = "【前沿简报】%s 没出刊" % day
         if claim == "released" and claim_tag:
             subject += "，稍后自动再试"
+        if backup:
+            subject = backup_subject(backup, subject + "（%s）" % backup_tag(backup))
+            lines = backup_lines(backup) + lines + later_todo(backup)
         return True, subject, "\n".join(lines + tail)
 
     if kind == "没放行":
@@ -294,17 +460,28 @@ def build(issue, kind="auto", published=None, claim=None, claim_tag=None, saturd
         failed = [c for c in v.get("条件") or [] if not c.get("过")]
         lines = ["%s 这一期做出来了，但没满足自动发布的条件，网站不动，继续显示上一期。" % day, "", "没满足的：", ""]
         lines += ["- 第 %s 条 %s：%s" % (c.get("编号"), c.get("条件"), c.get("说明")) for c in failed] or ["- （放行结论里没写哪一条）"]
-        lines += note_lines(day, v.get("备注"), "另外记下的：")[0]
+        notes = v.get("备注")
+        if backup:          # 11-17：MiMo 备用、MiMo 审片两类备注开头那段已经写了，下面不再逐条列
+            notes = [n for n in notes or [] if not (isinstance(n, dict) and n.get("类") in MIMO_KINDS)]
+        lines += note_lines(day, notes, "另外记下的：")[0]
         rv = head_lines(issue / "审片.md", 12)
         lines += ["", "审片.md 开头：", "", rv or "（没有 审片.md：审片没跑或没写完）"]
+        subject = "【前沿简报】%s 没放行：第 %s 条没满足" % (day, "、".join(str(c.get("编号")) for c in failed) or "?")
+        if backup:          # 11-17：备用那天，手动放行写成一步一步的
+            lines += [""] + manual_release_lines(day) + ["成品整期目录在%s，手动放行就从那里取。" % bundle_where(day)]
+            lines = backup_lines(backup) + lines + later_todo(backup)
+            return True, backup_subject(backup, subject + "（%s）" % backup_tag(backup)), "\n".join(lines + tail)
         lines += ["", "你看过觉得能发：打开 %s → 左边选“放行发布” → Run workflow → 填日期 %s → Run（手动放行）。" % (actions_url(), day),
                   "成品整期目录在%s，手动放行就从那里取。" % bundle_where(day)]
-        return True, "【前沿简报】%s 没放行：第 %s 条没满足" % (day, "、".join(str(c.get("编号")) for c in failed) or "?"), "\n".join(lines + tail)
+        return True, subject, "\n".join(lines + tail)
 
     # 放行：有事才发
     v = verdict or {}
-    nlines, tell, asr = note_lines(day, v.get("备注"), "有几处要你知道：")
-    if not tell and not codex and quota is None and published in (None, "yes"):
+    notes = v.get("备注")
+    if backup:          # 11-17：MiMo 备用、MiMo 审片两类备注开头那段已经写了，下面不再逐条列
+        notes = [n for n in notes or [] if not (isinstance(n, dict) and n.get("类") in MIMO_KINDS)]
+    nlines, tell, asr = note_lines(day, notes, "有几处要你知道：")
+    if not tell and not codex and quota is None and published in (None, "yes") and not backup:
         if asr:
             quiet = gate.split_notes(v.get("备注"))[1]
             if all(gate.listen_kind(n) == gate.LISTEN_ASR for n in quiet):
@@ -322,6 +499,12 @@ def build(issue, kind="auto", published=None, claim=None, claim_tag=None, saturd
     if v.get("人工放行"):
         head += "（人工放行：%s）" % v["人工放行"]
     lines = [head] + nlines
+    if backup:          # 11-17：备用那天放行了也发信
+        subject = {"failed": "发布出错", "no": "放行了但没发布"}.get(published, "已发布")
+        other = "、".join(kinds_of(tell, codex, quota is not None))
+        lines = backup_lines(backup) + lines + later_todo(backup)
+        return True, backup_subject(backup, "【前沿简报】%s %s（%s%s）" % (day, subject, backup_tag(backup), "；" + other if other else "")), \
+            "\n".join(lines + tail)
     subject = {"failed": "发布出错", "no": "放行了但没发布"}.get(published, "已发布，有备注")
     return True, "【前沿简报】%s %s（%s）" % (day, subject, "、".join(kinds_of(tell, codex, quota is not None)) or "无备注"), "\n".join(lines + tail)
 
