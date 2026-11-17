@@ -684,6 +684,24 @@ class Check(Step):
 TODO_SHOW = 20     # 屏幕和调度报告里"要你做"最多列几条；全部的在 logs/检查_稿子.json
 VIDEO_OFF_NOTE = "视频：关，分镜不查"     # 视频开关关着时第 7 步摘要里那一句（2026-11-17 加）
 VIDEO_FP_KEY = "视频"                    # 第 7 步输入指纹里视频开关那一项的键（"=视频=关"）
+# 视频开关关着时第 10–16 步的说法（2026-11-17 加，feat/mimo-release）。第 14、15 步"跳过"的说明里一定带"视频：关"：
+# MiMo 审片（cloud/backup_review.py）认这几个字，算这两步做完
+IMG_VIDEO_OFF = "视频：关，不要视频图"
+VOICE_VIDEO_OFF = "不配（视频：关）"
+VIDEO_OFF_SKIP = "视频：关，这一期不出视频"
+WEB2_VIDEO_OFF_SKIP = "视频：关，第 13 步的网页就是成品"
+
+
+def video_fp(c, key):
+    """第 11、14、15 步输入指纹里视频开关那一项（2026-11-17 加，做法同第 7 步 Check.inputs）：关着时多一项"=视频=关"，
+    一换开关就重做；开着时和加开关以前一字不差（往期记录不变、不会因此重做），只有上一次记录里有"视频"这一项
+    （关着跑过）时才带上"=视频="，这样从关换回开也会重做。"""
+    if not video_switch()[0]:
+        return ["=视频=关"]
+    st = getattr(c, "state", None)            # 有的测试拿 None 当 c（只看开关那几项）
+    rec = st.step(key) if st is not None else None
+    old = rec.get("输入指纹") if isinstance(rec, dict) else None
+    return ["=视频="] if isinstance(old, dict) and VIDEO_FP_KEY in old else []
 
 
 def storyboard_must(out):
@@ -850,7 +868,8 @@ class Images(Step):
                 want.append("term")
             elif k in ("headline", "brief", "deep"):
                 want += [str(it.get("id")).lower() for it in s.get("items") or [] if it.get("id")]
-        sb = read_json(c.p(STORYBOARD), {}) or {}
+        # 视频开关关着（2026-11-17 加）：不读分镜（旧分镜哪怕还在），这一期不要视频图
+        sb = (read_json(c.p(STORYBOARD), {}) or {}) if video_switch()[0] else {}
         vid = [r.get("id") for r in sb.get("image_requests") or [] if r.get("id") and not r.get("commons")]
         return list(dict.fromkeys(want)), vid
 
@@ -866,13 +885,16 @@ class Images(Step):
 
     def plan(self, c):
         mw, mv, want, vid = self.missing(c)
+        von = video_switch()[0]
         if not mw and not mv:
-            return ["网页 %d 张、视频 %d 张都在" % (len(want), len(vid))]
+            return ["网页 %d 张、视频 %d 张都在" % (len(want), len(vid)) if von else "网页 %d 张都在（%s）" % (len(want), IMG_VIDEO_OFF)]
         if c.offline or c.skip_images:
             how = "跳过，用程序画的封面"
         else:
             ok, note = self.agy_status(c)
             how = "停下等你生成：先 agy，没成再 Codex，都不行 --skip-images（%s）" % (note if ok else note + "，这次直接用 Codex")
+        if not von:
+            return ["缺：网页 %s（%s）→ %s" % ("、".join(mw) or "无", IMG_VIDEO_OFF, how)]
         return ["缺：网页 %s；视频 %s → %s" % ("、".join(mw) or "无", "、".join(mv) or "无", how)]
 
     def plan_adopt(self, c):
@@ -880,6 +902,8 @@ class Images(Step):
 
     def run(self, c, how):
         mw, mv, want, vid = self.missing(c)
+        if not video_switch()[0]:            # 视频开关关着（2026-11-17 加）：只要网页图，说法里写明
+            return self.run_video_off(c, mw, want)
         if not mw and not mv:
             return R(DONE, "网页 %d 张、视频 %d 张都在" % (len(want), len(vid)))
         msg = "缺图：网页 %s；视频 %s" % ("、".join(mw) or "无", "、".join(mv) or "无")
@@ -899,6 +923,27 @@ class Images(Step):
             "Codex 也失败两次：加 --skip-images 重跑（网页用主题色封面，视频那几块不带图）",
             "生成完再运行：%s" % c.again()])
 
+    def run_video_off(self, c, mw, want):
+        """视频开关关着时的第 10 步（2026-11-17 加）：只看网页图；缺图时的做法和开着时一样（离线或 --skip-images 跳过、用程序封面，
+        否则停下等你生成），只是不提视频图。附加多记"视频开关": "关"。"""
+        off = {"视频开关": "关"}
+        if not mw:
+            return R(DONE, "网页 %d 张都在（%s）" % (len(want), IMG_VIDEO_OFF), extra=off)
+        msg = "缺图：网页 %s（%s）" % ("、".join(mw), IMG_VIDEO_OFF)
+        if c.offline or c.skip_images:
+            return R(SKIPPED, msg + "。网页缺图画主题色抽象封面", go_on=True, extra=dict(off, 缺网页配图=mw, 缺视频配图=[]))
+        ok, note = self.agy_status(c)
+        warns = [] if ok else ["%s：这一期配图直接用 Codex" % note]
+        return R(WAITING, msg + "；" + note, warns, extra=dict(off, agy=note), todo=[
+            "在会话里生成配图（都走订阅，不另花钱；没有文字、商标、真人）：先 agy，没成再 Codex，Codex 两次都不行就 --skip-images。",
+            "  今天：%s" % (note if ok else note + "，跳过 agy、直接用 Codex"),
+            "  网页：放进 %s，文件名 %s（.png）；每张一条 agy_image.py 命令，Codex 后备命令也在 进度备忘.md'规矩'里配图那一行；" % (
+                rel(c.p("06_配图")), "、".join(mw)),
+            "  每张 agy 图都要打开看：有可读文字、可认出的品牌产品、真人、出现禁用套路（挂锁和钥匙、地球仪、发光大脑、机器人或人形、电路板纹、节点网、二进制、数据雨、连帽黑客；画面描述里要了也算）或明显跑题，就改用 Codex 重画，重画前先把画面描述里的禁用套路或消费设备主角改掉（和 文档/方案/每日自动运行.md 第 10 步一致，11-06 补）；",
+            "  视频：关，这一期不要视频图",
+            "Codex 也失败两次：加 --skip-images 重跑（网页用主题色封面）",
+            "生成完再运行：%s" % c.again()])
+
 
 # ================================================================ 11 配音
 class Voice(Step):
@@ -913,10 +958,14 @@ class Voice(Step):
 
     def outputs(self, c):
         s = c.ed["人声"]
-        return ["%s/episode.mp3" % s, "%s/chapters.json" % s, "%s/qc.json" % s, "%s/voice.json" % VIDEO_VOICE]
+        pod = ["%s/episode.mp3" % s, "%s/chapters.json" % s, "%s/qc.json" % s]
+        # 视频开关关着（2026-11-17 加）：不配视频旁白，产出里没有它（不然下次"接着跑"会以为产出不见了，把播客也重配一遍）
+        return pod + ["%s/voice.json" % VIDEO_VOICE] if video_switch()[0] else pod
 
     def inputs(self, c):
-        return [c.ed["播客稿"], STORYBOARD, str(PROFILE)]
+        if not video_switch()[0]:          # 关着：分镜不算上游（不配视频旁白），多一项"=视频=关"
+            return [c.ed["播客稿"], str(PROFILE)] + video_fp(c, self.key)
+        return [c.ed["播客稿"], STORYBOARD, str(PROFILE)] + video_fp(c, self.key)
 
     # ---- 用哪个声音、给多少钱
     def decide(self, c):
@@ -930,7 +979,8 @@ class Voice(Step):
         avail = 0.0 if c.offline else max(0.0, min(c.budget - c.ledger.issue_total("Gemini"), cap - spent))
         if not backup and not c.offline and avail < 0.02:
             backup, why = True, "这一期或本月剩下的钱不够（还剩 $%.3f）" % avail
-        vid_b = round(min(0.10, avail * 0.25), 3)
+        # 视频开关关着（2026-11-17 加）：不配视频旁白，不给它留钱，全给播客
+        vid_b = round(min(0.10, avail * 0.25), 3) if video_switch()[0] else 0.0
         pod_b = round(max(0.0, avail - vid_b), 3)
         return {"用备用": backup, "原因": why, "播客预算": 0.0 if backup else pod_b, "视频预算": 0.0 if backup else vid_b,
                 "本月已记": spent, "上限": cap}
@@ -979,17 +1029,24 @@ class Voice(Step):
 
     def plan(self, c):
         d = self.decide(c)
+        von = video_switch()[0]
         lines = []
         if d["用备用"]:
             lines.append("声音：整期改走 MiMo 备用（%s）；Gemini 预算 0" % d["原因"])
-        else:
+        elif von:
             lines.append("声音：主声音（Gemini）；这一期播客最多 $%.3f、视频旁白最多 $%.3f（本月已记 $%.2f / 上限 $%.2f）"
                          % (d["播客预算"], d["视频预算"], d["本月已记"], d["上限"]))
+        else:
+            lines.append("声音：主声音（Gemini）；这一期播客最多 $%.3f，视频：关，不配视频旁白（本月已记 $%.2f / 上限 $%.2f）"
+                         % (d["播客预算"], d["本月已记"], d["上限"]))
         lines.append("播客：" + c.show(self.pod_cmd(c, d["用备用"], d["播客预算"], False)))
-        lines.append("视频旁白：" + c.show(self.vid_cmd(c, d["用备用"], d["视频预算"])))
+        lines.append("视频旁白：" + (c.show(self.vid_cmd(c, d["用备用"], d["视频预算"])) if von else VOICE_VIDEO_OFF))
         if not d["用备用"] and not c.offline:
             est = self.estimate(c)
-            lines.append("估计花费（全部重配的上限，缓存里有的不花钱）：播客约 $%.3f、视频约 $%.3f" % (est["播客"] or 0, est["视频"] or 0))
+            if von:
+                lines.append("估计花费（全部重配的上限，缓存里有的不花钱）：播客约 $%.3f、视频约 $%.3f" % (est["播客"] or 0, est["视频"] or 0))
+            else:
+                lines.append("估计花费（全部重配的上限，缓存里有的不花钱）：播客约 $%.3f；视频：关，不配视频旁白" % (est["播客"] or 0))
         elif c.offline:
             lines.append("离线：预算 0，只用缓存；缓存里没有的配不出来 → 出数据版")
         else:
@@ -1026,6 +1083,7 @@ class Voice(Step):
         e = c.ed
         speech = c.p(e["人声"])
         warns, extra = [], {}
+        von = video_switch()[0]          # 视频开关（2026-11-17 加）：关着时完全不配视频旁白，不花一分钱
         if how == "run":
             busy = running_scripts(["(tts|dialog_tts|video3_build)\\.py .*%s" % c.day])
             if busy:
@@ -1059,7 +1117,8 @@ class Voice(Step):
             extra["播客"] = engine if pod_ok else "没配成"
             # ---- 视频旁白
             vid_ok, vengine = False, ""
-            for attempt, backup in ((1, d["用备用"]), (2, True)):
+            # 视频开关关着：一次都不试（循环不进），下面记"不配（视频：关）"
+            for attempt, backup in (((1, d["用备用"]), (2, True)) if von else ()):
                 if attempt == 2 and d["用备用"]:
                     break
                 t0 = time.time()
@@ -1081,8 +1140,13 @@ class Voice(Step):
                     warns.append("视频分镜或旁白没过配音前检查（不是声音的问题，换备用也没用）：" + "；".join(key_lines(last, 2))[:160])
                     break
                 warns.append("视频旁白%s没配成（%s）：%s" % ("主声音" if not backup else "备用", kind, _err(out)))
-            extra["视频旁白"] = vengine if vid_ok else "没配成"
-            extra["视频引擎"] = "mimo" if vengine.startswith("MiMo") else "gemini"
+            if von:
+                extra["视频旁白"] = vengine if vid_ok else "没配成"
+                extra["视频引擎"] = "mimo" if vengine.startswith("MiMo") else "gemini"
+            else:
+                extra.update({"视频旁白": VOICE_VIDEO_OFF, "视频开关": "关"})
+        elif not von:
+            extra.update({"播客": "沿用已有", "视频旁白": VOICE_VIDEO_OFF, "视频开关": "关"})
         else:
             extra.update({"播客": "沿用已有", "视频旁白": "沿用已有", "视频引擎": "gemini"})
             vj = read_json(c.p(VIDEO_VOICE) / "voice.json", {}) or {}
@@ -1266,7 +1330,7 @@ class Video(Step):
         return [STORYBOARD, "%s/voice.json" % VIDEO_VOICE, CARDS, "@step:web", "=新动效=" + ("" if motion_switch()[0] else "关"),
                 "=视频导演=" + ("" if director_switch()[0] else "关"),
                 "=导演旁白=" + ("" if narration_switch()[0] else "关"),       # 11-09：视频旁白归导演开关，同样做法
-                "=中文整词换行=" + ("" if zh_wrap_switch()[0] else "关")]     # 11-09 晚：视频中文整词换行开关，同样做法
+                "=中文整词换行=" + ("" if zh_wrap_switch()[0] else "关")] + video_fp(c, self.key)   # 11-17：视频开关（做法同第 7 步）
 
     def shots_plan(self, c):
         on, why = motion_switch()
@@ -1373,6 +1437,8 @@ class Video(Step):
         return cmd
 
     def plan(self, c):
+        if not video_switch()[0]:            # 视频开关关着（2026-11-17 加）
+            return [VIDEO_OFF_SKIP + "：跳过（不截图、不组装、不导演、不录预览）"]
         don, dwhy = self.director_on()
         return [self.shots_plan(c), "组装（老路，第 6 步的分镜）：" + c.show(self.command(c)) + "（本机，不花钱）",
                 ("视频导演：" + c.show(self.director_cmd(c)) + "（Claude 订阅；两轮导演＋画导演要的图＋组装，最多 %d 分钟，失败或超时用老路那一版）" % (
@@ -1469,6 +1535,8 @@ class Video(Step):
                     {"视频导演": {"结果": "退回", "原因": "fd 出错：%s" % e}})
 
     def run(self, c, how):
+        if not video_switch()[0]:            # 视频开关关着（2026-11-17 加）：跳过；旧的 11_视频v3 由第 15 步挪开
+            return R(SKIPPED, VIDEO_OFF_SKIP, go_on=True, extra={"视频开关": "关"})
         v = (c.state.step("voice") or {}).get("附加") or {}
         if v.get("视频旁白") == "没配成":
             return R(SKIPPED, "视频旁白没配成，这一期不出视频", go_on=True)
@@ -1506,17 +1574,23 @@ class Web2(Step):
         return ["10_网页v3/issues/%s/issue.js" % c.day]
 
     def inputs(self, c):
-        return ["@step:web", "11_视频v3/video3_media.json"]
+        return ["@step:web", "11_视频v3/video3_media.json"] + video_fp(c, self.key)    # 11-17：视频开关（做法同第 7 步）
 
     def run(self, c, how):
         vs = (c.state.step("video") or {}).get("状态")
         vdir = c.p("11_视频v3")
         warns = []
-        if vs in (FAILED, SKIPPED):
+        von = video_switch()[0]
+        # 视频开关关着（2026-11-17 加）：不管第 14 步记的是什么，旧的 11_视频v3（第 13 步可能已经把它放进网页）都挪开、
+        #   网页不带视频；没有旧视频就"跳过"，第 13 步的网页就是成品
+        if vs in (FAILED, SKIPPED) or not von:
             if vdir.exists():
                 aside = c.p("11_视频v3_未用_%s" % c.run_id)
                 vdir.rename(aside)
-                warns.append("视频没成，旧的 11_视频v3 挪到 %s（留底，网页不放）" % aside.name)
+                warns.append("视频没成，旧的 11_视频v3 挪到 %s（留底，网页不放）" % aside.name if von else
+                             "视频：关，旧的 11_视频v3 挪到 %s（留底，网页不放）" % aside.name)
+            elif not von:
+                return R(SKIPPED, WEB2_VIDEO_OFF_SKIP, go_on=True, extra={"带视频": False, "视频开关": "关"})
             elif vs == SKIPPED:
                 return R(SKIPPED, "没有视频，第 13 步的网页就是成品", go_on=True)
         if not Path(c.web_cfg).exists():
@@ -1532,6 +1606,9 @@ class Web2(Step):
         js = c.p(self.outputs(c)[0]).read_text(encoding="utf-8")
         has_video = '"v":3' in js or '"v": 3' in js
         warns += [x.strip() for x in out.splitlines() if x.strip().startswith("注意")][:6]
+        if not von:
+            return R(DONE, "网页%s视频（视频：关）" % ("带" if has_video else "不带"), warns,
+                     extra={"带视频": has_video, "视频开关": "关"})
         return R(DONE, "网页%s视频" % ("带" if has_video else "不带"), warns, extra={"带视频": has_video})
 
 
@@ -1608,10 +1685,13 @@ class Accept(Step):
                 probs.append("'听这一段'点了没有从对的时间放：" + "；".join(tail(out, 2))[:120])
             res["听这一段"] = jr
         res["没过"], res["提醒"] = probs, warns
+        von = video_switch()[0]
+        if not von:                          # 视频开关关着（2026-11-17 加）：验收本来就不要求视频，记一笔
+            res["视频开关"] = "关"
         write_json(c.p("logs/验收.json"), res)
         if probs:
             return R(FAILED, "验收没过 %d 项，不要发布" % len(probs), probs + warns, go_on=True)
-        return R(DONE, "三种视图无报错、不横滚、不缺字；上标不掉行；'听这一段'正常", warns)
+        return R(DONE, "三种视图无报错、不横滚、不缺字；上标不掉行；'听这一段'正常" + ("" if von else "（视频：关，这一期没有视频）"), warns)
 
 
 def _json_list(out):
@@ -1664,7 +1744,7 @@ class Report(Step):
             except Exception:      # noqa: BLE001  账本读不出来就不写本月那半句
                 month = {}
             sec = SC.build(c.issue, steps_now, SC.costs_of(c.ledger.issue_file), month,
-                           SC.images_summary(c.issue, want, vid), iso())
+                           SC.images_summary(c.issue, want, vid, video_off=SC.video_off(steps_now)), iso())
             SC.write(c.p("自检.md"), sec)
             return []
         except Exception as e:      # noqa: BLE001

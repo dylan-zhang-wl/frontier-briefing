@@ -29,6 +29,16 @@
     9  审片结论.json         有、能读、日期对、“放行”为 true、“立即”为空；“请你耳听”不挡、记备注。缺失＝不放行
 只读期目录，只写放行结论一个文件。不调用模型、不联网。
 
+MiMo 备用那天（2026-11-17 加；Claude 不能用时由 MiMo 写稿、审片，见 cloud/backup_writer.py、cloud/backup_review.py）：
+    “按规矩不出视频”要两个记号同时在：fd 记录里第 14 或 15 步的 附加.视频开关 是“关”（fd 的“视频”开关关着跑的），
+    而且期目录根上的 备用写稿.json 的“视频”一栏以“关”开头。这时第 1 条不算第 14、15 步“跳过”、第 3 条不要求视频旁白和
+    “网页带视频”（网页反倒不许带视频）、第 7 条只查播客时长，各记一句。只有一个记号（比如正常那天视频真坏了、或者只是开关关了）
+    照旧不过。
+    第 9 条另认两件事：审片结论.json 的“审片”写着 MiMo（MiMo 审片）照常按“放行”“立即”判，备注记一条“MiMo 审片”；
+    期目录有 备用写稿.json（这一期是 MiMo 写的）时，读 Claude不能用.json 的“自动放行”，不是 true（没写、读不出也算）就不放行，
+    理由“MiMo 备用写稿：按设定等你看过再手动放行”，备注记一条“MiMo 备用”。手动放行（--manual）照旧不管过没过都放行。
+    “MiMo 备用”“MiMo 审片”两类备注在 MAIL_KINDS 里：备用那天就算放行了也发邮件。
+
 “请你耳听”的分拣（11-10 加，用户同意）：审片给每条写“判断”（多半真念错／多半转写听错）和一句“依据”，原样记进备注。
 它只管发不发邮件，不管放不放行。哪些备注要告诉你（listen_kind、split_notes）写在这里，notify.py 也用这两个函数，两边一样：
 备用声音、配图退回、不是“多半转写听错”的请你耳听要告诉你；旧格式没写“判断”、写的认不出，一律当“多半真念错”（宁可多发）。
@@ -67,7 +77,13 @@ LISTEN_REAL, LISTEN_ASR, LISTEN_UNSURE = "多半真念错", "多半转写听错"
 QUIET = (LISTEN_ASR, LISTEN_UNSURE)                 # 这两类请你耳听不发信，只报个数（11-14 加“拿不准”）
 SPEED = re.compile(r"语速")                          # 说明里是语速指标的：不进“念错”一栏（11-14，经验库第 67 件 ③）
 FACT_HINT = re.compile(r"版本号|数字|数量级|单位|人名|公司名|模型名|机构名")   # 审片没写“关乎事实”时，从依据里认
-MAIL_KINDS = ("备用声音", "配图退回", LISTEN)      # 已放行的那期有这几类备注才发邮件；“其他”（软规则放宽）不发
+BACKUP_KIND, MIMO_REVIEW_KIND = "MiMo 备用", "MiMo 审片"      # 11-17：MiMo 备用写稿、MiMo 审片那天的备注
+# 已放行的那期有这几类备注才发邮件；“其他”（软规则放宽）不发。11-17 加 MiMo 备用、MiMo 审片：备用那天放行了也发
+MAIL_KINDS = ("备用声音", "配图退回", LISTEN, BACKUP_KIND, MIMO_REVIEW_KIND)
+BACKUP_MARK = "备用写稿.json"          # cloud/backup_writer.py 写在期目录根上：这一期第 4–9 步是 MiMo 备用写的
+CLAUDE_DOWN = "Claude不能用.json"      # 认出“Claude 不能用”的程序写在期目录根上：原因、连续第几天、自动放行……
+NO_AUTO_RELEASE = "MiMo 备用写稿：按设定等你看过再手动放行"
+VIDEO_OFF_NOTE = "视频：关（MiMo 备用写稿那天按规矩不出视频）"
 
 
 def listen_kind(x):
@@ -217,12 +233,44 @@ class Gate:
         self.results.append({"编号": no, "条件": TITLES[no], "过": bool(ok), "说明": why, "证据": evidence,
                              "备注": notes or []})
 
+    # ---------------------------------------------------------------- MiMo 备用那天（11-17 加）
+    def backup(self):
+        """期目录根上的 备用写稿.json：在就返回它的内容（读不出来是 {}），不在返回 None。"""
+        p = self.issue / BACKUP_MARK
+        if not p.exists():
+            return None
+        d = read_json(p)
+        return d if isinstance(d, dict) else {}
+
+    def video_off_day(self):
+        """这一天按规矩不出视频：两个记号同时在才算——fd 记录里第 14 或 15 步的 附加.视频开关 是“关”，
+        而且 备用写稿.json 的“视频”一栏以“关”开头。只有一个（正常那天视频真坏了、只是开关关了）都不算。"""
+        fd_off = any(self.ex(k).get("视频开关") == "关" for k in ("video", "web2"))
+        b = self.backup()
+        return fd_off and b is not None and str(b.get("视频") or "").strip().startswith("关")
+
+    def backup_release(self):
+        """MiMo 备用写稿那天（期目录有 备用写稿.json）：(备注, 不放行的理由或 None)；不是那天返回 ([], None)。
+        读 Claude不能用.json 的“自动放行”：只有明明白白写着 true 才自动放行；文件没有、读不出、没写、写的不是 true，都按不放行。"""
+        if self.backup() is None:
+            return [], None
+        down = read_json(self.issue / CLAUDE_DOWN)
+        down = down if isinstance(down, dict) else {}
+        auto = down.get("自动放行") is True
+        why = str(down.get("原因") or "").strip()
+        why = "Claude %s" % why if why in ("登录失效", "额度用完") else \
+            "Claude 不能用（%s）" % ("原因：%s" % why if why else "没有 %s 或没写原因" % CLAUDE_DOWN)
+        note = {"类": BACKUP_KIND, "说明": "这一期第 4–9 步是 MiMo 备用写稿（%s）；%s" % (
+            why, "设定是审片过了就自动放行" if auto else "设定是不自动放行，等你看过再手动放行")}
+        return [note], (None if auto else NO_AUTO_RELEASE)
+
     # ---------------------------------------------------------------- 1
     def c1(self):
         ev = ["logs/fd_state.json 步骤.<17 步>.状态"]
         if self.state is None:
             return self.add(1, False, "没有 logs/fd_state.json（这一期没跑或文件坏了）", ev)
         bad, notes = [], []
+        voff, vskip = self.video_off_day(), []          # 11-17：MiMo 备用那天按规矩不出视频，第 14、15 步“跳过”不算没过
         for i, (k, name) in enumerate(STEPS, 1):
             s = self.st(k).get("状态")
             if s == DONE:
@@ -232,10 +280,15 @@ class Gate:
                 notes.append({"类": "配图退回", "说明": "配图退回程序画的封面（缺网页图：%s；缺视频图：%s）" % (
                     "、".join(ex.get("缺网页配图") or []) or "无", "、".join(ex.get("缺视频配图") or []) or "无")})
                 continue
+            if voff and k in ("video", "web2") and s == SKIPPED:
+                vskip.append(str(i))
+                continue
             bad.append("第 %d 步%s：%s" % (i, name, s or "没有记录"))
+        vnotes = [{"类": BACKUP_KIND, "说明": "%s，第 %s 步跳过" % (VIDEO_OFF_NOTE, "、".join(vskip))}] if vskip else []
         if bad:
-            return self.add(1, False, "；".join(bad), ev, notes)
-        self.add(1, True, "17 步都是“做完”" + ("（第 10 步配图跳过，用程序画的封面）" if notes else ""), ev, notes)
+            return self.add(1, False, "；".join(bad), ev, notes + vnotes)
+        self.add(1, True, "17 步都是“做完”" + ("（第 10 步配图跳过，用程序画的封面）" if notes else "") +
+                 ("（第 %s 步跳过：%s）" % ("、".join(vskip), VIDEO_OFF_NOTE) if vskip else ""), ev, notes + vnotes)
 
     # ---------------------------------------------------------------- 2
     def c2(self):
@@ -253,19 +306,25 @@ class Gate:
     def c3(self):
         ev = ["logs/fd_state.json 步骤.voice.附加.播客／视频旁白", "步骤.web.附加.播客", "步骤.web2.附加.带视频"]
         v, w, w2 = self.ex("voice"), self.ex("web"), self.ex("web2")
+        voff = self.video_off_day()                     # 11-17：MiMo 备用那天按规矩不出视频，只要求播客
         bad = []
         if not self.st("voice"):
             bad.append("没有第 11 步配音的记录")
         if v.get("播客") == "没配成":
             bad.append("播客没配成")
-        if v.get("视频旁白") == "没配成":
+        if not voff and v.get("视频旁白") == "没配成":
             bad.append("视频旁白没配成")
         if w.get("播客", "无") == "无":
             bad.append("网页没挂播客")
-        if w2.get("带视频") is not True:
+        if voff:
+            if w2.get("带视频") is True:
+                return self.add(3, False, "视频：关，网页却带着视频（可能是旧的视频没挪开）" + ("；" + "；".join(bad) if bad else ""), ev)
+        elif w2.get("带视频") is not True:
             bad.append("网页没带视频")
         if bad:
             return self.add(3, False, "这一期是数据版：" + "；".join(bad), ev)
+        if voff:
+            return self.add(3, True, "播客（%s）在网页上；%s" % (w.get("播客"), VIDEO_OFF_NOTE), ev)
         self.add(3, True, "播客（%s）、视频都在网页上" % w.get("播客"), ev)
 
     # ---------------------------------------------------------------- 4
@@ -342,17 +401,20 @@ class Gate:
         human = HUMAN_DIR.get(self.ed, HUMAN_DIR["weekday"])
         ev = ["11_视频v3/video3_media.json duration", human + "/qc.json 整集.时长把关.配完按实际"]
         bad, parts = [], []
-        vm = read_json(self.issue / "11_视频v3" / "video3_media.json") or {}
-        dur = vm.get("duration")
-        if dur is None:
-            m = re.search(r"([\d.]+) 秒", str(self.st("video").get("说明") or ""))
-            dur = float(m.group(1)) if m else None
-        if dur is None:
-            bad.append("查不到视频时长")
-        elif float(dur) > VIDEO_MAX:
-            bad.append("视频 %.1f 秒，超过 180 秒" % float(dur))
+        if self.video_off_day():                        # 11-17：MiMo 备用那天按规矩不出视频，只查播客时长
+            parts.append("%s，不查视频时长" % VIDEO_OFF_NOTE)
         else:
-            parts.append("视频 %.1f 秒" % float(dur))
+            vm = read_json(self.issue / "11_视频v3" / "video3_media.json") or {}
+            dur = vm.get("duration")
+            if dur is None:
+                m = re.search(r"([\d.]+) 秒", str(self.st("video").get("说明") or ""))
+                dur = float(m.group(1)) if m else None
+            if dur is None:
+                bad.append("查不到视频时长")
+            elif float(dur) > VIDEO_MAX:
+                bad.append("视频 %.1f 秒，超过 180 秒" % float(dur))
+            else:
+                parts.append("视频 %.1f 秒" % float(dur))
         q = read_json(self.issue / human / "qc.json") or {}
         gate = ((q.get("整集") or {}).get("时长把关") or {}).get("配完按实际")
         if not gate:
@@ -399,12 +461,17 @@ class Gate:
     # ---------------------------------------------------------------- 9
     def c9(self):
         ev = ["审片结论.json 日期／放行／立即／请你耳听"]
+        # 11-17：MiMo 备用写稿那天，按 Claude不能用.json 的“自动放行”定能不能自动放行；哪条路返回都带上这条备注和理由
+        pre, block = self.backup_release()
+        if pre:
+            ev = ev + [BACKUP_MARK, CLAUDE_DOWN + " 自动放行"]
+        more_why = "；" + block if block else ""
         p = self.issue / "审片结论.json"
         if not p.exists():
-            return self.add(9, False, "没有 审片结论.json（审片没跑或没写完），按规矩不放行", ev)
+            return self.add(9, False, "没有 审片结论.json（审片没跑或没写完），按规矩不放行" + more_why, ev, pre)
         rv = read_json(p)
         if not isinstance(rv, dict):
-            return self.add(9, False, "审片结论.json 读不出来（不是合法的 JSON）", ev)
+            return self.add(9, False, "审片结论.json 读不出来（不是合法的 JSON）" + more_why, ev, pre)
         bad = []
         if rv.get("日期") != self.day:
             bad.append("审片结论的日期是 %s，不是 %s" % (rv.get("日期"), self.day))
@@ -421,6 +488,13 @@ class Gate:
             bad.append("审片结论比调度报告旧（审的可能是上一版成品）")
         listen = rv.get("请你耳听") if isinstance(rv.get("请你耳听"), list) else []
         notes = [listen_note(x) for x in listen]
+        who = str(rv.get("审片") or "").strip()            # 11-17：MiMo 审片写“审片”: “MiMo（备用）”；Claude 审片不写这一栏
+        mimo = "MiMo" in who
+        if mimo:
+            notes = [{"类": MIMO_REVIEW_KIND, "说明": "审片是 %s%s做的：只看了文字，没听音频" % (who, "" if who.endswith("）") else " ")}] + notes
+        notes = pre + notes
+        if block:
+            bad.append(block)
         if bad:
             return self.add(9, False, "；".join(bad), ev, notes)
         asr = sum(1 for x in listen if listen_kind(x) == LISTEN_ASR)
@@ -432,8 +506,9 @@ class Gate:
                                                        "、%s %d 处" % (LISTEN_UNSURE, uns) if uns else "")
         else:
             more = "；有 %d 处请你耳听" % len(listen)
-        self.add(9, True, "审片结论放行（过 %s、不过 %s、查不了 %s；%s 写）%s" % (
-            rv.get("过", "?"), rv.get("不过", "?"), rv.get("查不了", "?"), rv.get("写于", "?"), more), ev, notes)
+        self.add(9, True, "审片结论放行（过 %s、不过 %s、查不了 %s；%s 写%s）%s" % (
+            rv.get("过", "?"), rv.get("不过", "?"), rv.get("查不了", "?"), rv.get("写于", "?"), "；%s审片" % who if mimo else "",
+            more), ev, notes)
 
     def run(self):
         for f in (self.c1, self.c2, self.c3, self.c4, self.c5, self.c6, self.c7, self.c8, self.c9):
