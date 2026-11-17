@@ -241,6 +241,32 @@ def zh_wrap_switch():
     return True, "fd_开关.json 的“视频中文整词换行”写着“开”" if v in _ON else "fd_开关.json 的“视频中文整词换行”值认不出（%r），按“开”" % v
 
 
+# ---------------------------------------------------------------- 视频开关（2026-11-17 加，feat/mimo-fallback 分支）
+# 开（默认）：和加开关以前一样，第 6 步要三份稿子（播客、网页、视频分镜），第 7、9 步查分镜。
+# 关：这一期不出视频——第 6 步只要播客和网页两份；第 7 步（和第 9 步改后复查）不跑分镜检查（helpers.py storyboard），
+#   易歧义词只看播客稿，摘要写"视频：关，分镜不查"；第 8、9 步给人的说明里不再提分镜。
+#   **目前只管第 6–9 步**：第 10–17 步（配图、配音、视频、网页带视频、验收、放行）还没跟着改，所以现在只用于备用写稿
+#   （cloud/backup_writer.py --no-video）试做，正式出刊不要关。
+# 先看环境变量 FD_VIDEO（只管这一次，比如 FD_VIDEO=off ./fd run …），再看 fd_开关.json 的"视频"；都没有或读不出来按"开"。
+VIDEO_KEY = "视频"
+
+
+def video_switch():
+    """返回 (开着没有, 从哪来的一句话)。"""
+    env = str(os.environ.get("FD_VIDEO") or "").strip().lower()
+    if env in _OFF:
+        return False, "环境变量 FD_VIDEO=%s" % env
+    if env in _ON:
+        return True, "环境变量 FD_VIDEO=%s" % env
+    try:
+        v = str(json.loads(SWITCH_FILE.read_text(encoding="utf-8")).get(VIDEO_KEY) or "").strip().lower()
+    except (OSError, ValueError, AttributeError):
+        return True, "没有 fd_开关.json（或读不出来），按“开”"
+    if v in _OFF:
+        return False, "fd_开关.json 的“视频”写着“关”"
+    return True, "fd_开关.json 的“视频”写着“开”" if v in _ON else "fd_开关.json 的“视频”值认不出（%r），按“开”" % v
+
+
 def monthly_cap():
     prof = read_json(PROFILE, {}) or {}
     v = prof.get("每月 Gemini 配音上限美元（建议）")

@@ -13,6 +13,9 @@ fd 要的那几样文件，再接着跑。fd 自己的检查和"第一次没过�
   第 7 步 稿子检查  → 没过：把问题清单交回 MiMo 改涉及的那几份（这一步最多一轮）
   第 8 步 独立审读  → 另起一次 MiMo 调用（不带写稿的对话），程序把回答写成 审读意见.md，第一行"必须改：N"按条数数
   第 9 步 改稿      → 按审读意见改涉及的稿子（每份一次调用），程序写 审读处理.md；改后复查没过再交回改一轮
+无视频（2026-11-17 用户定：备用那天只出播客和网页，视频以后另测）：--no-video，或 fd_开关.json 的"视频"写"关"（同一个开关，
+  orchestrator.common.video_switch）。这时不写视频分镜、不做分镜预查，审读和改稿的任务里只有播客、网页两份；每一次 ./fd 都带
+  FD_VIDEO=off，fd 第 6–9 步不要求分镜、第 7 步不查分镜。检查本身一条不放松。
 
 事实规矩：唯一的事实来源是 03_事件卡/cards_写稿用.json（经 04_文稿/写稿输入.json 交给 MiMo）。每次写稿、审读、改稿
   调用的提示开头都写死这一条（FACT_RULES），并给卡里每条 facts、numbers、who_said 标上编号，方便写出处。
@@ -24,7 +27,7 @@ fd 要的那几样文件，再接着跑。fd 自己的检查和"第一次没过�
 密钥：只按 pipeline/keys.py 的办法从环境变量读（本机由 FD_ENV_FILE 指向 .env），不打印、不写进文件。
 
 用法（仓库根目录；$PY＝~/.venvs/frontier-daily/bin/python）：
-  $PY cloud/backup_writer.py run --date 2026-11-16 [--issue-dir <副本>/2026-11-16] [--max-calls 14] -- --budget-usd 0
+  $PY cloud/backup_writer.py run --date 2026-11-16 [--issue-dir <副本>/2026-11-16] [--max-calls 14] [--no-video] -- --budget-usd 0
   $PY cloud/backup_writer.py estimate --date 2026-11-16 [--issue-dir …]    # 不联网：按真实提示估这一期要多少 token、credits
 退出码：0 第 9 步做完；2 停下（fd 要人拍板、交回改过还不过、MiMo 出错、超了上限）；1 程序自己出错。
 """
@@ -49,7 +52,7 @@ TASK_DOC = ROOT / "cloud" / "任务说明_云端.md"
 RULES_DOC = ROOT / "文档" / "经验" / "问题与解决办法.md"
 sys.path.insert(0, str(PIPE))
 from orchestrator.common import (EDITIONS, CARDS, LINEUP, WEB_DRAFT, STORYBOARD, NO_PODCAST, DONE, FAILED,  # noqa: E402
-                                 WAITING, TESTDIR, PY, pick_edition, read_json, write_json, write_text)
+                                 WAITING, TESTDIR, PY, pick_edition, read_json, write_json, write_text, video_switch)
 
 PRO = "mimo-v2.6-pro"
 # Token Plan 价目（credits／token；mimo.mi.com 文档 price/token-plan，2026-11-16 查）：输入未命中缓存、命中缓存、输出；
@@ -69,6 +72,11 @@ CALL_DIR = "logs/备用写稿"
 
 # 三份稿子：名字 → (fd 要的文件, EDITIONS 指令里的键, 格式, 每次最多输出多少 token)
 KINDS = ("播客", "网页", "视频")
+KINDS_NO_VIDEO = ("播客", "网页")      # 视频开关关着（--no-video）时只写这两份（2026-11-17 加）
+# 无视频时加进写稿、审读、改稿任务里的一句（只说这一次的范围，不写针对哪一期内容的话）。共同材料（系统提示）不动：
+# 里面原样摘的规矩有几条讲视频，靠这一句说明这一次不适用
+NO_VIDEO_NOTE = ("**这一期不出视频**（备用写稿开关\"视频：关\"）：只写、只审、只改播客和网页两份稿子，不写也不改视频分镜。"
+                 "这一次提示里摘的规矩和任务说明，凡是讲视频分镜、视频画面、视频旁白的条目，这一次都不适用。")
 # 备用模式下视频分镜最多交回改几轮（2026-11-16 第二次真跑前加，用户同意）：分镜检查一次只报一类错（结构、数字、触发词……
 # 前一类核不上就不查后一类），fd 只给交回改一轮，MiMo 改完第一类才露出第二类。所以备用写稿在交给 fd 判以前，先用 fd 同一个
 # 检查程序（helpers.py storyboard）查分镜、交回改；分镜累计最多改 SB_ROUNDS 轮（含 fd 第 7、9 步交回改的那一轮）。
@@ -562,18 +570,18 @@ def out_spec(iss, kind):
     return OUT_SPEC[kind] % iss.day if "%s" in OUT_SPEC[kind] else OUT_SPEC[kind]
 
 
-def write_task(iss, kind, sec):
+def write_task(iss, kind, sec, video=True):
     return "\n\n".join([
         instructions(iss, kind),
         "---\n\n# 写稿要求（cloud/任务说明_云端.md「写稿子代理的任务」）\n\n" + sec["写稿"],
         "---\n\n# 你这一次的任务：写这一期的%s稿（%s，%s）\n\n你是这一期的主笔。照上面的指令和前面共同材料里的写作指南、已定规矩写。"
         "事实只能来自「材料六」的事件卡（03_事件卡/cards_写稿用.json）。写完会交给程序检查（fd 第 7 步）。\n\n%s"
         % (kind, iss.ed["名字"], iss.day, out_spec(iss, kind)),
-    ])
+    ] + ([] if video else [NO_VIDEO_NOTE]))
 
 
-def fix_task(iss, kind, sec, problems, draft, why):
-    return "\n\n".join([
+def fix_task(iss, kind, sec, problems, draft, why, video=True):
+    return "\n\n".join(([] if video else [NO_VIDEO_NOTE]) + [
         instructions(iss, kind),
         "---\n\n# 写稿要求（cloud/任务说明_云端.md「写稿子代理的任务」）\n\n" + sec["写稿"],
         "---\n\n# 你这一次的任务：按程序检查的问题改%s稿（%s）\n\n下面是你上一版的%s稿全文，和程序检查（fd 第 7 步那一组）给出的问题。"
@@ -594,28 +602,44 @@ REVIEW_OUT = """# 输出（覆盖上面"写到 审读意见.md"那几条的格�
 files 写这一条涉及哪几份（"播客""网页""视频"里选；三处说法要一致时都写上）。没有就写空数组。不要代码块围栏。"""
 
 
-def review_task(iss, sec, drafts):
-    parts = [instructions(iss, "播客"), instructions(iss, "网页"), instructions(iss, "视频"),
+def review_out(video=True):
+    """审读的输出格式。开视频时就是 REVIEW_OUT 原文；无视频时只把位置示例和 files 的选项换成播客、网页两份。"""
+    if video:
+        return REVIEW_OUT
+    t = REVIEW_OUT.replace("／视频 nvidia 章旁白", "").replace('"files": ["播客", "网页", "视频"]', '"files": ["播客", "网页"]')
+    t = t.replace('files 写这一条涉及哪几份（"播客""网页""视频"里选；三处说法要一致时都写上）',
+                  'files 写这一条涉及哪几份（"播客""网页"里选；两处说法要一致时都写上；这一期没有视频，不要写"视频"）')
+    if t == REVIEW_OUT or any(x in t for x in ("视频 nvidia", '"视频"]', '"网页""视频"', "三处说法")):
+        raise SystemExit("REVIEW_OUT 改过了，review_out 的无视频替换对不上，要跟着改")
+    return t
+
+
+def review_task(iss, sec, drafts, kinds=KINDS):
+    video = "视频" in kinds
+    checks = list(dict.fromkeys(k for k, f, _ in KEY_RULES if video or not f.endswith("写稿_视频v3.md"))) + [REVIEW_EXTRA[0]]
+    parts = [instructions(iss, k) for k in kinds] + [
              "---\n\n" + sec["审读"],
              "---\n\n# 必查项（逐条查；依据都在共同材料「材料一之二　重点规矩」里，是已有规矩的原文）\n\n"
-             + "\n".join("%d. %s" % (i, k) for i, k in enumerate(list(dict.fromkeys(k for k, _, _ in KEY_RULES)) + [REVIEW_EXTRA[0]], 1))
-             + "\n\n每一项对三份稿子（播客、网页中英文、视频旁白和画面）都要查；查出来的按上面审读任务的分法放进必须改或建议改"
+             + "\n".join("%d. %s" % (i, k) for i, k in enumerate(checks, 1))
+             + ("\n\n每一项对三份稿子（播客、网页中英文、视频旁白和画面）都要查；" if video else "\n\n每一项对两份稿子（播客、网页中英文）都要查；")
+             + "查出来的按上面审读任务的分法放进必须改或建议改"
              + "（最后一项对不上的一律算必须改）。\n\n" + review_extra_text(),
              "---\n\n# 补充（备用写稿）\n\n这一次的审读由 MiMo 另起一次调用来做，和写稿不共用对话。稿子不是你写的。"
-             "「材料六」的事件卡就是 `03_事件卡/cards_写稿用.json`；`01_获取/` 里的原始材料这一次给不了你，判断以卡的原文摘录（quote）为准。",
-             REVIEW_OUT]
-    for kind in KINDS:
+             "「材料六」的事件卡就是 `03_事件卡/cards_写稿用.json`；`01_获取/` 里的原始材料这一次给不了你，判断以卡的原文摘录（quote）为准。"
+             + ("" if video else "\n\n" + NO_VIDEO_NOTE),
+             review_out(video)]
+    for kind in kinds:
         parts.append("## 要审的%s稿（%s）\n\n%s" % (kind, iss.files[kind], drafts[kind]))
     return "\n\n".join(parts)
 
 
-def revise_task(iss, kind, sec, items, draft):
+def revise_task(iss, kind, sec, items, draft, video=True):
     rows = []
     for it in items:
         rows.append("- [%s] 位置：%s\n  原句：%s\n  问题：%s\n  依据：%s\n  改法：%s" % (
             it["_label"], it.get("where", ""), it.get("original", ""), it.get("problem", ""), it.get("basis", ""), it.get("fix", "")))
     fmt = "Markdown 正文＋语气表" if FORMAT[kind] == "text" else "一个合法的 JSON 对象"
-    return "\n\n".join([
+    return "\n\n".join(([] if video else [NO_VIDEO_NOTE]) + [
         instructions(iss, kind),
         "---\n\n# 写稿要求（cloud/任务说明_云端.md「写稿子代理的任务」）\n\n" + sec["写稿"],
         "---\n\n# 改稿要求（cloud/任务说明_云端.md）\n\n" + sec["改稿"],
@@ -691,12 +715,13 @@ def render_review(rv, files_fp, model=PRO):
     return "\n".join(L) + "\n"
 
 
-def review_items(rv):
-    """要交给改稿的条目：必须改（全部）＋建议改；每条标上"必须改 1""建议改 2"，没写涉及哪份的按三份都涉及。"""
+def review_items(rv, kinds=KINDS):
+    """要交给改稿的条目：必须改（全部）＋建议改；每条标上"必须改 1""建议改 2"，没写涉及哪份的按这一期的几份都涉及
+    （无视频时只有播客、网页两份；写了"视频"的不算）。"""
     out = []
     for key, name in (("must", "必须改"), ("suggest", "建议改")):
         for i, r in enumerate(rv.get(key) or [], 1):
-            files = [f for f in (r.get("files") or []) if f in KINDS] or list(KINDS)
+            files = [f for f in (r.get("files") or []) if f in kinds] or list(kinds)
             out.append(dict(r, _label="%s %d" % (name, i), _files=files, _must=key == "must"))
     return out
 
@@ -747,8 +772,8 @@ def check_problems(iss, rerun=None):
     return out
 
 
-def rerun_checker(iss):
-    """视频分镜、网页数字两道检查再跑一遍（程序，不花钱），拿全部要改的行。"""
+def rerun_checker(iss, env=None):
+    """视频分镜、网页数字两道检查再跑一遍（程序，不花钱），拿全部要改的行。env：子程序的环境（无视频时带 FD_VIDEO=off）。"""
     def run(name):
         if name == "视频分镜":
             cmd = [str(PY), "-u", str(PIPE / "orchestrator" / "helpers.py"), "storyboard", "--issue-dir", str(iss.dir)]
@@ -757,7 +782,7 @@ def rerun_checker(iss):
                    "--podcast", NO_PODCAST, "--out", str(iss.p("logs/备用写稿_网页预检.py"))]
         try:
             r = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=600, errors="replace",
-                               env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+                               env=dict(env or os.environ, PYTHONDONTWRITEBYTECODE="1"))
         except (OSError, subprocess.TimeoutExpired):
             return []
         rows = []
@@ -774,12 +799,15 @@ def rerun_checker(iss):
 # ---------------------------------------------------------------- 驱动
 class Driver:
     def __init__(self, iss, mimo, fd_extra=(), fd_runner=None, db=None, sel_inputs=None, rerun=None, max_loops=16,
-                 sb_runner=None, sb_base=0, snap_before_review=None):
+                 sb_runner=None, sb_base=0, snap_before_review=None, video=True):
         self.iss, self.mimo, self.fd_extra = iss, mimo, list(fd_extra)
+        # 视频开关（2026-11-17 加）：False＝这一期不出视频，只写、审、改播客和网页，不做分镜预查；每一次 ./fd 都带 FD_VIDEO=off
+        self.video = bool(video)
+        self.kinds = KINDS if self.video else KINDS_NO_VIDEO
         self.fd_runner = fd_runner or self._fd
         self.db = db
         self.sel_inputs = sel_inputs or (lambda: selection_inputs(iss, db))
-        self.rerun = rerun if rerun is not None else rerun_checker(iss)
+        self.rerun = rerun if rerun is not None else rerun_checker(iss, self.child_env())
         self.max_loops = max_loops
         self.sb_runner = sb_runner or self._sb_run
         # 分镜轮数从哪里算起（2026-11-17 续跑：分镜检查改成一次报全，这一次分镜从头算，最多 SB_ROUNDS 轮）
@@ -811,6 +839,10 @@ class Driver:
             self._material = common_material(self.iss)
         return self._material
 
+    def child_env(self):
+        """叫起 ./fd 和检查程序时的环境：开视频时就是本进程的环境（和加开关以前一样）；无视频时明确加 FD_VIDEO=off。"""
+        return None if self.video else dict(os.environ, FD_VIDEO="off")
+
     # -- fd
     def fd_cmd(self):
         cmd = [str(FD), "run", "--date", self.iss.day, "--from", "4", "--until", "9"]
@@ -824,7 +856,7 @@ class Driver:
         with open(log, "a", encoding="utf-8") as f:
             f.write("\n$ %s\n# %s\n" % (" ".join(self.fd_cmd()), now_iso()))
             f.flush()
-            r = subprocess.run(self.fd_cmd(), cwd=str(ROOT), stdout=f, stderr=subprocess.STDOUT, text=True)
+            r = subprocess.run(self.fd_cmd(), cwd=str(ROOT), stdout=f, stderr=subprocess.STDOUT, text=True, env=self.child_env())
         return r.returncode
 
     def where(self):
@@ -871,11 +903,13 @@ class Driver:
             say(result)
         finally:
             tot = self.mimo.totals()
-            write_json(self.iss.p(MARKER), {
-                "说明": "这一期第 4–9 步由 MiMo 备用写稿（cloud/backup_writer.py）。不含稿子的字；用量明细在 %s" % USAGE,
-                "写稿": "MiMo（备用）", "模型": self.mimo.model, "开始": started, "结束": now_iso(), "结果": result,
-                "调用次数": tot["次数"], "token合计": tot["输入token"] + tot["输出token"], "其中缓存命中": tot["其中缓存命中"],
-                "credits约": tot["credits约"], "每一步": self.brief()})
+            mk = {"说明": "这一期第 4–9 步由 MiMo 备用写稿（cloud/backup_writer.py）。不含稿子的字；用量明细在 %s" % USAGE,
+                  "写稿": "MiMo（备用）", "模型": self.mimo.model, "开始": started, "结束": now_iso(), "结果": result,
+                  "调用次数": tot["次数"], "token合计": tot["输入token"] + tot["输出token"], "其中缓存命中": tot["其中缓存命中"],
+                  "credits约": tot["credits约"], "每一步": self.brief()}
+            if not self.video:
+                mk["视频"] = "关：这一期不出视频，只写了播客和网页（FD_VIDEO=off）"
+            write_json(self.iss.p(MARKER), mk)
             say("合计：调用 %d 次，输入 %s token（缓存命中 %s），输出 %s，约 %s credits" % (
                 tot["次数"], format(tot["输入token"], ","), format(tot["其中缓存命中"], ","), format(tot["输出token"], ","),
                 format(tot["credits约"], ",")))
@@ -904,20 +938,20 @@ class Driver:
 
     # -- 第 6 步
     def on_write(self, rec):
-        miss = [k for k in KINDS if not self.iss.p(self.iss.files[k]).exists()]
+        miss = [k for k in self.kinds if not self.iss.p(self.iss.files[k]).exists()]
         if not miss:
-            raise Stop("fd 停在写稿，三份稿子却都在（%s）" % (rec.get("说明") or "")[:60])
+            raise Stop("fd 停在写稿，%s稿子却都在（%s）" % ("三份" if self.video else "播客、网页两份", (rec.get("说明") or "")[:60]))
         for k in miss:
             key, what = "write_" + k, "写%s稿" % k
             if self.count(key) >= 1:
                 # 接着跑：上一次是思考把上限用光（没写出正文），而且还没关思考重写过，就直接关思考重写这一次；别的情况停下
                 if self.last_runaway(what) and self.count(key + "_关思考") == 0:
                     self.bump(key + "_关思考", "上次%s思考用光了上限，接着跑时关思考重写" % what)
-                    self._write_file(k, write_task(self.iss, k, self.sec), 6, what, thinking="disabled")
+                    self._write_file(k, write_task(self.iss, k, self.sec, self.video), 6, what, thinking="disabled")
                     continue
                 raise Stop("%s稿已经写过一次，文件却不在" % k)
             self.bump(key, "MiMo " + what)
-            self._write_file(k, write_task(self.iss, k, self.sec), 6, what)
+            self._write_file(k, write_task(self.iss, k, self.sec, self.video), 6, what)
         if "视频" in miss:
             self.precheck_storyboard(6)
 
@@ -979,17 +1013,19 @@ class Driver:
         broken = [p for v in probs.values() for p in v if "没给出结果" in p]
         if broken:                      # 检查程序自己出错（缺文件、缺声音包……）：不是稿子的事，不花一次 MiMo 去"改"
             raise Stop("第 %d 步有检查程序自己出错（%d 处，如：%s），不交回 MiMo，停下等人" % (step, len(broken), broken[0][:80]))
+        if "视频" in probs and not self.video:          # fd 还在查分镜：开关没传下去，不能拿 MiMo 去改不存在的分镜
+            raise Stop("无视频模式下 fd 第 %d 步还报了视频分镜的问题（%d 处），FD_VIDEO=off 没传到 fd，停下等人" % (step, len(probs["视频"])))
         if "视频" in probs and self.sb_used() >= SB_ROUNDS:
             raise Stop("第 %d 步视频分镜还有 %d 处要改，分镜已经改满 %d 轮，停下等人" % (step, len(probs["视频"]), SB_ROUNDS))
         self.bump(key, "交回改：" + "、".join("%s %d 处" % (k, len(v)) for k, v in probs.items()))
         snap = read_json(self.iss.p("logs/检查_稿子.json"), {}) or {}       # 这一轮的检查结果留一份（后面再检查会覆盖它）
         write_json(self.iss.p("logs/备用写稿_检查_第%d步交回改时.json" % step), dict(snap, 交回改的问题=probs))
-        for kind in KINDS:
+        for kind in self.kinds:
             if kind not in probs:
                 continue
             draft = self.iss.p(self.iss.files[kind]).read_text(encoding="utf-8")
             task = fix_task(self.iss, kind, self.sec,
-                            annotate_sb_problems(self.iss, probs[kind]) if kind == "视频" else probs[kind], draft, why)
+                            annotate_sb_problems(self.iss, probs[kind]) if kind == "视频" else probs[kind], draft, why, self.video)
             if kind == "视频":
                 self.bump("sb_fix", "第 %d 步 fd 交回改分镜（分镜第 %d 轮）" % (step, self.sb_used() + 1))
             self._write_file(kind, task, step, "改%s稿_%s" % (kind, "检查" if step == 7 else "复查"))
@@ -1002,6 +1038,8 @@ class Driver:
 
     # -- 分镜预查（只在备用模式；见 SB_ROUNDS）
     def _sb_run(self):
+        if not self.video:                     # 无视频：不该走到这里（on_write、_fix_round、on_revise 都不会叫它）
+            raise Stop("无视频模式不做分镜预查")
         cmd = [str(PY), "-u", str(PIPE / "orchestrator" / "helpers.py"), "storyboard", "--issue-dir", str(self.iss.dir)]
         try:
             r = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=600, errors="replace",
@@ -1051,11 +1089,11 @@ class Driver:
             self.snap_before_review.mkdir(parents=True, exist_ok=True)
             shutil.copytree(self.iss.p("04_文稿"), self.snap_before_review / "04_文稿")
             say("审读前的稿子另存了一份")
-        self.bump("review", "MiMo 独立审读（另起一次调用）")
-        drafts = {k: self.iss.p(self.iss.files[k]).read_text(encoding="utf-8") for k in KINDS}
-        rv = self._json_call(8, "独立审读", self.material, review_task(self.iss, self.sec, drafts), MAX_OUT["review"], 0.2)
+        self.bump("review", "MiMo 独立审读（另起一次调用）" + ("" if self.video else "，无视频：只审播客和网页"))
+        drafts = {k: self.iss.p(self.iss.files[k]).read_text(encoding="utf-8") for k in self.kinds}
+        rv = self._json_call(8, "独立审读", self.material, review_task(self.iss, self.sec, drafts, self.kinds), MAX_OUT["review"], 0.2)
         write_json(self.iss.p("logs/备用写稿_审读.json"), rv)
-        fps = {self.iss.files[k]: sha16(drafts[k]) for k in KINDS}
+        fps = {self.iss.files[k]: sha16(drafts[k]) for k in self.kinds}
         fps["_day"] = self.iss.day
         write_text(self.iss.p(REVIEW), render_review(rv, fps, self.mimo.model))
 
@@ -1068,17 +1106,17 @@ class Driver:
         rv = read_json(self.iss.p("logs/备用写稿_审读.json"), None)
         if rv is None:
             raise Stop("审读意见不是备用写稿写的（没有 logs/备用写稿_审读.json），备用写稿不接着改")
-        items = review_items(rv)
+        items = review_items(rv, self.kinds)
         self.bump("revise", "按审读改：必须改 %d 条、建议改 %d 条" % (sum(1 for i in items if i["_must"]),
                                                            sum(1 for i in items if not i["_must"])))
         results = {}
-        for kind in KINDS:
+        for kind in self.kinds:
             mine = [i for i in items if kind in i["_files"]]
             if not any(i["_must"] for i in mine):
                 continue                    # 这份稿子没有必须改的：不为建议改单花一次调用
             draft = self.iss.p(self.iss.files[kind]).read_text(encoding="utf-8")
             reply = self._ask(9, "改%s稿_审读" % kind, self.material,
-                                   revise_task(self.iss, kind, self.sec, mine, draft), MAX_OUT[kind], 0.3)
+                                   revise_task(self.iss, kind, self.sec, mine, draft, self.video), MAX_OUT[kind], 0.3)
             try:
                 parts = split_marked(reply, ["处理", "稿子"])
                 handled = parse_json_reply('{"x":%s}' % parts["处理"])["x"] if parts["处理"].lstrip().startswith("[") \
@@ -1129,14 +1167,15 @@ def calibrate(iss):
             "这一期事件卡credits约": day_credits}
 
 
-def estimate(iss, sel=None, think=0.25):
+def estimate(iss, sel=None, think=0.25, video=True):
     """按这一期真实的提示估一遍：选题 2 次（含交回改）、写稿 3 次、第 7 步交回改 2 份、审读 1 次、改稿 3 份、复查交回改 1 份。
     没有现成稿子时，稿子长短按 Claude 同一期的稿子（有就读）或默认值估。"""
     cal = calibrate(iss)
     bi, bo = cal["输入字节每token"], cal["输出字节每token"]
     sec = task_sections()
+    kinds = KINDS if video else KINDS_NO_VIDEO
     drafts = {k: (iss.p(iss.files[k]).read_text(encoding="utf-8") if iss.p(iss.files[k]).exists() else "字" * 12000)
-              for k in KINDS}
+              for k in kinds}
     material = common_material(iss)
     rows = []
 
@@ -1149,16 +1188,17 @@ def estimate(iss, sel=None, think=0.25):
         lu = iss.p(LINEUP).read_text(encoding="utf-8") if iss.p(LINEUP).exists() else "{}" * 4000
         add("选题", s_sys, s_user, len(lu.encode("utf-8")), False)
         add("选题_交回改", s_sys, select_fix_task(s_user, lu, ["示例问题"] * 3), len(lu.encode("utf-8")), False)
-    for k in KINDS:
-        add("写%s稿" % k, material, write_task(iss, k, sec), len(drafts[k].encode("utf-8")), True)
-    for k in ("视频", "网页"):
-        add("改%s稿_检查" % k, material, fix_task(iss, k, sec, ["示例问题"] * 8, drafts[k], "第 7 步"), len(drafts[k].encode("utf-8")), True)
-    add("独立审读", material, review_task(iss, sec, drafts), 12000, True)
-    for k in KINDS:
-        add("改%s稿_审读" % k, material, revise_task(iss, k, sec, [{"_label": "必须改 1"}] * 3, drafts[k]),
+    for k in kinds:
+        add("写%s稿" % k, material, write_task(iss, k, sec, video), len(drafts[k].encode("utf-8")), True)
+    for k in (("视频", "网页") if video else ("网页",)):
+        add("改%s稿_检查" % k, material, fix_task(iss, k, sec, ["示例问题"] * 8, drafts[k], "第 7 步", video), len(drafts[k].encode("utf-8")), True)
+    add("独立审读", material, review_task(iss, sec, drafts, kinds), 12000, True)
+    for k in kinds:
+        add("改%s稿_审读" % k, material, revise_task(iss, k, sec, [{"_label": "必须改 1"}] * 3, drafts[k], video),
             len(drafts[k].encode("utf-8")) + 1500, True)
-    add("改视频稿_复查", material, fix_task(iss, "视频", sec, ["示例问题"] * 4, drafts["视频"], "第 9 步"),
-        len(drafts["视频"].encode("utf-8")), True)
+    if video:
+        add("改视频稿_复查", material, fix_task(iss, "视频", sec, ["示例问题"] * 4, drafts["视频"], "第 9 步"),
+            len(drafts["视频"].encode("utf-8")), True)
     pin, pcache, pout = PRICES[PRO]
     tin = sum(r["输入token"] for r in rows)
     tout = sum(r["输出token"] for r in rows)
@@ -1189,6 +1229,9 @@ def main(argv=None):
         p.add_argument("--issue-dir")
         p.add_argument("--edition")
         p.add_argument("--db", help="往期事件库（选题读；默认和 fd 一样）")
+        p.add_argument("--no-video", action="store_true",
+                       help="这一期不出视频：不写分镜、不做分镜预查，审读和改稿只管播客、网页；每一次 ./fd 都带 FD_VIDEO=off"
+                            "（不加这个参数时照 fd_开关.json 的\"视频\"和环境变量 FD_VIDEO）")
         if name == "run":
             p.add_argument("--max-calls", type=int, default=14, help="最多调 MiMo 几次（含失败的）")
             p.add_argument("--max-tokens", type=int, default=1_500_000, help="输入加输出最多多少 token")
@@ -1202,12 +1245,15 @@ def main(argv=None):
         else:
             p.add_argument("--no-select", action="store_true", help="不估选题（不 import run_mimo）")
     a = ap.parse_args(argv)
+    if a.no_video:
+        os.environ["FD_VIDEO"] = "off"           # 本进程和它叫起的每一次 ./fd 都按"视频：关"
+    video, video_why = video_switch()
     iss = Issue(a.date, a.issue_dir, a.edition)
     db = a.db
     if db is None and not iss.default_issue:
         db = str(iss.dir.parent / "往期事件库")
     if a.cmd == "estimate":
-        r = estimate(iss, None if a.no_select else (lambda: selection_inputs(iss, db)))
+        r = estimate(iss, None if a.no_select else (lambda: selection_inputs(iss, db)), video=video)
         print(json.dumps(r, ensure_ascii=False, indent=1))
         return 0
     extra = [x for x in a.fd_extra if x != "--"]
@@ -1217,9 +1263,11 @@ def main(argv=None):
         say("过了 %s UTC 不再新开 MiMo 调用" % dl.strftime("%Y-%m-%d %H:%M"))
     if a.segment:
         say("这一段：%s，最多 %s token；分镜轮数从第 %d 轮之后算" % (a.segment, format(a.segment_max_tokens or 0, ","), a.sb_rounds_base))
+    if not video:
+        say("视频：关（%s）：只写、审、改播客和网页，不写分镜、不做分镜预查；每一次 ./fd 都带 FD_VIDEO=off" % video_why)
     mimo = Mimo(iss.dir, max_calls=a.max_calls, max_tokens=a.max_tokens, deadline=dl, segment=a.segment,
                 segment_max_tokens=a.segment_max_tokens)
-    return Driver(iss, mimo, extra, db=db, sb_base=a.sb_rounds_base, snap_before_review=a.snapshot_before_review).run()
+    return Driver(iss, mimo, extra, db=db, sb_base=a.sb_rounds_base, snap_before_review=a.snapshot_before_review, video=video).run()
 
 
 if __name__ == "__main__":

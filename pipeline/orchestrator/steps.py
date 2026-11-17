@@ -18,7 +18,7 @@ from .common import (DONE, FAILED, SKIPPED, WAITING, PIPE, TOOLS, PROMPTS, PROFI
                      WEB_DRAFT, STORYBOARD, NARRATION, VIDEO_VOICE, CARDS, LINEUP, NO_PODCAST,
                      read_json, write_json, rel, fp_file, fp_dir, key_lines, tail, running_scripts, today_utc, hours_ago,
                      gemini_price_out, episode_title, iso, motion_switch, director_switch, narration_switch,
-                     zh_wrap_switch)
+                     zh_wrap_switch, video_switch)
 from .ledger import usage_new_spend, chunk_spend_since, mimo_tokens_since
 
 IMG_EXT = (".png", ".jpg", ".jpeg", ".webp")
@@ -460,7 +460,8 @@ class Write(Step):
     fix_text = "缺哪份就停下，说清用哪份指令、写到哪；写完再跑。主笔自动切换（订阅令牌 → API → MiMo → 数据版）下一步接 claude -p"
 
     def outputs(self, c):
-        return [c.ed["播客稿"], WEB_DRAFT, STORYBOARD]
+        # 视频开关关着（2026-11-17 加）：这一期不出视频，只要播客和网页两份
+        return [c.ed["播客稿"], WEB_DRAFT, STORYBOARD] if video_switch()[0] else [c.ed["播客稿"], WEB_DRAFT]
 
     def plan(self, c):
         miss = [o for o in self.outputs(c) if not c.p(o).exists()]
@@ -473,7 +474,10 @@ class Write(Step):
         for o in miss:
             k = names[o]
             t.append("  %s → %s；指令 pipeline/prompts/%s" % (k, rel(c.p(o)), "＋".join(c.ed["指令"][k])))
-        t.append("  （这一期是%s。网页稿要带 page 对象；视频分镜不超过 3 分钟）" % c.ed["名字"])
+        if video_switch()[0]:
+            t.append("  （这一期是%s。网页稿要带 page 对象；视频分镜不超过 3 分钟）" % c.ed["名字"])
+        else:
+            t.append("  （这一期是%s。网页稿要带 page 对象；视频：关，这一期不写视频分镜）" % c.ed["名字"])
         t.append("写完再运行：%s（会从第 7 步稿子检查接着跑）" % c.again())
         return t
 
@@ -481,12 +485,15 @@ class Write(Step):
         miss = [o for o in self.outputs(c) if not c.p(o).exists()]
         if miss:
             return R(WAITING, "等你在会话里写：" + "、".join(Path(m).name for m in miss), todo=self.todo(c, miss))
-        for o in (WEB_DRAFT, STORYBOARD):
+        on = video_switch()[0]
+        for o in ((WEB_DRAFT, STORYBOARD) if on else (WEB_DRAFT,)):
             try:
                 json.loads(c.p(o).read_text(encoding="utf-8"))
             except ValueError as e:
                 return R(WAITING, "%s 不是合法的 JSON：%s" % (Path(o).name, e), todo=["改好再运行：%s" % c.again()])
         pod = c.p(c.ed["播客稿"]).read_text(encoding="utf-8")
+        if not on:
+            return R(DONE, "播客、网页两份稿子都在（播客稿 %d 个汉字；视频：关，不要分镜）" % _han(pod))
         return R(DONE, "三份稿子都在（播客稿 %d 个汉字）" % _han(pod))
 
 
@@ -505,7 +512,13 @@ class Check(Step):
         return ["logs/检查_稿子.json"]
 
     def inputs(self, c):
-        return [c.ed["播客稿"], WEB_DRAFT, STORYBOARD, CARDS]
+        base = [c.ed["播客稿"], WEB_DRAFT, STORYBOARD, CARDS]
+        # 视频开关（2026-11-17 加）：关着时多一项"=视频=关"，一换开关就重查。开着时和加开关以前一字不差（往期记录不变）；
+        # 只有上一次记录里有"视频"这一项（关着跑过）时才带上"=视频="，这样从关换回开也会重查、把分镜补查上
+        if not video_switch()[0]:
+            return base + ["=视频=关"]
+        old = (c.state.step(self.key) or {}).get("输入指纹") or {}
+        return base + (["=视频="] if VIDEO_FP_KEY in old else [])
 
     def plan(self, c):
         p = c.p(c.ed["播客稿"])
@@ -513,13 +526,15 @@ class Check(Step):
                  "稿子：" + c.show(c.py(HELPERS, "script-check", "--script", p, "--cards", c.p(CARDS), "--day-type", c.ed["日子"]))]
         if c.ed["周末检查"]:
             lines.append("周末：" + c.show(c.py(PIPE / "weekend_check.py", p, "--edition", c.ed["周末检查"], "--json")))
-        lines += ["分镜：" + c.show(c.py(HELPERS, "storyboard", "--issue-dir", c.issue)),
+        lines += ["分镜：" + (c.show(c.py(HELPERS, "storyboard", "--issue-dir", c.issue)) if video_switch()[0] else VIDEO_OFF_NOTE),
                   "网页数字预检：make_issue_v3.py 严格模式，配置写到 logs/网页配置_预检.py",
                   "今日一词：" + c.show(self.term_cmd(c)),
                   "易歧义词（只提醒）：" + c.show(self.amb_cmd(c))]
         return lines
 
     def amb_cmd(self, c):
+        if not video_switch()[0]:          # 视频：关——分镜文件哪怕还在（旧的），也不去看它
+            return c.py(PIPE / "ambiguity_check.py", "--script", c.p(c.ed["播客稿"]), "--json")
         return c.py(PIPE / "ambiguity_check.py", "--script", c.p(c.ed["播客稿"]), "--storyboard", c.p(STORYBOARD), "--json")
 
     def term_cmd(self, c):
@@ -588,10 +603,14 @@ class Check(Step):
                 items.append({"名字": "周末规则", "要改": must, "软": [m for m in must if re.search(r"字数|时长|分钟", m)],
                               "提醒": [_txt(r) for r in wk.get("提醒") or []][:6],
                               "估计分钟": (wk.get("数据") or {}).get("估计分钟")})
-        # 4 视频分镜
-        rc, out = c.run(self, c.py(HELPERS, "storyboard", "--issue-dir", c.issue), "视频分镜")
-        items.append({"名字": "视频分镜", "要改": [] if rc == 0 else storyboard_must(out),
-                      "提醒": [x.strip() for x in out.splitlines() if x.strip().startswith("提醒")][:8]})
+        # 4 视频分镜（视频开关关着时不跑，摘要里写一句"视频：关，分镜不查"；2026-11-17 加）
+        if video_switch()[0]:
+            rc, out = c.run(self, c.py(HELPERS, "storyboard", "--issue-dir", c.issue), "视频分镜")
+            items.append({"名字": "视频分镜", "要改": [] if rc == 0 else storyboard_must(out),
+                          "提醒": [x.strip() for x in out.splitlines() if x.strip().startswith("提醒")][:8]})
+        else:
+            print("      - %s" % VIDEO_OFF_NOTE, flush=True)
+            items.append({"名字": "视频分镜", "要改": [], "不查": VIDEO_OFF_NOTE})
         # 5 网页数字预检
         pre = c.logs / "网页配置_预检.py"
         args = ["--day", c.day, "--issue-dir", c.issue, "--podcast", NO_PODCAST, "--out", pre] + (["--lenient"] if c.lenient else [])
@@ -628,7 +647,8 @@ class Check(Step):
                 warns.append("%s：%s" % (it["名字"], w))
             if it.get("请人工看"):
                 warns.append("%s：%d 处请人工看（见 logs/检查_稿子.json）" % (it["名字"], it["请人工看"]))
-        summary = "；".join("%s %s" % (it["名字"], "过了" if not it.get("要改") else "%d 处要改" % len(it["要改"]))
+        summary = "；".join(it["不查"] if it.get("不查") else
+                           "%s %s" % (it["名字"], "过了" if not it.get("要改") else "%d 处要改" % len(it["要改"]))
                            for it in res["检查"])
         if not must:
             return R(DONE, summary, warns[:12])
@@ -662,6 +682,8 @@ class Check(Step):
 
 
 TODO_SHOW = 20     # 屏幕和调度报告里"要你做"最多列几条；全部的在 logs/检查_稿子.json
+VIDEO_OFF_NOTE = "视频：关，分镜不查"     # 视频开关关着时第 7 步摘要里那一句（2026-11-17 加）
+VIDEO_FP_KEY = "视频"                    # 第 7 步输入指纹里视频开关那一项的键（"=视频=关"）
 
 
 def storyboard_must(out):
@@ -716,7 +738,9 @@ class Review(Step):
         if not p.exists():
             return R(WAITING, "等一份独立审读", todo=[
                 "另开一个只读的 Claude（新会话或子代理，别用写稿的那个）做独立审读：",
-                "  对照 03_事件卡/cards_写稿用.json，查 %s、04_文稿/claude_网页.json、04_文稿/视频v3_分镜.json；" % c.ed["播客稿"],
+                ("  对照 03_事件卡/cards_写稿用.json，查 %s、04_文稿/claude_网页.json、04_文稿/视频v3_分镜.json；" % c.ed["播客稿"]
+                 if video_switch()[0] else
+                 "  对照 03_事件卡/cards_写稿用.json，查 %s、04_文稿/claude_网页.json（视频：关，这一期没有分镜，不审）；" % c.ed["播客稿"]),
                 "  查事实分寸：条件说成已发生、先后说反、删了限定词、出处挂错、判断前后不一致；",
                 "  附上已定规矩（文档/经验/问题与解决办法.md 第十五节），和规矩冲突的不算问题；",
                 "  写到 %s，第一行写'必须改：N'，再分'必须改''建议改''可以更好'三节。" % rel(p),
@@ -777,7 +801,9 @@ class Revise(Step):
         if not self.handled(c):
             return R(WAITING, "等你按审读意见改稿", todo=[
                 "在会话里按 审读意见.md 改稿：必须改的都改；和已定规矩冲突的不采纳，写明理由；",
-                "  只改稿子（%s、04_文稿/claude_网页.json、04_文稿/视频v3_分镜.json），不添新事实；" % c.ed["播客稿"],
+                ("  只改稿子（%s、04_文稿/claude_网页.json、04_文稿/视频v3_分镜.json），不添新事实；" % c.ed["播客稿"]
+                 if video_switch()[0] else
+                 "  只改稿子（%s、04_文稿/claude_网页.json；视频：关，这一期没有分镜），不添新事实；" % c.ed["播客稿"]),
                 "  逐条怎么处理的写进 %s；" % rel(c.p("审读处理.md")),
                 "改完再运行：%s（会再跑一遍稿子检查）" % c.again()])
         chk = c.steps["check"]

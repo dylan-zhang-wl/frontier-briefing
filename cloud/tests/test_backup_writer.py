@@ -9,6 +9,7 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -589,6 +590,146 @@ class DriverLoop(unittest.TestCase):
             self.assertEqual(cmd[1:8], ["run", "--date", DAY, "--from", "4", "--until", "9"])
             self.assertEqual(cmd[-2:], ["--budget-usd", "0"])
             self.assertIn("--issue-dir", cmd)
+
+
+class NoVideo(unittest.TestCase):
+    """无视频（2026-11-17 加，--no-video／fd_开关.json"视频"写"关"）：只写、审、改播客和网页，不做分镜预查，每一次 ./fd 都带 FD_VIDEO=off。"""
+
+    def driver(self, iss, chat, script, **kw):
+        fd = FakeFd(iss.dir, script)
+
+        def sb_runner():
+            raise AssertionError("无视频时不该做分镜预查")
+        d = BW.Driver(iss, BW.Mimo(iss.dir, chat=chat, **kw), fd_runner=fd, sel_inputs=lambda: ("选题系统提示", "候选事件……"),
+                      rerun=lambda n: [], sb_runner=sb_runner, video=False)
+        return d, fd
+
+    def test_happy_path_only_podcast_and_web(self):
+        with tempfile.TemporaryDirectory() as t:
+            iss = make_issue(t)
+            write_check(iss.dir, [{"名字": "稿子", "要改": ["第 3 行 [口吻] 我 —— 只许开场自称一次"]},
+                                  {"名字": "视频分镜", "要改": [], "不查": "视频：关，分镜不查"}])
+            chat = FakeChat([
+                ("写这一期的播客稿", POD, "stop"),
+                ("写这一期的网页稿", json.dumps(WEB), "stop"),
+                ("按程序检查的问题改播客稿", POD, "stop"),
+                ("独立审读", json.dumps({"must": [{"where": "播客开场", "files": ["播客"], "fix": "改"},
+                                              {"where": "两处", "files": ["视频"], "fix": "改"}]}, ensure_ascii=False), "stop"),
+                ("按独立审读的意见改播客稿", '===处理===\n[{"条": "必须改 1", "怎么处理": "改了", "说明": "E001 F0"},'
+                                       '{"条": "必须改 2", "怎么处理": "改了", "说明": "E001 F1"}]\n===稿子===\n' + POD + "===完===", "stop"),
+                ("按独立审读的意见改网页稿", '===处理===\n[{"条": "必须改 2", "怎么处理": "改了", "说明": "E001 F1"}]\n'
+                                       "===稿子===\n" + json.dumps(WEB) + "\n===完===", "stop"),
+            ])
+            script = [(2, 6, BW.WAITING, None, None), (2, 7, BW.WAITING, ["  - x"], None),
+                      (2, 8, BW.WAITING, None, None), (2, 9, BW.WAITING, None, None), (0, None, None, None, None)]
+            d, fd = self.driver(iss, chat, script)
+            self.assertEqual(d.run(), 0)
+            self.assertFalse(iss.p(BW.STORYBOARD).exists())                       # 没写分镜
+            self.assertFalse(any("视频稿" in g["user"][-400:] for g in chat.got))   # 没有一次是写、改视频稿
+            rv_user = [g["user"] for g in chat.got if "稿子不是你写的" in g["user"]][0]
+            self.assertNotIn("# 指令：pipeline/prompts/写稿_视频v3", rv_user)        # 审读任务里没有视频指令、没有分镜稿
+            self.assertNotIn("要审的视频稿", rv_user)
+            self.assertIn("要审的播客稿", rv_user)
+            self.assertIn("要审的网页稿", rv_user)
+            self.assertIn(BW.NO_VIDEO_NOTE, rv_user)
+            self.assertIn("每一项对两份稿子（播客、网页中英文）都要查", rv_user)
+            self.assertNotIn("并列的事不画成先后", rv_user[rv_user.find("# 必查项"):rv_user.find("每一项对")])
+            self.assertIn('"files": ["播客", "网页"]', rv_user)
+            for g in chat.got:
+                if "按独立审读的意见改" in g["user"] or "按程序检查的问题改" in g["user"]:
+                    self.assertIn(BW.NO_VIDEO_NOTE, g["user"])
+                    self.assertNotIn("# 指令：pipeline/prompts/写稿_视频v3", g["user"])
+            # 写了"视频"的那条审读意见：这一期没有视频，按播客、网页两份都涉及
+            handled = iss.p(BW.HANDLED).read_text(encoding="utf-8")
+            self.assertIn("网页稿：改了", handled)
+            self.assertNotIn("视频稿", handled)
+            mk = json.loads(iss.p(BW.MARKER).read_text(encoding="utf-8"))
+            self.assertIn("关", mk["视频"])
+            self.assertEqual(mk["调用次数"], 6)
+
+    def test_every_fd_call_carries_switch(self):
+        with tempfile.TemporaryDirectory() as t:
+            iss = make_issue(t)
+            got = []
+
+            def fake_run(cmd, **kw):
+                got.append(kw.get("env"))
+                return mock.Mock(returncode=0)
+            for video, want in ((False, "off"), (True, None)):
+                d = BW.Driver(iss, BW.Mimo(iss.dir, chat=FakeChat([])), video=video)
+                with mock.patch.object(BW.subprocess, "run", fake_run), mock.patch.dict(BW.os.environ, {}, clear=False):
+                    BW.os.environ.pop("FD_VIDEO", None)
+                    d._fd()
+                env = got[-1]
+                if want:
+                    self.assertEqual(env["FD_VIDEO"], want)
+                else:
+                    self.assertIsNone(env)                 # 开视频：和加开关以前一样，不另给环境
+
+    def test_storyboard_problem_from_fd_stops_without_calls(self):
+        with tempfile.TemporaryDirectory() as t:
+            iss = make_issue(t)
+            write_check(iss.dir, [{"名字": "视频分镜", "要改": ["✗ 要改：触发词「x」在旁白里找不到"]}])
+            chat = FakeChat([])
+            d, fd = self.driver(iss, chat, [(2, 7, BW.WAITING, ["  - x"], None)])
+            self.assertEqual(d.run(), 2)
+            self.assertEqual(chat.got, [])
+            self.assertIn("FD_VIDEO=off 没传到 fd", json.loads(iss.p(BW.MARKER).read_text(encoding="utf-8"))["结果"])
+
+    def test_on_write_with_both_drafts_present_stops(self):
+        with tempfile.TemporaryDirectory() as t:
+            iss = make_issue(t)
+            put(iss.files["播客"], POD)(iss.dir)
+            put(iss.files["网页"], json.dumps(WEB))(iss.dir)
+            d, fd = self.driver(iss, FakeChat([]), [(2, 6, BW.WAITING, None, None)])
+            self.assertEqual(d.run(), 2)                   # 没有分镜不算"缺"：两份都在还停在写稿，就停下
+
+    def test_main_no_video_sets_env_and_driver(self):
+        with tempfile.TemporaryDirectory() as t:
+            iss = make_issue(t)
+            seen = {}
+
+            class FakeDriver:
+                def __init__(self, *a, **kw):
+                    seen.update(kw)
+                    seen["FD_VIDEO"] = BW.os.environ.get("FD_VIDEO")
+
+                def run(self):
+                    return 0
+            with mock.patch.object(BW, "Driver", FakeDriver), mock.patch.dict(BW.os.environ, {}, clear=False):
+                BW.os.environ.pop("FD_VIDEO", None)
+                self.assertEqual(BW.main(["run", "--date", DAY, "--issue-dir", str(iss.dir), "--no-video"]), 0)
+            self.assertIs(seen["video"], False)
+            self.assertEqual(seen["FD_VIDEO"], "off")
+            seen.clear()
+            with mock.patch.object(BW, "Driver", FakeDriver), mock.patch.dict(BW.os.environ, {}, clear=False):
+                BW.os.environ.pop("FD_VIDEO", None)
+                with mock.patch.object(BW, "video_switch", lambda: (True, "测试")):
+                    BW.main(["run", "--date", DAY, "--issue-dir", str(iss.dir)])
+            self.assertIs(seen["video"], True)
+            self.assertIsNone(seen["FD_VIDEO"])
+
+    def test_video_on_prompts_unchanged_shape(self):
+        with tempfile.TemporaryDirectory() as t:
+            iss = make_issue(t)
+            sec = BW.task_sections()
+            self.assertEqual(BW.review_out(True), BW.REVIEW_OUT)
+            on = BW.review_task(iss, sec, {"播客": POD, "网页": "{}", "视频": "{}"})
+            self.assertEqual(on, BW.review_task(iss, sec, {"播客": POD, "网页": "{}", "视频": "{}"}, BW.KINDS))
+            self.assertIn("要审的视频稿", on)
+            self.assertNotIn(BW.NO_VIDEO_NOTE, on)
+            for k in BW.KINDS:
+                self.assertNotIn(BW.NO_VIDEO_NOTE, BW.write_task(iss, k, sec))
+                self.assertNotIn(BW.NO_VIDEO_NOTE, BW.fix_task(iss, k, sec, ["x"], "稿", "第 7 步"))
+                self.assertNotIn(BW.NO_VIDEO_NOTE, BW.revise_task(iss, k, sec, [], "稿"))
+
+    def test_added_prompt_text_is_generic(self):
+        """无视频多出来的提示字只说范围，不带哪一期的内容：没有英文词、事件号、数字（审读输出格式里的英文词都是原来就有的）。"""
+        import re
+        self.assertIsNone(re.search(r"[A-Za-z0-9]", BW.NO_VIDEO_NOTE))
+        words = lambda t: set(re.findall(r"[A-Za-z_]+", t))          # noqa: E731
+        self.assertLessEqual(words(BW.review_out(False)), words(BW.REVIEW_OUT))
+        self.assertIsNone(re.search(r"\bE\d{3}\b", BW.review_out(False).replace("E002 的 body_zh", "")))
 
 
 if __name__ == "__main__":
