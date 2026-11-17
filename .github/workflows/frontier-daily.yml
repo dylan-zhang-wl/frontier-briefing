@@ -194,8 +194,8 @@ jobs:
     if: needs.claim.outputs.run_issue == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 360        # GitHub 自带机器的上限（6 小时）：写稿最多 150、制作最多 200（第 14 步含视频导演，最坏约 1 小时）、审片最多 60；
-                                # MiMo 备用那天（不出视频）：备用写稿过了 job 开始后 200 分钟不再新开 MiMo 调用，MiMo 审片最多 45
-                                # （那一步开始 28 分钟后、job 开始 330 分钟后都不再新开 MiMo 调用）
+                                # MiMo 备用那天（不出视频）：备用写稿过了 job 开始后 200 分钟不再新开 MiMo 调用，MiMo 审片最多 60
+                                # （那一步开始 40 分钟后、job 开始 330 分钟后都不再新开 MiMo 调用；11-17 晚从 45／28 放宽）
     # 正式运行（含接着跑）同一组 frontier-daily：一次只跑一个，免得两期同时配音。（排队组只在本仓库里算；发布在私有仓库的
     # "放行发布"里，它在私有仓库自己排同名的组。）job 一级和流程一级的组名在整个仓库里是同一套（GitHub 文档："a single job or workflow using the same concurrency group"）。
     # queue: max：排队的依次等着（最多 100 个），不会像默认那样被后来的挤掉（被挤掉的那一期标签已认领却没跑，当天就没了）。
@@ -893,6 +893,7 @@ jobs:
       #      没有审片结论，放行判定第 9 条不过，不自动放行、发邮件（改动清单第 7 节第 5 条的 (b)）。
       #      退出码照 Claude 审片那一步的做法：这一步 continue-on-error，过不过、放不放行都由放行判定第 9 条读 审片结论.json 来定——
       #        0  两份文件写好了：审片没过（"立即"不空、"放行"是 false）也是 0，第 9 条读到"不放行"就不过；
+      #           有调用没成、几项没查（结论里有"MiMo没查成"）也是 0，第 9 条按开关定挡不挡（默认挡）；
       #        2  没审（视频开着、期目录不对），一个文件没写：第 9 条"没有 审片结论.json"不过；
       #        1  程序自己出错（含写完后用放行判定的读法自查对不上、期目录里别的文件变了）：和 Claude 审片退出码不是 0 一样，
       #           这一步记失败、往下走；写好的 审片结论.json 照旧交给第 9 条判，公开日志印一句提醒。
@@ -900,7 +901,7 @@ jobs:
         id: review_backup
         if: always() && steps.day.outputs.produce == 'true' && steps.produce.outcome == 'success' && steps.review.outputs.claude_down != '' && hashFiles(format('测试版/{0}/logs/fd_state.json', steps.day.outputs.day)) != ''
         continue-on-error: true
-        timeout-minutes: 45
+        timeout-minutes: 60
         env:
           MIMO_API_KEY: ${{ secrets.MIMO_API_KEY }}
           MIMO_BASE_URL: ${{ secrets.MIMO_BASE_URL }}
@@ -912,10 +913,13 @@ jobs:
           mkdir -p "$RUNNER_TEMP/review_backup" "$D/logs"
           # 视频关着（MiMo 备用写的那一期）才明说 --no-video；开着时不加，程序照 FD_VIDEO 和 fd_开关.json 认出"开着"就不审（退出码 2）
           NV=(); [ "$FD_VIDEO" = "off" ] && NV=(--no-video)
-          # 时限：一次 MiMo 调用最长约 15 分钟（对方约 900 秒断开），这一步 45 分钟，所以这一步开始 28 分钟后不再新开调用；
-          # 也不晚于 job 开始后 330 分钟（job 最多 360 分钟，后面还要放行判定、打包、提交、叫放行发布）。过了时限没调成的那几项记"查不了"，
+          # 时限：一次 MiMo 调用最长约 15 分钟（对方约 900 秒断开），这一步 60 分钟，所以这一步开始 40 分钟后不再新开调用（40＋15＜60）；
+          # 也不晚于 job 开始后 330 分钟（job 最多 360 分钟，后面还要放行判定、打包、提交、叫放行发布）。
+          # 11-17 晚从 45／28 放宽：那天云端试跑 A 697 秒、B 608 秒、B 重给 JSON 488 秒，过了 28 分钟，第 11 项（调用 C）没跑。
+          # 程序也改成 A → C → B，事实检查 C 只会被 A 挤。过了时限没调成的那几项记"查不了"，另记进审片结论的"MiMo没查成"，
+          # 放行判定第 9 条读到就不自动放行（开关 gate.MIMO_REVIEW_INCOMPLETE_BLOCKS）、邮件写哪几项没查；
           # 三次都没调成就"立即"写一条、不放行（程序自己的做法）。调用次数、token 上限用程序默认（8 次、40 万；11-17 本机试 3 次、24.7 万）
-          now=$(date -u +%s); dl=$(( now + 28 * 60 )); jl=$(( JOB_T0 + 330 * 60 )); [ "$jl" -lt "$dl" ] && dl=$jl
+          now=$(date -u +%s); dl=$(( now + 40 * 60 )); jl=$(( JOB_T0 + 330 * 60 )); [ "$jl" -lt "$dl" ] && dl=$jl
           NO_CALLS_AFTER=$(date -u -d "@$dl" +%Y-%m-%dT%H:%M)
           # 只许写 审片.md、审片结论.json、logs/备用审片*：别的文件先设成只读（目录不动），审完前后比对
           others() { find "$D" -type f ! -name 审片.md ! -name 审片结论.json ! -path "$D/logs/备用审片*" "$@"; }
