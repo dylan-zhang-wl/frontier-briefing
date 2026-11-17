@@ -55,7 +55,7 @@
 | `codex_login_check.py`（测试在 `tests/`） | 查 Codex 登录有没有失效：有图没画成、它的日志里又有 401／refresh 失败才记一笔（11-09 改，原来会误报）；11-14 起也查额度用完（有图没画成、日志里有 "You’ve hit your usage limit" 一类的原话），另记 `logs/codex_额度用完.txt`，邮件单独说 |
 | `claude_down.py`（测试在 `tests/`，样本在 `tests/claude_down_samples/`） | 认出"Claude 不能用"（11-17 加）：写稿、审片的 `claude -p` 没成时，看输出认是不是登录失效、额度用完（原话／宽认两档），写期目录根上的 `Claude不能用.json`（连续第几天、自动放行没有）；屏幕上只印类别。退出码 10 切备用、11 认出但已做完不切、0 没认出 |
 | `backup_writer.py`（测试在 `tests/`） | MiMo 备用写稿：Claude 不能用时照同一套指令把 fd 第 4–9 步走完（从 fd 停下的地方接），`--no-video` 只写播客、网页；写 `备用写稿.json` |
-| `backup_review.py`（在分支 `feat/mimo-review` 上做，还没合进来） | MiMo 备用审片：Claude 审片跑不了时写 `审片.md`、`审片结论.json` |
+| `backup_review.py`（测试在 `tests/`） | MiMo 备用审片（11-17 加）：Claude 审片跑不了时照同一份审片清单审，写 `审片.md`、`审片结论.json`（另加 `"审片": "MiMo（备用）"`）、`logs/备用审片*`；只审"视频：关"那天，视频开着不审、不写文件（退出码 2） |
 | `取回成品.py`（测试在 `tests/`） | 在本机把某一天的成品拼成完整的期目录，放进成品库 `本机资料/成品/<日期>/`；满 7 天、已发布的期移进废纸篓 |
 | `gemini_trial.py`、`selftest_chrome.mjs` | 只试配一句 Gemini、只测 Chrome 能不能画三维 |
 | `fonts/`、`node/` | 云端用的字体、Node 依赖清单 |
