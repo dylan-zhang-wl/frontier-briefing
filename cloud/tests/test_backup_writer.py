@@ -481,6 +481,8 @@ class DriverLoop(unittest.TestCase):
                                                  "✗ 要改：别的问题"])
             self.assertIn("在 E001 who_said[0] 里", rows[0])
             self.assertIn("facts[0] 那一条的原文是「A said」", rows[0])
+            self.assertIn('分镜里写成 "event": "E001", "field": "who_said", "index": 0（材料里的编号 W0）', rows[0])
+            self.assertIn("摘句不用改", rows[0])
             self.assertIn("n1.x 指向 E001 numbers[0]，原文「3 units」", rows[1])
             self.assertEqual(rows[2], "✗ 要改：别的问题")
 

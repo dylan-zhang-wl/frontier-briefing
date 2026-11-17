@@ -411,8 +411,14 @@ def annotate_sb_problems(iss, rows):
             ev, field, i, text = m.group(1), m.group(2), int(m.group(3)), m.group(4)
             hits = where(ev, text)
             here = entry(ev, field, i)
-            note = "（程序替你查了：这段原文%s；%s[%d] 那一条的原文是「%s」）" % (
-                "在 " + "、".join(hits) + " 里" if hits else "在 %s 的卡里哪一条都找不到，要换成卡里有的原文" % ev, field, i, here or "（没有这一条）")
+            tag = {"facts": "F", "numbers": "N", "who_said": "W"}
+            # 11-17 诊断：MiMo 把"facts[8] 里找不到"读成摘句写错了，三轮只改摘句、没动编号。所以把分镜里的写法原样给出来
+            how = "；".join('分镜里写成 "event": "%s", "field": "%s", "index": %s（材料里的编号 %s%s）' % (
+                h.split()[0], h.split()[1].split("[")[0], h.split("[")[1].rstrip("]"),
+                tag.get(h.split()[1].split("[")[0], "?"), h.split("[")[1].rstrip("]")) for h in hits)
+            note = "（程序替你查了：这段原文%s；%s[%d] 那一条的原文是「%s」%s）" % (
+                "在 " + "、".join(hits) + " 里" if hits else "在 %s 的卡里哪一条都找不到，要换成卡里有的原文" % ev, field, i,
+                here or "（没有这一条）", "。要引用它，" + how + "，摘句不用改" if hits else "")
         else:
             m = re.search(r"在它引用的事件卡原文（([^）]+)）里找不到", r)
             if m:
