@@ -562,11 +562,11 @@ class DriverLoop(unittest.TestCase):
             rv = BW.review_task(iss, sec, {"播客": POD, "网页": "{}", "视频": "{}"})
             title, src = BW.REVIEW_EXTRA
             self.assertIn("7. " + title, rv)
-            # 11-17 改：对不上摘录的先去抓取材料原文里核，核得到的不算必须改；原来那两句（一律算必须改、原始材料给不了）都不在了
-            self.assertNotIn("一律算必须改", rv)
-            self.assertNotIn("这一次给不了你", rv)
-            self.assertIn("核得到的不算必须改", title)
-            self.assertIn("材料原文里也核不到的才算必须改", rv)
+            self.assertIn("一律算必须改", rv)
+            # 11-17 有过"先去抓取材料原文里核"的一版，按已定规矩第一部分第 1 条撤回：审读任务里不附材料原文，对不上摘录的算必须改
+            self.assertTrue(title.endswith("对不上的算必须改"))
+            self.assertIn("原始材料这一次给不了你", rv)
+            self.assertNotIn("抓取材料原文", rv)
             for f, start in src:
                 line = [x.strip() for x in (BW.ROOT / f).read_text(encoding="utf-8").splitlines() if x.strip().startswith(start)][0]
                 self.assertIn("原文（%s）：%s" % (f, line), rv)          # 原样摘
@@ -775,7 +775,7 @@ def han_pod(n):
 
 
 class Takeover1117(unittest.TestCase):
-    """11-17 加：Claude 写到一半倒下时 MiMo 接手；只交必须改；审读核材料原文；改稿后数播客字数。"""
+    """11-17 加：Claude 写到一半倒下时 MiMo 接手；只交必须改；改稿后数播客字数。"""
 
     def driver(self, iss, chat, script, video=False, **kw):
         fd = FakeFd(iss.dir, script)
@@ -789,22 +789,15 @@ class Takeover1117(unittest.TestCase):
     def marker(self, iss):
         return json.loads(iss.p(BW.MARKER).read_text(encoding="utf-8"))
 
-    def test_review_task_has_materials_only_in_review(self):
+    def test_review_task_has_no_materials(self):
+        """按已定规矩第一部分第 1 条撤回"核材料原文"：材料文件在，审读任务里也不附。"""
         with tempfile.TemporaryDirectory() as t:
             iss = make_issue(t)
-            mats = [{"id": "s1", "name": "示例来源", "title": "T", "text": "founder of Example Corp said hello"}]
-            put("03_事件卡/材料/E001.json", json.dumps(mats, ensure_ascii=False))(iss.dir)
-            sec = BW.task_sections()
-            rv = BW.review_task(iss, sec, {"播客": POD, "网页": "{}"}, BW.KINDS_NO_VIDEO)
-            i = rv.find("## 抓取材料原文")
-            self.assertGreater(i, rv.find("## 要审的网页稿"))                     # 附在任务最后、稿子后面
-            self.assertIn("### E001（03_事件卡/材料/E001.json）", rv)
-            self.assertIn(json.dumps(mats, ensure_ascii=False, separators=(",", ":")), rv)   # 原样
-            self.assertNotIn("抓取材料原文（", BW.common_material(iss))              # 共同材料不变（缓存）
-            self.assertNotIn("founder of Example", BW.write_task(iss, "播客", sec))
-            # 没存下材料的卡写明"没有"
-            (iss.dir / "03_事件卡" / "材料" / "E001.json").rename(iss.dir / "挪开.json")
-            self.assertIn("E001：没有存下这张卡的材料", BW.review_task(iss, sec, {"播客": POD, "网页": "{}"}, BW.KINDS_NO_VIDEO))
+            put("03_事件卡/材料/E001.json", json.dumps([{"id": "s1", "text": "founder of Example Corp"}]))(iss.dir)
+            rv = BW.review_task(iss, BW.task_sections(), {"播客": POD, "网页": "{}"}, BW.KINDS_NO_VIDEO)
+            self.assertNotIn("founder of Example", rv)
+            self.assertNotIn("抓取材料原文", rv)
+            self.assertFalse(hasattr(BW, "materials_text"))
 
     def test_revise_task_only_must_wording(self):
         with tempfile.TemporaryDirectory() as t:
@@ -975,10 +968,9 @@ class Takeover1117(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             iss = make_issue(t)
             task = BW.revise_task(iss, "播客", BW.task_sections(), [], POD, False)
-            new = [BW.REVIEW_EXTRA[0], task[task.find("# 你这一次的任务：按独立审读"):task.find("## 审读意见")],
-                   BW.materials_text(iss).splitlines()[0]]
+            new = [task[task.find("# 你这一次的任务：按独立审读"):task.find("## 审读意见")]]
         for x in new:
-            x = re.sub(r"第 \d 步|03_事件卡|最多 3 篇", "", x)     # 步号、目录名、"每张卡最多 3 篇"不算内容
+            x = re.sub(r"第 \d 步", "", x)                    # 步号不算内容
             self.assertIsNone(re.search(r"\bE\d{3}\b|\d", x), x[:80])
 
 
