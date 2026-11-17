@@ -111,6 +111,30 @@ KEY_RULES = [
 ]
 
 
+# 审读多一项必查（2026-11-17 用户定）：稿子用到的事件卡概括句、英文名、拼音，逐条拿卡里的原文摘录（quote）对。
+# 只放进审读的任务（不进写稿共用的材料），依据同样只原样摘已有条文。
+REVIEW_EXTRA = ("稿子用到的事件卡概括句（text_zh、why_it_matters）、英文名和拼音，逐条拿卡里的原文摘录（quote）对，对不上的算必须改",
+                [("cloud/任务说明_云端.md", "**依据**：唯一的事实依据是"),
+                 ("cloud/任务说明_云端.md", "- **第 5 步事件卡**"),
+                 ("文档/经验/问题与解决办法.md", "10. 西方人名、没有通行中文名的机构写英文原名"),
+                 ("pipeline/prompts/写稿_网页.md", "- 英文里的公司、品牌、机构、媒体名一律照《英文名表》"),
+                 ("pipeline/prompts/写作指南.md", "- 名字本来是中文、没有官方英文名的")])
+
+
+def rule_line(f, start):
+    """f 文件里以 start 开头的那一整行（去掉首尾空白）；找不到就停。"""
+    lines = [x.strip() for x in (ROOT / f).read_text(encoding="utf-8").splitlines() if x.strip().startswith(start)]
+    if not lines:
+        raise SystemExit("规矩原文找不到：%s 里没有以「%s」开头的一行（规矩文件改过了，backup_writer.py 要跟着改）" % (f, start))
+    return lines[0]
+
+
+def review_extra_text():
+    title, src = REVIEW_EXTRA
+    return "\n".join(["**%s**（依据，都是已有规矩的原文）：" % title] +
+                     ["- 原文（%s）：%s" % (f, rule_line(f, s)) for f, s in src])
+
+
 def key_rules_text():
     """把 KEY_RULES 摘成一段（每条整行原文＋出处）；找不到就 SystemExit。"""
     out, last = ["## 材料一之二　重点规矩（下面每条都是从已有规矩里原样摘的，出处写在后面；写稿、审读、改稿都照它）", ""], None
@@ -264,7 +288,8 @@ def default_chat():
 
 
 class Mimo:
-    def __init__(self, issue, chat=None, max_calls=14, max_tokens=1_500_000, model=PRO, deadline=None, clock=None):
+    def __init__(self, issue, chat=None, max_calls=14, max_tokens=1_500_000, model=PRO, deadline=None, clock=None,
+                 segment=None, segment_max_tokens=None):
         self.issue = Path(issue)
         self._chat = chat
         self.max_calls, self.max_tokens, self.model = max_calls, max_tokens, model
@@ -274,6 +299,17 @@ class Mimo:
             "说明": "备用写稿（cloud/backup_writer.py）每次调 MiMo 的用量。credits 按 Token Plan 价目估（输入未命中 300、命中缓存 2.5、"
                     "输出 600／token，UTC 16–24 点 0.8 倍），只用来估，账以 MiMo 后台为准。",
             "调用": [], "合计": {}}
+        # 分段上限（2026-11-17 续跑加）：这一段（名字 segment）从用量记录里第几次调用开始算，记在用量记录里，重开程序也接着算。
+        # 每次调用前按"这一段已用＋这一次的输入（按字节估，宁多勿少）＋这一次最多能输出多少"判，保证这一段不超过上限
+        self.segment, self.segment_max = segment, segment_max_tokens
+        if segment:
+            self.log.setdefault("分段", {}).setdefault(segment, {"从第几次调用之后算": len(self.log["调用"]), "开始": now_iso()})
+
+    def segment_used(self):
+        if not self.segment:
+            return 0
+        start = self.log["分段"][self.segment]["从第几次调用之后算"]
+        return sum(int(c.get("输入token") or 0) + int(c.get("输出token") or 0) for c in self.log["调用"][start:])
 
     @property
     def calls(self):
@@ -300,6 +336,12 @@ class Mimo:
             raise Stop("MiMo 用量已到上限 %s token，不再调用" % format(self.max_tokens, ","))
         if self.deadline and self.clock() >= self.deadline:
             raise Stop("已过 %s（UTC），不再新开 MiMo 调用" % self.deadline.strftime("%Y-%m-%d %H:%M"))
+        if self.segment and self.segment_max:
+            need = int(len((system + user).encode("utf-8")) / 3.0) + int(max_tokens)     # 中文约 3.8 字节一个 token，按 3.0 估，宁多勿少
+            used = self.segment_used()
+            if used + need > self.segment_max:
+                raise Stop("这一段（%s）已用 %s token，这一次最多还要约 %s，会超过这一段的上限 %s，不再调用" % (
+                    self.segment, format(used, ","), format(need, ","), format(self.segment_max, ",")))
         if self._chat is None:
             self._chat = default_chat()
         n = tot["次数"] + 1
@@ -556,8 +598,9 @@ def review_task(iss, sec, drafts):
     parts = [instructions(iss, "播客"), instructions(iss, "网页"), instructions(iss, "视频"),
              "---\n\n" + sec["审读"],
              "---\n\n# 必查项（逐条查；依据都在共同材料「材料一之二　重点规矩」里，是已有规矩的原文）\n\n"
-             + "\n".join("%d. %s" % (i, k) for i, k in enumerate(dict.fromkeys(k for k, _, _ in KEY_RULES), 1))
-             + "\n\n每一项对三份稿子（播客、网页中英文、视频旁白和画面）都要查；查出来的按上面审读任务的分法放进必须改或建议改。",
+             + "\n".join("%d. %s" % (i, k) for i, k in enumerate(list(dict.fromkeys(k for k, _, _ in KEY_RULES)) + [REVIEW_EXTRA[0]], 1))
+             + "\n\n每一项对三份稿子（播客、网页中英文、视频旁白和画面）都要查；查出来的按上面审读任务的分法放进必须改或建议改"
+             + "（最后一项对不上的一律算必须改）。\n\n" + review_extra_text(),
              "---\n\n# 补充（备用写稿）\n\n这一次的审读由 MiMo 另起一次调用来做，和写稿不共用对话。稿子不是你写的。"
              "「材料六」的事件卡就是 `03_事件卡/cards_写稿用.json`；`01_获取/` 里的原始材料这一次给不了你，判断以卡的原文摘录（quote）为准。",
              REVIEW_OUT]
@@ -731,7 +774,7 @@ def rerun_checker(iss):
 # ---------------------------------------------------------------- 驱动
 class Driver:
     def __init__(self, iss, mimo, fd_extra=(), fd_runner=None, db=None, sel_inputs=None, rerun=None, max_loops=16,
-                 sb_runner=None):
+                 sb_runner=None, sb_base=0, snap_before_review=None):
         self.iss, self.mimo, self.fd_extra = iss, mimo, list(fd_extra)
         self.fd_runner = fd_runner or self._fd
         self.db = db
@@ -739,6 +782,9 @@ class Driver:
         self.rerun = rerun if rerun is not None else rerun_checker(iss)
         self.max_loops = max_loops
         self.sb_runner = sb_runner or self._sb_run
+        # 分镜轮数从哪里算起（2026-11-17 续跑：分镜检查改成一次报全，这一次分镜从头算，最多 SB_ROUNDS 轮）
+        self.sb_base = int(sb_base or 0)
+        self.snap_before_review = Path(snap_before_review).expanduser() if snap_before_review else None
         self.rec = read_json(iss.p(RECORD), None) or {"说明": "备用写稿每一步做了几次（交回改的轮数按这里算，重开程序也不会多改）",
                                                        "次数": {}, "经过": []}
         self._sec = None
@@ -933,7 +979,7 @@ class Driver:
         broken = [p for v in probs.values() for p in v if "没给出结果" in p]
         if broken:                      # 检查程序自己出错（缺文件、缺声音包……）：不是稿子的事，不花一次 MiMo 去"改"
             raise Stop("第 %d 步有检查程序自己出错（%d 处，如：%s），不交回 MiMo，停下等人" % (step, len(broken), broken[0][:80]))
-        if "视频" in probs and self.count("sb_fix") >= SB_ROUNDS:
+        if "视频" in probs and self.sb_used() >= SB_ROUNDS:
             raise Stop("第 %d 步视频分镜还有 %d 处要改，分镜已经改满 %d 轮，停下等人" % (step, len(probs["视频"]), SB_ROUNDS))
         self.bump(key, "交回改：" + "、".join("%s %d 处" % (k, len(v)) for k, v in probs.items()))
         snap = read_json(self.iss.p("logs/检查_稿子.json"), {}) or {}       # 这一轮的检查结果留一份（后面再检查会覆盖它）
@@ -945,10 +991,14 @@ class Driver:
             task = fix_task(self.iss, kind, self.sec,
                             annotate_sb_problems(self.iss, probs[kind]) if kind == "视频" else probs[kind], draft, why)
             if kind == "视频":
-                self.bump("sb_fix", "第 %d 步 fd 交回改分镜（分镜第 %d 轮）" % (step, self.count("sb_fix") + 1))
+                self.bump("sb_fix", "第 %d 步 fd 交回改分镜（分镜第 %d 轮）" % (step, self.sb_used() + 1))
             self._write_file(kind, task, step, "改%s稿_%s" % (kind, "检查" if step == 7 else "复查"))
         if "视频" in probs:
             self.precheck_storyboard(step)
+
+    def sb_used(self):
+        """这一次计法下分镜已经改了几轮。"""
+        return max(0, self.count("sb_fix") - self.sb_base)
 
     # -- 分镜预查（只在备用模式；见 SB_ROUNDS）
     def _sb_run(self):
@@ -968,18 +1018,18 @@ class Driver:
             rows = [x.strip() for x in (out or "").splitlines() if "✗" in x and "要改" in x]
             log = read_json(self.iss.p(SB_LOG), None) or {"说明": "备用写稿每一版分镜交给 fd 以前的检查结果（helpers.py storyboard，和 fd 第 7 步同一个程序）",
                                                          "每一次检查": []}
-            log["每一次检查"].append({"时间": now_iso(), "在第几步": step, "已经改了几轮": self.count("sb_fix"),
+            log["每一次检查"].append({"时间": now_iso(), "在第几步": step, "已经改了几轮": self.sb_used(), "轮数起点": self.sb_base,
                                   "过了": rc == 0, "要改条数": len(rows), "种类": sb_kinds(rows)})
             write_json(self.iss.p(SB_LOG), log)
             if rc == 0:
-                say("分镜预查：过了（分镜已改 %d 轮）" % self.count("sb_fix"))
+                say("分镜预查：过了（分镜已改 %d 轮）" % self.sb_used())
                 return
             if not rows:
                 raise Stop("分镜检查程序自己出错（没给出要改的行），停下等人")
-            if self.count("sb_fix") >= SB_ROUNDS:
+            if self.sb_used() >= SB_ROUNDS:
                 say("分镜预查：改满 %d 轮还有 %d 处，交给 fd 照常判" % (SB_ROUNDS, len(rows)))
                 return
-            n = self.count("sb_fix") + 1
+            n = self.sb_used() + 1
             self.bump("sb_fix", "分镜预查没过（%d 处），交回改（分镜第 %d 轮）" % (len(rows), n))
             say("分镜预查：%d 处要改（%s），交回改（分镜第 %d 轮）" % (len(rows), "、".join("%s %d" % kv for kv in sb_kinds(rows).items()), n))
             draft = self.iss.p(self.iss.files["视频"]).read_text(encoding="utf-8")
@@ -996,6 +1046,11 @@ class Driver:
             raise Stop("fd 停在审读，审读意见.md 却在")
         if self.count("review") >= 1:
             raise Stop("审读已经做过一次，审读意见.md 却不在")
+        if self.snap_before_review and not (self.snap_before_review / "04_文稿").exists():
+            import shutil                  # 审读前把稿子原样存一份：另请的审读看到的，和 MiMo 审读时看到的是同一份
+            self.snap_before_review.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(self.iss.p("04_文稿"), self.snap_before_review / "04_文稿")
+            say("审读前的稿子另存了一份")
         self.bump("review", "MiMo 独立审读（另起一次调用）")
         drafts = {k: self.iss.p(self.iss.files[k]).read_text(encoding="utf-8") for k in KINDS}
         rv = self._json_call(8, "独立审读", self.material, review_task(self.iss, self.sec, drafts), MAX_OUT["review"], 0.2)
@@ -1138,6 +1193,11 @@ def main(argv=None):
             p.add_argument("--max-calls", type=int, default=14, help="最多调 MiMo 几次（含失败的）")
             p.add_argument("--max-tokens", type=int, default=1_500_000, help="输入加输出最多多少 token")
             p.add_argument("--no-calls-after", help="过了这个 UTC 时刻不再新开 MiMo 调用，写成 2026-11-17T03:30")
+            p.add_argument("--segment", help="这一段的名字（续跑时用）：和 --segment-max-tokens 一起，单算这一段的用量")
+            p.add_argument("--segment-max-tokens", type=int, help="这一段最多用多少 token（含这一次调用最多可能的输出）")
+            p.add_argument("--sb-rounds-base", type=int, default=0,
+                           help="分镜轮数从第几轮之后算起（续跑换新计法时用；默认 0）")
+            p.add_argument("--snapshot-before-review", help="第 8 步审读前，把 04_文稿/ 原样存一份到这个文件夹")
             p.add_argument("fd_extra", nargs=argparse.REMAINDER, help="-- 后面原样交给每一条 ./fd run（如 --budget-usd 0）")
         else:
             p.add_argument("--no-select", action="store_true", help="不估选题（不 import run_mimo）")
@@ -1155,7 +1215,11 @@ def main(argv=None):
     dl = datetime.fromisoformat(a.no_calls_after).replace(tzinfo=timezone.utc) if a.no_calls_after else None
     if dl:
         say("过了 %s UTC 不再新开 MiMo 调用" % dl.strftime("%Y-%m-%d %H:%M"))
-    return Driver(iss, Mimo(iss.dir, max_calls=a.max_calls, max_tokens=a.max_tokens, deadline=dl), extra, db=db).run()
+    if a.segment:
+        say("这一段：%s，最多 %s token；分镜轮数从第 %d 轮之后算" % (a.segment, format(a.segment_max_tokens or 0, ","), a.sb_rounds_base))
+    mimo = Mimo(iss.dir, max_calls=a.max_calls, max_tokens=a.max_tokens, deadline=dl, segment=a.segment,
+                segment_max_tokens=a.segment_max_tokens)
+    return Driver(iss, mimo, extra, db=db, sb_base=a.sb_rounds_base, snap_before_review=a.snapshot_before_review).run()
 
 
 if __name__ == "__main__":
