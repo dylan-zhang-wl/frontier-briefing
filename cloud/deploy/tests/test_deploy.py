@@ -487,12 +487,10 @@ class PodcastFeedTest(unittest.TestCase):
         base = tree(off)
         bad_xml = lambda items, desc: "<rss><channel><title>坏的"
         cases = [("模板写出不合法的 XML", mock.patch.object(podcast_feed, "build_feed", bad_xml)),
-                 ("程序中途抛异常", mock.patch.object(podcast_feed, "chapters_for", side_effect=None)),
+                 ("程序中途抛异常", mock.patch.object(podcast_feed, "build_feed", side_effect=KeyError("测试"))),
                  ("找不到节目封面", mock.patch.object(podcast_feed, "SHOW_COVER", self.t / "没有这个文件.jpg")),
                  ("build 直接炸了", mock.patch.object(podcast_feed, "build", side_effect=MemoryError("测试"))),
-                 ("一期能收的都没有", mock.patch.object(podcast_feed, "LIMIT", 60))]
-        cases[1] = ("程序中途抛异常", mock.patch.object(podcast_feed, "build_feed", side_effect=KeyError("测试")))
-        cases[4] = ("一期能收的都没有", mock.patch.object(podcast_feed, "read_issue_js", side_effect=ValueError("测试")))
+                 ("一期能收的都没有", mock.patch.object(podcast_feed, "read_issue_js", side_effect=ValueError("测试")))]
         for name, patch in cases:
             with patch:
                 out, problems, stats = self.pkg(issues)
@@ -500,7 +498,6 @@ class PodcastFeedTest(unittest.TestCase):
             self.assertFalse((out / "frontier/_podcast").exists(), name + "：_podcast/ 整个不在")
             self.assertEqual(tree(out), base, name + "：上线包和开关关着时一样")
             self.assertIn("播客订阅源这次没做成", stats["播客订阅源"], name)
-        self.assertFalse(any(Path(tempfile.gettempdir()).glob("fd-podcast-*")) and False)
 
     def test_一期坏了只跳过这一期(self):
         issues = self.week()
