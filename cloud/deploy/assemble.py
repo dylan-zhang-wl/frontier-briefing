@@ -12,6 +12,7 @@
       --out       上线包目录（必须不存在或是空的）；做好后里面是 frontier/index.html、frontier/issues/…、frontier/past/
       --repo      仓库根（默认本文件往上两层）：网页外壳从 <仓库>/site/v3、site/vendor 取，刊名从 site/tools/v3_site.py 取
       --summary   另写一份给人看的清单（Markdown，Actions 里给 $GITHUB_STEP_SUMMARY）
+      --podcast   另做私有播客订阅源 frontier/_podcast/（同环境变量 FD_PODCAST_FEED=on；默认不做，见下面“播客订阅源”）
 
 做法和 site/tools/build_v3.py 第 12 节“写出”一致（往期目录 issues/index.js、首页 index.html、外壳文件），另加三样：
     · 首页和往期页的 robots 标签写成 noindex, nofollow（和 Worker 的响应头一致）；
@@ -19,6 +20,12 @@
     · 检查：文件数不超过 20,000、单个文件不超过 25 MiB（Workers 免费档上限，
       https://developers.cloudflare.com/workers/platform/limits/ ），网页里不引用外网的脚本和样式。
 不调用模型、不联网、不改源目录。退出码：0 成功，1 检查没过，2 参数或输入不对。
+
+播客订阅源（2026-11-19 加，第一阶段）：环境变量 FD_PODCAST_FEED=on（私有仓库“放行发布”做上线包那一步写死）或 --podcast 时，
+在检查之前调用同目录 podcast_feed.py，做 frontier/_podcast/（订阅源模板、封面、章节；mp3 一个字节都不改），收最近
+FD_PODCAST_LIMIT 期（默认 60）。它出任何错都只是这次不出订阅源：不算检查的“问题”、退出码不变，清单里多一行原因。
+开关关着时，上线包和清单都和加这个功能以前逐字节一样。用环境变量当开关，是因为旧版本程序不认识新参数会报错退出，
+不认识的环境变量却会忽略（私有流程可能取到旧版本的公开程序）。
 """
 import argparse
 import html
@@ -286,7 +293,33 @@ def check_package(out):
     return problems, {"文件数": n, "总大小MB": round(total / 1048576, 1), "最大的文件": biggest[1], "最大MB": round(biggest[0] / 1048576, 1)}
 
 
-def assemble(repo, archive, issues, out):
+def podcast_wanted(flag=False):
+    """播客订阅源开关：--podcast，或环境变量 FD_PODCAST_FEED 是 on／1／true／yes（不分大小写）。"""
+    return bool(flag) or os.environ.get("FD_PODCAST_FEED", "").strip().lower() in ("on", "1", "true", "yes")
+
+
+def podcast_limit():
+    try:
+        n = int(os.environ.get("FD_PODCAST_LIMIT", "") or 60)
+        return n if n > 0 else 60
+    except ValueError:
+        return 60
+
+
+def make_podcast(out, limit):
+    """做播客订阅源（同目录 podcast_feed.py）。出任何错都只返回一行原因，不往外抛。返回 (一行说明, 跳过的期)。"""
+    try:
+        if str(HERE) not in sys.path:
+            sys.path.insert(0, str(HERE))
+        import podcast_feed                                  # 到这里才读（开关关着时根本不碰它）
+        r = podcast_feed.build(out, limit=limit)
+        return r["line"], r.get("notes") or []
+    except Exception as e:                                    # 订阅源不能连累网站
+        return "播客订阅源这次没做成：%s：%s（网站照常发布，这次不出订阅源）。" % (type(e).__name__, str(e)[:200]), []
+
+
+def assemble(repo, archive, issues, out, podcast=False, limit=60):
+    """podcast=True 时另做播客订阅源，结果写在返回的统计里（键“播客订阅源”“播客跳过”）；关着时什么都不多做。"""
     repo, out = Path(repo).resolve(), Path(out).resolve()
     if out.exists() and any(out.iterdir()):
         raise ValueError("上线包目录 %s 不是空的：换一个新目录（本程序不删文件）" % out)
@@ -328,7 +361,10 @@ def assemble(repo, archive, issues, out):
     newest_first = sorted(rows, key=lambda r: r["date"], reverse=True)
     (root / "past" / "index.html").write_text(render_past(sitecfg, newest_first, summaries[latest].get("accent") or "blue"),
                                               encoding="utf-8")
+    pod = make_podcast(out, limit) if podcast else None
     problems, stats = check_package(out)
+    if pod:
+        stats["播客订阅源"], stats["播客跳过"] = pod
     return newest_first, problems, stats
 
 
@@ -339,9 +375,10 @@ def main(argv=None):
     ap.add_argument("--out", required=True, help="上线包目录（不存在或空）")
     ap.add_argument("--repo", default=str(DEFAULT_REPO), help="仓库根（默认本文件往上两层）")
     ap.add_argument("--summary", help="另写一份给人看的清单（Markdown，追加）")
+    ap.add_argument("--podcast", action="store_true", help="另做私有播客订阅源（同环境变量 FD_PODCAST_FEED=on）")
     a = ap.parse_args(argv)
     try:
-        rows, problems, stats = assemble(a.repo, a.archive, a.issue, a.out)
+        rows, problems, stats = assemble(a.repo, a.archive, a.issue, a.out, podcast=podcast_wanted(a.podcast), limit=podcast_limit())
     except (ValueError, OSError) as e:
         print("✗ " + str(e), file=sys.stderr)
         return 2
@@ -351,6 +388,8 @@ def main(argv=None):
              "| 日期 | 版别 | 标题 | 文件数 | 从哪来 |", "|---|---|---|---|---|"]
     lines += ["| %s | %s | %s | %d | %s |" % (r["date"], r["edition_zh"], r["lead_zh"].replace("|", "／"), r["_files"], r["_from"]) for r in rows]
     lines += [""] + (["**检查没过**："] + ["- " + p for p in problems] if problems else ["检查通过：文件数、单个文件大小、不引用外网、noindex 标签。"])
+    if "播客订阅源" in stats:                                  # 开关关着时这里一行都不多
+        lines += ["", stats["播客订阅源"]] + ["- " + x for x in stats["播客跳过"]]
     text = "\n".join(lines) + "\n"
     print(text)
     if a.summary:
