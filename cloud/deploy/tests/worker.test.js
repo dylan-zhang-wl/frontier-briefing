@@ -1309,3 +1309,430 @@ test('开放程度的小函数：privatize、loadSettings', async () => {
   await assert.rejects(loadSettings(bad));
   fresh();
 });
+
+// ===================== 播客订阅（11-19 加，src/index.js、src/access.js 的“播客订阅”一节）=====================
+// 静态文件换成一个“宽松”的假对象：它像有的服务器那样把路径解码、改小写、并掉连续的 /、把 \ 换成 / 再找文件，
+// 所以 Worker 要是把 _podcast 的变体放过去，这里就真会回出模板——用它测“拿不到模板”才不是白测。另记下每次被要了什么。
+// 钥匙、随机数、口令都是测试里现编的假值；期望的钥匙用 Node 自带的 crypto 另算一遍，不用被测的函数。
+import { createHmac } from 'node:crypto';
+import { podcastRoute, loosePath, PODCAST_CACHE } from '../src/index.js';
+import { FEED_STATE, FEED_TTL_MS, feedKey, accessPost } from '../src/access.js';
+
+const POD_MARK = 'FD-TEMPLATE-ONLY';
+const POD_TPL = `<?xml version="1.0" encoding="UTF-8"?><rss><channel><title>${POD_MARK}</title>`
+  + '<atom:link href="__FD_FEED_BASE__/feed.xml"/><itunes:image href="__FD_FEED_BASE__/cover.jpg"/>'
+  + '<item><enclosure url="__FD_FEED_BASE__/2026-11-08.mp3" length="100000" type="audio/mpeg"/></item></channel></rss>\n';
+const POD_COVER = new Uint8Array(30000).map((_, i) => (i * 7) % 256);
+const POD_EP = new Uint8Array(20000).map((_, i) => (i * 13) % 256);
+const POD_CH = '{"version":"1.2.0","chapters":[{"startTime":0,"title":"开场"}]}';
+const POD_FILES = {
+  ...FILES,
+  '/frontier/_podcast/feed.xml': ['application/xml', POD_TPL],
+  '/frontier/_podcast/cover.jpg': ['image/jpeg', POD_COVER],
+  '/frontier/_podcast/2026-11-08.jpg': ['image/jpeg', POD_EP],
+  '/frontier/_podcast/2026-11-08.chapters.json': ['application/json', POD_CH],
+};
+const POD_SEEN = [];
+const looseKey = (p) => { let s = p; for (let i = 0; i < 3; i++) { try { const t = decodeURIComponent(s); if (t === s) break; s = t; } catch { break; } } return s.toLowerCase().replace(/\\/g, '/').replace(/\/{2,}/g, '/'); };
+const POD_INDEX = Object.fromEntries(Object.keys(POD_FILES).map((k) => [looseKey(k), k]));
+function makePodAssets({ noLen = false, boom = false } = {}) {
+  return {
+    async fetch(req) {
+      const p = new URL(req.url).pathname;
+      POD_SEEN.push(p);
+      if (boom) throw new Error('静态文件坏了（测试）');
+      const real = POD_INDEX[looseKey(p)];
+      if (!real) return new Response('nope', { status: 404 });
+      const [type, data] = POD_FILES[real];
+      if (req.headers.get('If-None-Match') === '"v1"') return new Response(null, { status: 304, headers: { ETag: '"v1"' } });
+      const body = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+      const h = { 'Content-Type': type, ETag: '"v1"', 'Set-Cookie': 'should=not-pass' };
+      if (!noLen) h['Content-Length'] = String(body.length);
+      return new Response(req.method === 'HEAD' ? null : body, { status: 200, headers: h });
+    },
+  };
+}
+const POD_ASSETS = makePodAssets();
+const expectKey = (nonce, hash = KEY_HASH) => createHmac('sha256', hash).update('frontier-podcast-feed:' + nonce).digest('hex').slice(0, 32);
+const nonceOf = (db) => (setting(db, 'feed_nonce') || {}).value;
+async function pod(path, { db, method = 'GET', headers = {}, hash = KEY_HASH, assets = POD_ASSETS, origin = ORIGIN } = {}) {
+  const ctx = makeCtx();
+  const e = { ASSETS: assets, ...(db ? { VISITS: db } : {}), ...(hash ? { STATS_KEY_HASH: hash } : {}) };
+  const realLog = console.log;
+  console.log = (...a) => LOGS.push(a.join(' '));
+  try {
+    const res = await worker.fetch(new Request(origin + path, { method, headers: { 'User-Agent': 'AppleCoreMedia/1.0.0 (iPhone; U; CPU OS 18_1 like Mac OS X)', ...headers } }), e, ctx);
+    await ctx.done();
+    return res;
+  } finally { console.log = realLog; }
+}
+// 站长在设置页点“生成订阅地址”：返回这时的钥匙（照 HMAC 另算）
+async function feedOn(db) {
+  const r = await ownerPost(db, { op: 'feed', action: 'on' });
+  assert.equal(r.status, 303);
+  assert.equal(r.headers.get('Location'), '/frontier/_access?msg=feed-on');
+  return expectKey(nonceOf(db));
+}
+const NOT_FOUND_TEXT = /没有这个页面/;
+
+test('播客订阅：没开（没有表、没有这一行、值为空、值不对、没设站长钥匙指纹、没绑数据库）——钥匙路径一律 404，不取静态文件', async () => {
+  const nonce = 'ab'.repeat(16);
+  const cases = [
+    ['没有 site_settings 表', () => new FakeD1(), KEY_HASH],
+    ['表里没有 feed_nonce', () => settingsDb(), KEY_HASH],
+    ['值为空（关闭过）', () => { const d = settingsDb(); d.sql.prepare('INSERT INTO site_settings VALUES (?, ?, ?)').run('feed_nonce', '', 1); return d; }, KEY_HASH],
+    ['值不是 32 位十六进制', () => { const d = settingsDb(); d.sql.prepare('INSERT INTO site_settings VALUES (?, ?, ?)').run('feed_nonce', 'XYZ', 1); return d; }, KEY_HASH],
+    ['没设站长钥匙指纹', () => { const d = settingsDb(); d.sql.prepare('INSERT INTO site_settings VALUES (?, ?, ?)').run('feed_nonce', nonce, 1); return d; }, ''],
+    ['指纹格式不对', () => { const d = settingsDb(); d.sql.prepare('INSERT INTO site_settings VALUES (?, ?, ?)').run('feed_nonce', nonce, 1); return d; }, 'not-a-hash'],
+    ['没绑数据库', () => null, KEY_HASH],
+  ];
+  for (const [name, make, hash] of cases) {
+    fresh();
+    const db = make();
+    const key = expectKey(nonce);
+    POD_SEEN.length = 0;
+    for (const p of [`/frontier/podcast/${key}/feed.xml`, `/frontier/podcast/${key}/2026-11-08.mp3`, `/frontier/podcast/${key}/cover.jpg`]) {
+      const res = await pod(p, { db, hash });
+      assert.equal(res.status, 404, `${name} ${p}`);
+      assert.equal(res.headers.get('Cache-Control'), 'no-store', name);
+      assert.equal(res.headers.get('Set-Cookie'), null, name);
+      assert.match(await res.text(), NOT_FOUND_TEXT, name);
+    }
+    assert.deepEqual(POD_SEEN, [], `${name}：一个静态文件都没取`);
+    if (db) assert.equal(visitRows(db).length, 0, name);
+  }
+  fresh();
+});
+
+test('播客订阅：站长打开——数据库只存随机数；设置页显示地址（钥匙＝HMAC）；feed.xml 换好占位；不记访问、不发 Cookie；日志里没有钥匙和随机数', async () => {
+  fresh();
+  LOGS.length = 0;
+  const db = settingsDb();
+  const before = await (await send('/frontier/_access', { db, headers: ownerCookie })).text();
+  for (const s of ['播客订阅：还没开', '生成订阅地址', 'name="op" value="feed"']) assert.ok(before.includes(s), s);
+  assert.ok(!before.includes('/frontier/podcast/'), '没开时页面上没有订阅地址');
+  assert.ok(!NO_EXTERNAL.test(before), '没开时整页不含外网地址');
+  const key = await feedOn(db);
+  const nonce = nonceOf(db);
+  assert.match(nonce, /^[0-9a-f]{32}$/);
+  assert.equal(await feedKey(KEY_HASH, nonce), key, '程序算的钥匙和另算的一致');
+  const all = db.sql.prepare('SELECT key, value FROM site_settings').all().map((x) => ({ ...x }));
+  assert.deepEqual(all.map((x) => x.key), ['feed_nonce'], '数据库里只多了 feed_nonce 一行');
+  assert.ok(!JSON.stringify(all).includes(key), '数据库里没有钥匙');
+  const page = await (await send('/frontier/_access?msg=feed-on', { db, headers: ownerCookie })).text();
+  const url = `https://wenlongzhang.com/frontier/podcast/${key}/feed.xml`;
+  for (const s of ['播客订阅：已开', '播客订阅已打开', `value="${url}"`, 'readonly', '通过 URL 关注节目', '换一个新地址（旧地址作废）', '关闭订阅', '上次生成或换新：']) assert.ok(page.includes(s), s);
+  assert.ok(!page.includes(nonce), '设置页不显示随机数');
+  assert.ok(!/<script/i.test(page), '设置页仍不用 JavaScript');
+  // 订阅源
+  const res = await pod(`/frontier/podcast/${key}/feed.xml`, { db });
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('Content-Type'), 'application/rss+xml; charset=utf-8');
+  assert.equal(res.headers.get('Cache-Control'), PODCAST_CACHE.feed);
+  assert.equal(res.headers.get('Cache-Control'), 'private, no-cache');
+  assert.equal(res.headers.get('X-Robots-Tag'), 'noindex, nofollow');
+  assert.equal(res.headers.get('Set-Cookie'), null);
+  assert.equal(res.headers.get('ETag'), null, '模板的 ETag 不往外带（钥匙换了它也不变）');
+  const body = await res.text();
+  assert.equal(body, POD_TPL.split('__FD_FEED_BASE__').join(`https://wenlongzhang.com/frontier/podcast/${key}`));
+  assert.ok(!body.includes('__FD_FEED_BASE__'));
+  // 浏览器带着 If-None-Match 来也照样回整份（不能回“没变”）
+  const again = await pod(`/frontier/podcast/${key}/feed.xml`, { db, headers: { 'If-None-Match': '"v1"' } });
+  assert.equal(again.status, 200);
+  assert.equal(await again.text(), body);
+  const head = await pod(`/frontier/podcast/${key}/feed.xml`, { db, method: 'HEAD' });
+  assert.equal(head.status, 200);
+  assert.equal(await head.text(), '');
+  // 再点一次“生成”不换钥匙
+  assert.equal((await ownerPost(db, { op: 'feed', action: 'on' })).headers.get('Location'), '/frontier/_access?msg=feed-on');
+  assert.equal(nonceOf(db), nonce);
+  assert.equal(visitRows(db).length, 0, '订阅源、设置页都不记访问');
+  const logs = LOGS.join('\n');
+  assert.ok(logs.includes('播客订阅：站长打开了订阅'));
+  assert.ok(!logs.includes(key) && !logs.includes(nonce), '日志里没有钥匙、没有随机数');
+  fresh();
+});
+
+test('播客订阅：mp3 整段 200、Range 206、HEAD、416；节目封面、单集封面、章节；一律 private 7 天；线上那样不带长度也一样', async () => {
+  for (const assets of [POD_ASSETS, makePodAssets({ noLen: true })]) {
+    fresh();
+    const db = settingsDb();
+    const key = await feedOn(db);
+    const base = `/frontier/podcast/${key}`;
+    const full = await pod(`${base}/2026-11-08.mp3`, { db, assets });
+    assert.equal(full.status, 200);
+    assert.equal(full.headers.get('Content-Type'), 'audio/mpeg');
+    assert.equal(full.headers.get('Accept-Ranges'), 'bytes');
+    assert.equal(full.headers.get('Cache-Control'), PODCAST_CACHE.file);
+    assert.equal(full.headers.get('Cache-Control'), 'private, max-age=604800');
+    assert.equal(full.headers.get('Set-Cookie'), null, '静态文件带的 Set-Cookie 也去掉');
+    assert.deepEqual(new Uint8Array(await full.arrayBuffer()), AUDIO);
+    for (const [r, a, b] of [['bytes=0-1', 0, 1], ['bytes=16380-16390', 16380, 16390], ['bytes=50000-', 50000, 99999], ['bytes=-500', 99500, 99999]]) {
+      const res = await pod(`${base}/2026-11-08.mp3`, { db, assets, headers: { Range: r } });
+      assert.equal(res.status, 206, r);
+      assert.equal(res.headers.get('Content-Range'), `bytes ${a}-${b}/100000`, r);
+      assert.equal(res.headers.get('Cache-Control'), 'private, max-age=604800', r);
+      assert.deepEqual(new Uint8Array(await res.arrayBuffer()), AUDIO.subarray(a, b + 1), r);
+    }
+    const bad = await pod(`${base}/2026-11-08.mp3`, { db, assets, headers: { Range: 'bytes=100000-' } });
+    assert.equal(bad.status, 416);
+    const head = await pod(`${base}/2026-11-08.mp3`, { db, assets, method: 'HEAD' });
+    assert.equal(head.status, 200);
+    assert.equal(await head.text(), '');
+    const cover = await pod(`${base}/cover.jpg`, { db, assets });
+    assert.equal(cover.status, 200);
+    assert.equal(cover.headers.get('Content-Type'), 'image/jpeg');
+    assert.deepEqual(new Uint8Array(await cover.arrayBuffer()), POD_COVER);
+    const ep = await pod(`${base}/2026-11-08.jpg`, { db, assets, headers: { Range: 'bytes=10-19' } });
+    assert.equal(ep.status, 206);
+    assert.deepEqual(new Uint8Array(await ep.arrayBuffer()), POD_EP.subarray(10, 20));
+    const ch = await pod(`${base}/2026-11-08.chapters.json`, { db, assets });
+    assert.equal(ch.status, 200);
+    assert.equal(ch.headers.get('Content-Type'), 'application/json+chapters');
+    assert.equal(await ch.text(), POD_CH);
+    for (const p of [`${base}/2099-01-01.mp3`, `${base}/2099-01-01.jpg`, `${base}/2099-01-01.chapters.json`]) {
+      assert.equal((await pod(p, { db, assets })).status, 404, '格式对、但没有这一期：' + p);
+    }
+    const nm = await pod(`${base}/2026-11-08.mp3`, { db, assets, headers: { 'If-None-Match': '"v1"' } });
+    assert.equal(nm.status, 304, 'mp3 没变照常回 304');
+    assert.equal(visitRows(db).length, 0, '下载 mp3 不记“开始听”');
+  }
+  fresh();
+});
+
+test('播客订阅：公开、凭口令、只有我三档，不带 Cookie 都能凭钥匙取到订阅源和 mp3；网站本身照样挡', async () => {
+  for (const mode of ['public', 'family', 'owner']) {
+    fresh();
+    const db = settingsDb();
+    if (mode === 'family') await familySetup(db);
+    else if (mode === 'owner') assert.equal((await ownerPost(db, { op: 'mode', mode: 'owner' })).status, 303);
+    const key = await feedOn(db);
+    const feed = await pod(`/frontier/podcast/${key}/feed.xml`, { db });
+    assert.equal(feed.status, 200, mode);
+    assert.ok((await feed.text()).includes(`/frontier/podcast/${key}/2026-11-08.mp3`), mode);
+    const a = await pod(`/frontier/podcast/${key}/2026-11-08.mp3`, { db, headers: { Range: 'bytes=0-1' } });
+    assert.equal(a.status, 206, mode);
+    const site = await pod('/frontier/', { db });
+    assert.equal(site.status, mode === 'public' ? 200 : 403, mode + '：网站本身照旧');
+    const mp3 = await pod(AUDIO_PATH, { db, headers: { Range: 'bytes=0-1' } });
+    assert.equal(mp3.status, mode === 'public' ? 206 : 403, mode + '：网页那条 mp3 路照旧过门');
+  }
+  fresh();
+});
+
+test('播客订阅：模板 /frontier/_podcast/… 和大小写、百分号编码、双斜杠等变体，三档、带口令 Cookie、站长都拿不到（404，不取静态文件）', async () => {
+  // 先证明假静态文件真的“宽松”：直接问它，变体能拿到模板
+  assert.match(await (await POD_ASSETS.fetch(new Request(ORIGIN + '/frontier/%5Fpodcast/feed.xml'))).text(), new RegExp(POD_MARK));
+  assert.match(await (await POD_ASSETS.fetch(new Request(ORIGIN + '/frontier//_Podcast/FEED.XML'))).text(), new RegExp(POD_MARK));
+  const variants = ['/frontier/_podcast/feed.xml', '/frontier/_Podcast/feed.xml', '/frontier/_PODCAST/FEED.XML', '/frontier/%5Fpodcast/feed.xml',
+    '/frontier/%5fpodcast/feed.xml', '/frontier/%255Fpodcast/feed.xml', '/frontier/_podcast%2Ffeed.xml', '/frontier/_podcast%2ffeed.xml',
+    '/frontier//_podcast/feed.xml', '/frontier///_podcast//feed.xml', '/frontier/_podcast//feed.xml', '/frontier\\_podcast\\feed.xml',
+    '/frontier/issues/../_podcast/feed.xml', '/frontier/x/%2e%2e/_podcast/feed.xml', '/frontier/%2E%2E/frontier/_podcast/feed.xml',
+    '/frontier/_podcast/feed.xml?x=1', '/frontier/_podcast/feed.xml%00', '/frontier/_podcast/', '/frontier/_podcast', '/frontier/_podcast/cover.jpg',
+    '/frontier/_podcast/2026-11-08.jpg', '/frontier/_podcast/2026-11-08.chapters.json', '/frontier/_p%6Fdcast/feed.xml', '/frontier/%5F%70%6F%64%63%61%73%74/feed.xml'];
+  for (const mode of ['public', 'family', 'owner']) {
+    fresh();
+    const db = settingsDb();
+    let fam = null;
+    if (mode === 'family') { await familySetup(db); fam = await login(db); } else if (mode === 'owner') await ownerPost(db, { op: 'mode', mode: 'owner' });
+    await feedOn(db);
+    const who = [['匿名', {}], ['站长', ownerCookie], ...(fam ? [['带口令 Cookie', { Cookie: fam }]] : [])];
+    for (const v of variants) {
+      for (const [w, headers] of who) {
+        for (const method of ['GET', 'HEAD']) {
+          POD_SEEN.length = 0;
+          const res = await pod(v, { db, headers, method });
+          const text = await res.text();
+          assert.equal(res.status, 404, `${mode} ${w} ${method} ${v}`);
+          assert.ok(!text.includes(POD_MARK) && !text.includes('__FD_FEED_BASE__'), `${mode} ${w} ${v}：没拿到模板`);
+          assert.deepEqual(POD_SEEN, [], `${mode} ${w} ${v}：没去取静态文件`);
+        }
+      }
+    }
+  }
+  fresh();
+});
+
+test('播客订阅：钥匙路径只认白名单——日期严格 YYYY-MM-DD；..、%2e%2e、多一层目录、大小写、别的文件名都 404，不取静态文件', async () => {
+  fresh();
+  const db = settingsDb();
+  const key = await feedOn(db);
+  assert.equal((await pod(`/frontier/podcast/${key}/2026-11-08.mp3`, { db })).status, 200, '对照：合格的写法 200');
+  const B = `/frontier/podcast/${key}`;
+  const bad = [`${B}/../_podcast/feed.xml`, `${B}/%2e%2e/feed.xml`, `${B}/%2e%2e%2f_podcast/feed.xml`, `${B}/..%2f..%2fissues/2026-11-08/audio/podcast.mp3`,
+    `${B}/x/feed.xml`, `${B}/feed.xml/`, `${B}/feed.xml/x`, B, `${B}/`, '/frontier/podcast/', '/frontier/podcast', `/frontier/podcast/${key.toUpperCase()}/feed.xml`,
+    `${B}/FEED.XML`, `${B}/Feed.xml`, `${B}/2026-11-8.mp3`, `${B}/20261108.mp3`, `${B}/2026-11-08.MP3`, `${B}/2026-11-08.mp3.bak`, `${B}/2026-11-08..mp3`,
+    `${B}/x2026-11-08.mp3`, `${B}/2026-11-08%2Emp3`, `${B}/2026-11-08/audio/podcast.mp3`, `${B}/issue.js`, `${B}/feed.xml%00`, `${B}/cover.png`,
+    `${B}/2026-11-08.webp`, `${B}/2026-11-08.json`, `${B}x/feed.xml`, `/frontier/podcast/${key.slice(1)}/feed.xml`, `/frontier/podcast//${key}/feed.xml`,
+    `${B}//feed.xml`, `/frontier/Podcast/${key}/feed.xml`, `/frontier/podcast/x/${key}/feed.xml`];
+  // 注：https 网址里的 \ 在解析时就被换成 /（网址标准），`${B}\\feed.xml` 就是合格的那条地址本身，不算变体，所以不在上面
+  for (const p of bad) {
+    POD_SEEN.length = 0;
+    const res = await pod(p, { db });
+    assert.equal(res.status, 404, p);
+    assert.match(await res.text(), NOT_FOUND_TEXT, p);
+    assert.deepEqual(POD_SEEN, [], p + '：没去取静态文件');
+  }
+  fresh();
+});
+
+test('播客订阅：钥匙不对、换新以后的旧钥匙、关闭以后、http:// 明文，都 404；别的实例最多 15 秒后生效', async () => {
+  fresh();
+  LOGS.length = 0;
+  const db = settingsDb();
+  const k1 = await feedOn(db);
+  const n1 = nonceOf(db);
+  assert.equal((await pod(`/frontier/podcast/${k1}/feed.xml`, { db })).status, 200);
+  for (const wrong of ['0'.repeat(32), k1.slice(0, 31) + (k1[31] === 'a' ? 'b' : 'a'), expectKey(n1, 'f'.repeat(64)), n1]) {
+    assert.equal((await pod(`/frontier/podcast/${wrong}/feed.xml`, { db })).status, 404, '钥匙不对：' + wrong);
+  }
+  // http:// 明文：钥匙对也 404（不在明文连接上给内容）
+  assert.equal((await pod(`/frontier/podcast/${k1}/feed.xml`, { db, origin: 'http://wenlongzhang.com' })).status, 404);
+  assert.equal((await pod(`/frontier/podcast/${k1}/2026-11-08.mp3`, { db, origin: 'http://wenlongzhang.com' })).status, 404);
+  // 换新：本实例立刻生效
+  let r = await ownerPost(db, { op: 'feed', action: 'new' });
+  assert.equal(r.headers.get('Location'), '/frontier/_access?msg=feed-new');
+  const n2 = nonceOf(db);
+  assert.notEqual(n2, n1);
+  const k2 = expectKey(n2);
+  assert.equal((await pod(`/frontier/podcast/${k1}/feed.xml`, { db })).status, 404, '旧钥匙作废');
+  assert.equal((await pod(`/frontier/podcast/${k1}/2026-11-08.mp3`, { db })).status, 404, '旧钥匙的 mp3 也作废');
+  assert.equal((await pod(`/frontier/podcast/${k2}/feed.xml`, { db })).status, 200);
+  assert.ok((await (await send('/frontier/_access?msg=feed-new', { db, headers: ownerCookie })).text()).includes('已换成新的订阅地址'));
+  // 别的实例换的：本实例 15 秒内还用旧的，过了就换
+  const n3 = 'cd'.repeat(16);
+  db.sql.prepare('UPDATE site_settings SET value = ? WHERE key = ?').run(n3, 'feed_nonce');
+  assert.equal((await pod(`/frontier/podcast/${k2}/feed.xml`, { db })).status, 200, '15 秒内还用缓存');
+  FEED_STATE.at = Date.now() - FEED_TTL_MS - 1;
+  assert.equal((await pod(`/frontier/podcast/${k2}/feed.xml`, { db })).status, 404, '过了 15 秒读到新的');
+  assert.equal((await pod(`/frontier/podcast/${expectKey(n3)}/feed.xml`, { db })).status, 200);
+  // 关闭
+  r = await ownerPost(db, { op: 'feed', action: 'off' });
+  assert.equal(r.headers.get('Location'), '/frontier/_access?msg=feed-off');
+  assert.equal(nonceOf(db), '');
+  assert.equal((await pod(`/frontier/podcast/${expectKey(n3)}/feed.xml`, { db })).status, 404, '关闭以后 404');
+  const page = await (await send('/frontier/_access?msg=feed-off', { db, headers: ownerCookie })).text();
+  assert.ok(page.includes('播客订阅已关闭') && page.includes('播客订阅：还没开') && !page.includes('/frontier/podcast/'));
+  // 关了再开：新地址，旧的都不回来
+  const k4 = await feedOn(db);
+  assert.ok(![k1, k2, expectKey(n3)].includes(k4));
+  assert.equal((await pod(`/frontier/podcast/${k1}/feed.xml`, { db })).status, 404);
+  const logs = LOGS.join('\n');
+  for (const s of [k1, k2, k4, n1, n2, n3]) assert.ok(!logs.includes(s), '日志里没有钥匙和随机数');
+  fresh();
+});
+
+test('播客订阅：钥匙路径上读数据库出错、静态文件出错——回 404（不是 500、503，也不是门页），不用上次读到的值，不碰开放程度的缓存', async () => {
+  fresh();
+  LOGS.length = 0;
+  const db = settingsDb({ mode: 'owner' });
+  const key = await feedOn(db);
+  assert.equal((await pod(`/frontier/podcast/${key}/feed.xml`, { db })).status, 200);
+  const access = ACCESS_STATE.value;
+  db.fail = true;
+  FEED_STATE.at = 0;                                // 缓存过期，要重读数据库
+  for (const p of [`/frontier/podcast/${key}/feed.xml`, `/frontier/podcast/${key}/2026-11-08.mp3`]) {
+    POD_SEEN.length = 0;
+    const res = await pod(p, { db });
+    assert.equal(res.status, 404, p);
+    assert.match(await res.text(), NOT_FOUND_TEXT, p);
+    assert.deepEqual(POD_SEEN, [], p);
+  }
+  assert.ok(LOGS.some((x) => /播客订阅：读数据库出错/.test(x)));
+  assert.equal(ACCESS_STATE.value, access, '开放程度的缓存没被动');
+  // 设置页照常打开，“播客订阅”一块写读不到
+  const page = await send('/frontier/_access', { db, headers: ownerCookie });
+  assert.equal(page.status, 200);
+  assert.match(await page.text(), /播客订阅：读不到/);
+  db.fail = false;
+  assert.equal((await pod(`/frontier/podcast/${key}/feed.xml`, { db })).status, 200, '数据库好了就恢复');
+  // prepare 一调就抛错、all() 回一个怪错误的数据库
+  for (const bad of [{ prepare() { throw new Error('boom'); } }, { prepare() { return { all: () => Promise.reject(Object.assign(new Error('x'), { name: 'D1_ERROR' })) }; } }]) {
+    fresh();
+    POD_SEEN.length = 0;
+    const res = await pod(`/frontier/podcast/${key}/feed.xml`, { db: bad });
+    assert.equal(res.status, 404);
+    assert.deepEqual(POD_SEEN, []);
+    assert.equal(FEED_STATE.value, null, '读不到时不缓存');
+  }
+  // 从没读到过、开放程度也读不到（网站对别人回 503）时，钥匙路径仍是 404
+  fresh();
+  const bdb = settingsDb();
+  const bk = await feedOn(bdb);
+  fresh();
+  bdb.fail = true;
+  const r404 = await pod(`/frontier/podcast/${bk}/feed.xml`, { db: bdb });
+  assert.equal(r404.status, 404);
+  assert.match(await r404.text(), NOT_FOUND_TEXT);
+  assert.equal((await pod('/frontier/', { db: bdb })).status, 503, '对照：网站本身回 503');
+  // 静态文件那边出错（抛异常）：404，不是 500
+  fresh();
+  const db2 = settingsDb();
+  const k2 = await feedOn(db2);
+  for (const p of [`/frontier/podcast/${k2}/feed.xml`, `/frontier/podcast/${k2}/2026-11-08.mp3`]) {
+    const res = await pod(p, { db: db2, assets: makePodAssets({ boom: true }) });
+    assert.equal(res.status, 404, p);
+  }
+  assert.ok(LOGS.some((x) => /播客订阅：出错/.test(x)));
+  fresh();
+});
+
+test('播客订阅：设置页的提交只认站长、Origin 要对；不认识的 action 什么都不改；没设指纹生成不了；没绑数据库提示用不了', async () => {
+  fresh();
+  const db = settingsDb();
+  await familySetup(db);
+  const fam = await login(db);
+  for (const headers of [{}, { Cookie: fam }, { Cookie: 'fd_pass=' + 'a'.repeat(64) }]) {
+    const res = await send('/frontier/_access', { method: 'POST', db, headers: { ...FORM, Origin: ORIGIN, ...headers }, body: form({ op: 'feed', action: 'on' }) });
+    assert.equal(res.status, 404, JSON.stringify(headers));
+  }
+  assert.equal(nonceOf(db), undefined, '别人提交没写进去');
+  for (const origin of ['https://evil.example', 'http://wenlongzhang.com', '']) {
+    assert.equal((await ownerPost(db, { op: 'feed', action: 'on' }, { origin })).status, 403, origin || '(没有 Origin)');
+  }
+  for (const f of [{ op: 'feed' }, { op: 'feed', action: 'rotate' }, { op: 'feed', action: 'ON' }]) {
+    assert.equal((await ownerPost(db, f)).headers.get('Location'), '/frontier/_access?msg=bad', JSON.stringify(f));
+  }
+  assert.equal(nonceOf(db), undefined);
+  // 直接调 accessPost：指纹给空（index.js 只在指纹有效时才认站长，这里只测 access.js 自己也拦着）
+  const req = new Request(ORIGIN + '/frontier/_access', { method: 'POST', headers: { ...FORM, Origin: ORIGIN }, body: form({ op: 'feed', action: 'on' }) });
+  assert.equal((await accessPost(req, { VISITS: db }, Date.now(), '')).headers.get('Location'), '/frontier/_access?msg=feed-nohash');
+  assert.equal(nonceOf(db), undefined);
+  // 没绑数据库
+  fresh();
+  const page = await (await send('/frontier/_access', { headers: ownerCookie })).text();
+  assert.ok(page.includes('没连上数据库，播客订阅用不了'));
+  assert.equal((await ownerPost(undefined, { op: 'feed', action: 'on' })).headers.get('Location'), '/frontier/_access?msg=nodb');
+  // 线上还没建表：第一次生成时自己建
+  fresh();
+  const raw = new FakeD1();
+  const key = await feedOn(raw);
+  assert.ok(raw.log.some((q) => /CREATE TABLE IF NOT EXISTS site_settings/.test(q)));
+  assert.equal((await pod(`/frontier/podcast/${key}/feed.xml`, { db: raw })).status, 200);
+  fresh();
+});
+
+test('播客订阅的小函数：别的地址 podcastRoute 一律 null（照旧处理、不读数据库）；loosePath；feedKey 参数不对返回空', async () => {
+  for (const p of ['/frontier', '/frontier/', '/frontier/?date=2026-11-08', '/frontier/past/', '/frontier/issues/2026-11-08/audio/podcast.mp3',
+    '/frontier/issues/2026-11-08/issue.js', '/frontier/_visits', '/frontier/_access', '/frontier/_enter', '/frontier/feedback', '/frontier/podcasts/x',
+    '/frontier/2026-11-08/', '/frontier/%E0%A4%A', '/frontier/app.js', '/frontier/vendor/three/three-bundle.min.js']) {
+    assert.equal(podcastRoute(p), null, p);
+  }
+  assert.equal(loosePath('/frontier/%255F%50odcast//X'), '/frontier/_podcast/x');
+  assert.equal(loosePath('/frontier/%E0%A4%A'), '/frontier/%e0%a4%a', '% 写法不对时不抛错');
+  assert.deepEqual(podcastRoute('/frontier/podcast/' + 'a'.repeat(32) + '/2026-11-08.mp3'), { key: 'a'.repeat(32), file: '2026-11-08.mp3', date: '2026-11-08', ext: 'mp3' });
+  assert.equal(await feedKey('', 'ab'.repeat(16)), '');
+  assert.equal(await feedKey(KEY_HASH, ''), '');
+  assert.equal(await feedKey(KEY_HASH, 'XY'.repeat(16)), '');
+  assert.equal(await feedKey(KEY_HASH, 'ab'.repeat(16)), expectKey('ab'.repeat(16)));
+  // 普通请求一次数据库都不多查：档位缓存热着时，取网页、mp3、图片，数据库日志不变
+  fresh();
+  const db = settingsDb();
+  await send('/frontier/', { db });
+  const n = db.log.length;
+  for (const p of ['/frontier/', '/frontier/issues/2026-11-08/issue.js', '/frontier/issues/2026-11-08/img/card-800.webp']) await send(p, { db, method: 'HEAD' });
+  await send(AUDIO_PATH, { db, headers: { Range: 'bytes=5-9' } });
+  assert.equal(db.log.filter((q) => /feed_nonce/.test(q)).length, 0, '没查 feed_nonce');
+  assert.ok(db.log.length - n <= 0, '一条查询都没多');
+  fresh();
+});

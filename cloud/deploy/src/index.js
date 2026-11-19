@@ -30,10 +30,13 @@
 //   顺序：?k= 站长登录 → /frontier 跳 /frontier/ 这类纯跳转 → 统计页、设置页（只认站长，别人 404）→ 门 → 静态文件。
 //   门挡下的请求一律回门页（403，no-store），不去取静态文件；放行的回应在非公开档把 Cache-Control 的 public 换成 private。
 //   表不存在或没设过 → 公开，和加这个功能以前一模一样。
+// · 播客订阅（11-19 加，见下面“播客订阅”一节和 src/access.js）：/frontier/podcast/<钥匙>/… 在站长钥匙登录、开放程度的门之前处理，
+//   三档都不用 Cookie；/frontier/_podcast/…（上线包里的订阅源模板）谁直接来要都 404。路径里没有这两种写法的请求一行都不多走、不读数据库。
 
 import { shouldRecord, recordVisit, shouldRecordPlay, recordPlay, cleanupVisits } from './visits.js';
 import { statsResponse } from './stats.js';
 import { ACCESS_PATH, ENTER_PATH, decide, privatize, gatePage, nextOf, handleEnter, accessGet, accessPost, sha256hex, same, cookieValue } from './access.js';
+import { readFeed, feedKey, feedBase, FEED_PLACEHOLDER } from './access.js';
 
 const PREFIX = '/frontier';
 const STATS_PATH = PREFIX + '/_visits';
@@ -306,6 +309,93 @@ async function handleFeedback(req, env) {
   return fbErr(502, '暂时没能提交，请稍后再试。', 'Couldn’t send just now. Please try again later.');
 }
 
+// ===================== 播客订阅（11-19 加）=====================
+// 上线包里的订阅源文件在 frontier/_podcast/（cloud/deploy/podcast_feed.py 做的）：feed.xml 模板（地址处写占位 __FD_FEED_BASE__，不含钥匙）、
+// cover.jpg 节目封面、<日期>.jpg 单集封面、<日期>.chapters.json 章节；mp3 不另放，用 issues/<日期>/audio/podcast.mp3。
+//   1. 路径的“宽松写法”（反复解码、改小写、\ 换成 /、连续的 / 并成一个）里含 _podcast 的：一律 404，站长也一样，不去取静态文件。
+//      大小写变体、百分号编码（%5F）、双斜杠都挡在这里，模板不让人直接下载。
+//   2. 宽松写法第二级是 podcast 的（/frontier/podcast/…）：原样路径必须严格是
+//      /frontier/podcast/<32 位小写十六进制钥匙>/(feed.xml | cover.jpg | <YYYY-MM-DD>.mp3 | <YYYY-MM-DD>.jpg | <YYYY-MM-DD>.chapters.json)，
+//      别的写法（多一层目录、..、大小写不对、日期格式不对）一律 404；要取的静态文件路径只用正则取出的那几段拼，不用原样路径。
+//   3. 钥匙对才回内容（钥匙怎么算见 access.js“播客订阅”）；没开订阅、没设站长钥匙指纹、钥匙不对、读库出错、http:// 明文请求，
+//      以及这一段里任何出错，都回普通 404（不回 500，也不落到后面去回别的内容），不暴露这条路存在。
+//   4. feed.xml：把占位换成带钥匙的地址（https://wenlongzhang.com/frontier/podcast/<钥匙>），Cache-Control: private, no-cache；
+//      mp3、图片、章节：private, max-age=604800（7 天）；mp3 和图片按 Range 截段（同网页音频，苹果要求能按字节取）。
+//   5. 不记访问统计、不发 Cookie；日志不打印网址和钥匙。
+// 没有 _podcast、第二级也不是 podcast 的请求，podcastRoute 返回 null，后面照旧，不读数据库。
+const PODCAST_RE = /^\/frontier\/podcast\/([0-9a-f]{32})\/(feed\.xml|cover\.jpg|(\d{4}-\d{2}-\d{2})\.(mp3|jpg|chapters\.json))$/;
+export const PODCAST_CACHE = { feed: 'private, no-cache', file: 'private, max-age=604800' };
+const PODCAST_TYPE = { mp3: 'audio/mpeg', jpg: 'image/jpeg', 'chapters.json': 'application/json+chapters' };
+
+// 路径的宽松写法：反复解码（最多 3 次；% 写法不对就停在解到的那一步）、改小写、\ 换成 /、连续的 / 并成一个
+export function loosePath(path) {
+  let s = String(path || '');
+  for (let i = 0; i < 3; i++) {
+    let t;
+    try { t = decodeURIComponent(s); } catch { break; }
+    if (t === s) break;
+    s = t;
+  }
+  return s.toLowerCase().replace(/\\/g, '/').replace(/\/{2,}/g, '/');
+}
+
+// 这个路径归不归播客订阅管。null＝不归（照常处理）；{ deny: true }＝一律 404；{ key, file, date, ext }＝合格的钥匙路径
+export function podcastRoute(path) {
+  const loose = loosePath(path);
+  if (!loose.includes('_podcast') && loose.split('/')[2] !== 'podcast') return null;
+  if (loose.includes('_podcast')) return { deny: true };
+  const m = PODCAST_RE.exec(path);
+  if (!m) return { deny: true };
+  return { key: m[1], file: m[2], date: m[3] || '', ext: m[3] ? m[4] : m[2].split('.')[1] };
+}
+
+async function podcastResponse(req, url, env, route) {
+  try {
+    if (route.deny || url.protocol !== 'https:') return notFound(req.method);
+    const hash = wantHash(env);
+    if (!hash) return notFound(req.method);
+    const feed = await readFeed(env);
+    if (!feed || !feed.nonce) return notFound(req.method);
+    const key = await feedKey(hash, feed.nonce);
+    if (!key || !same(route.key, key)) return notFound(req.method);
+    return await podcastFile(req, url, env, route, key);
+  } catch (e) {
+    console.log(`播客订阅：出错（${String((e && e.name) || 'error')}），回 404`);
+    return notFound(req.method);
+  }
+}
+
+async function podcastFile(req, url, env, route, key) {
+  const isFeed = route.file === 'feed.xml';
+  const asset = route.date && route.ext === 'mp3' ? `${PREFIX}/issues/${route.date}/audio/podcast.mp3` : `${PREFIX}/_podcast/${route.file}`;
+  // feed.xml 每次取整份（要换占位）：不带 If-None-Match 之类，免得静态文件回“没变”拿不到正文；别的文件照常可以回 304
+  const fwd = new Headers();
+  if (!isFeed) for (const k of ['If-None-Match', 'If-Modified-Since']) if (req.headers.has(k)) fwd.set(k, req.headers.get(k));
+  const res = await env.ASSETS.fetch(new Request(new URL(asset, url.origin), { method: isFeed ? 'GET' : req.method, headers: fwd }));
+  if (isFeed) {
+    if (res.status !== 200) return notFound(req.method);
+    const text = (await res.text()).split(FEED_PLACEHOLDER).join(feedBase(key));
+    const h = withBase(new Headers({ 'Content-Type': 'application/rss+xml; charset=utf-8', 'Cache-Control': PODCAST_CACHE.feed }));
+    return new Response(req.method === 'HEAD' ? null : text, { status: 200, headers: h });
+  }
+  if (res.status !== 200 && res.status !== 304) {
+    if (res.body) res.body.cancel().catch(() => {});
+    return notFound(req.method);
+  }
+  const h = withBase(new Headers(res.headers));
+  h.delete('Set-Cookie');
+  h.set('Cache-Control', PODCAST_CACHE.file);
+  h.set('Content-Type', PODCAST_TYPE[route.ext] || 'application/octet-stream');
+  if (res.status === 200 && route.ext !== 'chapters.json') {
+    h.set('Accept-Ranges', 'bytes');
+    if (req.headers.has('Range')) {
+      const partial = await rangeResponse(req, res, h);
+      if (partial) return partial;
+    }
+  }
+  return new Response(req.method === 'HEAD' ? null : res.body, { status: res.status, headers: h });
+}
+
 // 站长专用页（统计页、设置页）的写法：没有站长 Cookie 的、或者写法不是这一页本身（多了 /、.csv 之类）的，一律当作“没有这个页面”
 const ownerPage = (path, page) => path === page || path.startsWith(page + '/') || path.startsWith(page + '.');
 
@@ -324,9 +414,12 @@ export default {
     if (req.method === 'POST' && path === ENTER_PATH) return handleEnter(req, env, isOwner(req, env));     // 输访问口令
     if (req.method === 'POST' && path === ACCESS_PATH) {                                                  // 站长设置页提交
       if (!isOwner(req, env)) return notFound('POST');
-      return accessPost(req, env);
+      return accessPost(req, env, Date.now(), wantHash(env));
     }
     if (req.method !== 'GET' && req.method !== 'HEAD') return plain(405, '只能看，不能改', { Allow: 'GET, HEAD' });
+    // 播客订阅：在站长钥匙登录、开放程度的门之前；不归它管的请求 podcastRoute 返回 null，照旧往下走
+    const pod = podcastRoute(path);
+    if (pod) return podcastResponse(req, url, env, pod);
     const login = await keyLogin(req, url, env);
     if (login) return login;
     const owner = isOwner(req, env);
@@ -343,7 +436,7 @@ export default {
     // 开放程度设置页：同上，只认站长
     if (ownerPage(path, ACCESS_PATH)) {
       if (!owner || path !== ACCESS_PATH) return notFound(req.method);
-      return accessGet(req, env);
+      return accessGet(req, env, Date.now(), wantHash(env));
     }
 
     // 门：这一档不放行的，回门页（不去取静态文件、不记访问）

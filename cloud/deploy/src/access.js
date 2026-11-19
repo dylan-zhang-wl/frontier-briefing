@@ -17,6 +17,7 @@
 // · 门（gate）的判断在 index.js：所有 /frontier 下的 GET/HEAD 都要过门；被挡下的一律回门页（本文件 gatePage），不去取静态文件。
 // · 凭口令进入 POST /frontier/_enter、站长设置页 GET/POST /frontier/_access 也在这里（index.js 调用）。
 // · 页面都是这里直接生成的一页 HTML：样式写在页面里、亮暗配色跟随系统、手机可看、不引用任何外部资源、不用 JavaScript、noindex。
+// · 播客订阅（11-19 加，见本文件“播客订阅”一节）：订阅钥匙的随机数也存在 site_settings（一行 feed_nonce），设置页多一块“播客订阅”。
 
 export const ACCESS_PATH = '/frontier/_access';
 export const ENTER_PATH = '/frontier/_enter';
@@ -75,7 +76,7 @@ export function esc(s) {
 
 // 本实例内存里的状态：value 是上次读到的（{ mode, pw, token, modeTs, pwTs }），at 是读到的时间
 export const ACCESS_STATE = { at: 0, value: null };
-export function resetAccessCache() { ACCESS_STATE.at = 0; ACCESS_STATE.value = null; }
+export function resetAccessCache() { ACCESS_STATE.at = 0; ACCESS_STATE.value = null; FEED_STATE.at = 0; FEED_STATE.value = null; }
 
 // 口令 Cookie 的值：SHA-256(当前 family_pw 记录 + ':fd_family')。改口令 → 记录变 → 值变 → 旧 Cookie 自动失效
 export async function familyToken(pw) { return pw ? sha256hex(pw + ':fd_family') : ''; }
@@ -131,6 +132,67 @@ export async function checkPw(record, pw) {
   const [salt, hash] = record.split(':');
   return same(await sha256hex(salt + pw), hash);
 }
+
+// ===================== 播客订阅（11-19 加）=====================
+// 私有播客订阅源的地址带一把钥匙：https://wenlongzhang.com/frontier/podcast/<钥匙>/feed.xml（mp3、封面、章节文件也走同一把钥匙）。
+// · 钥匙不存在任何地方：D1 的 site_settings 里只有一行 feed_nonce（16 字节随机数，32 位十六进制），
+//   钥匙 = HMAC-SHA256（用站长钥匙指纹 STATS_KEY_HASH 当密钥，算 "frontier-podcast-feed:" + 随机数）的前 32 位十六进制。
+//   只读数据库拼不出订阅地址：还要 Worker 的机密变量 STATS_KEY_HASH，它写进去以后谁都读不出来。
+// · 换新地址＝换一个随机数（旧地址随之作废）；关闭＝随机数写成空。没设站长钥匙指纹时谁都拿不到。
+// · 换站长钥匙（STATS_KEY_HASH）会连带换掉订阅地址，要在播客 App 里重新关注。
+// · 读随机数：每个实例在内存里存 15 秒（和档位一样长，但单独一份，档位那一份的读法一字没动）；
+//   读库出错一律当作没开（钥匙路径回 404），不用本实例上次读到的值。
+// · 钥匙路径怎么认、回什么，在 index.js 的“播客订阅”一节。设置页只有站长能看到订阅地址；日志里不写钥匙、不写随机数。
+export const FEED_NONCE_KEY = 'feed_nonce';
+export const FEED_TTL_MS = ACCESS_TTL_MS;
+export const FEED_PLACEHOLDER = '__FD_FEED_BASE__';      // 上线包里 feed.xml 模板的地址占位（cloud/deploy/podcast_feed.py 写的）
+const NONCE_RE = /^[0-9a-f]{32}$/;
+const FEED_SELECT = "SELECT value, updated_ts FROM site_settings WHERE key = 'feed_nonce'";
+export const FEED_STATE = { at: 0, value: null };          // 本实例上次读到的 { nonce, ts }
+
+const randomHex = (n) => [...crypto.getRandomValues(new Uint8Array(n))].map((b) => b.toString(16).padStart(2, '0')).join('');
+
+// 从数据库读一次随机数（不看缓存）。表不存在、没有这一行、值不是 32 位十六进制 → 没开（nonce 为空）；别的错误往外抛
+export async function loadFeed(db) {
+  let rows;
+  try {
+    const res = await db.prepare(FEED_SELECT).all();
+    rows = (res && res.results) || [];
+  } catch (e) {
+    if (/no such table/i.test(String((e && e.message) || e))) return { nonce: '', ts: 0 };
+    throw e;
+  }
+  const r = rows[0];
+  return { nonce: r && NONCE_RE.test(String(r.value)) ? String(r.value) : '', ts: r ? Number(r.updated_ts) || 0 : 0 };
+}
+
+// 现在的随机数（本实例缓存 15 秒）。没绑数据库、读库出错 → null（钥匙路径一律 404）
+export async function readFeed(env, now = Date.now()) {
+  const db = env && env.VISITS;
+  if (!db) return null;
+  if (FEED_STATE.value && now - FEED_STATE.at < FEED_TTL_MS) return FEED_STATE.value;
+  try {
+    const v = await loadFeed(db);
+    FEED_STATE.value = v;
+    FEED_STATE.at = now;
+    return v;
+  } catch (e) {
+    console.log(`播客订阅：读数据库出错（${String((e && e.name) || 'error')}），这次回 404`);
+    return null;
+  }
+}
+
+// 订阅钥匙：站长钥匙指纹（64 位十六进制）＋随机数 → 32 位十六进制；两样有一样不对就返回 ''（没有钥匙）
+export async function feedKey(ownerHash, nonce) {
+  if (!/^[0-9a-f]{64}$/.test(String(ownerHash || '')) || !NONCE_RE.test(String(nonce || ''))) return '';
+  const enc = new TextEncoder();
+  const k = await crypto.subtle.importKey('raw', enc.encode(ownerHash), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = await crypto.subtle.sign('HMAC', k, enc.encode('frontier-podcast-feed:' + nonce));
+  return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, 32);
+}
+
+// 带钥匙的地址前缀（不带结尾的 /）：feed.xml 里的占位换成它，设置页显示它后面加 /feed.xml
+export const feedBase = (key) => `${SITE_ORIGIN}${PREFIX}/podcast/${key}`;
 
 // ===================== 门 =====================
 
@@ -300,6 +362,10 @@ const MSG = {
   nodb: ['err', '没连上数据库，开放设置用不了。'],
   dberr: ['err', '写数据库出错，没改成。过一会儿再试。'],
   bad: ['err', '没看懂这次提交，什么都没改。'],
+  'feed-on': ['ok', '播客订阅已打开：订阅地址在下面“播客订阅”一栏。'],
+  'feed-new': ['ok', '已换成新的订阅地址：旧地址最多 15 秒内作废，播客 App 里要用新地址重新关注。'],
+  'feed-off': ['ok', '播客订阅已关闭：订阅地址最多 15 秒内失效。'],
+  'feed-nohash': ['err', '还没设站长钥匙指纹（STATS_KEY_HASH），生成不了订阅地址。'],
 };
 
 function fmtUK(ms) {
@@ -334,11 +400,41 @@ form.pw label{font-size:14px;color:var(--mute)}
 form.pw input{font:inherit;font-size:17px;padding:11px 13px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink)}
 form.pw button{font:inherit;font-size:17px;font-weight:600;min-height:50px;border:0;border-radius:10px;background:var(--acc);color:var(--on);cursor:pointer}
 ul{margin:6px 0 0;padding-left:20px;color:var(--mute);font-size:14px}
+.feed label{display:block;font-size:14px;color:var(--mute);margin:10px 0 4px}
+.feed input{font:inherit;font-size:15px;width:100%;padding:11px 13px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);word-break:break-all}
+.feed form{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+.feed button{font:inherit;font-size:16px;font-weight:600;min-height:48px;padding:10px 16px;border:2px solid var(--acc);border-radius:10px;background:var(--bg);color:var(--acc);cursor:pointer}
+.feed button.go{background:var(--acc);color:var(--on)}
+.feed button:disabled{opacity:.55;cursor:not-allowed}
 @media (max-width:560px){.modes{grid-template-columns:1fr}.modes button{min-height:64px}}`;
 
 const MODE_HINT = { public: '有链接就能看', family: '要输家人口令', owner: '别人看到“测试中”' };
 
-export function renderAccessPage(st, { msg = '', dbNote = '' } = {}) {
+// 设置页“播客订阅”一块。feed：{ noDb }、{ err }、{ on: false }、{ on: true, url, ts }；不给就不显示这一块。
+// 没开时这一块里没有任何网址（整页不引外网资源的检查照旧）；开了才显示完整订阅地址（只读输入框，手机上长按全选复制）。
+export function feedCard(feed) {
+  if (!feed) return '';
+  const form = (buttons) => `<form method="post" action="${ACCESS_PATH}"><input type="hidden" name="op" value="feed">${buttons}</form>`;
+  if (feed.noDb || feed.err) {
+    return `<div class="card feed"><h2>播客订阅：读不到</h2><p class="note">${feed.noDb ? '没连上数据库，播客订阅用不了。' : '读数据库出错，过一会儿再刷新这一页。'}</p></div>`;
+  }
+  if (!feed.on) {
+    return `<div class="card feed"><h2>播客订阅：还没开</h2>
+<p class="note">打开以后会得到一个带钥匙的订阅地址，在手机的“播客”App 里关注它，就能收听每一期（网站不是“公开”档时也能听）。地址只显示在这一页。</p>
+${form('<button type="submit" name="action" value="on" class="go">生成订阅地址</button>')}</div>`;
+  }
+  return `<div class="card feed"><h2>播客订阅：已开</h2>
+<p class="note">${feed.ts ? `上次生成或换新：${esc(fmtUK(feed.ts))}（英国时间）` : ''}</p>
+<label for="feedurl">订阅地址（长按全选、复制）</label>
+<input id="feedurl" type="text" readonly value="${esc(feed.url)}" autocomplete="off" autocapitalize="off" spellcheck="false">
+<p class="note" style="margin-top:8px">iPhone：打开“播客”App → 资料库 → 右上角“…” → 通过 URL 关注节目 → 粘贴 → 关注。</p>
+${form('<button type="submit" name="action" value="new">换一个新地址（旧地址作废）</button><button type="submit" name="action" value="off">关闭订阅</button>')}
+<ul><li>这个地址本身就是钥匙：知道它的人都能听、能下载。别发给别人、别贴到网上；觉得泄露了就点“换一个新地址”，再用新地址重新关注。</li>
+<li>换新、关闭最多 15 秒内对所有设备生效。</li><li>换站长钥匙会连带换掉这个地址，要重新关注。</li>
+<li>节目列表在每次发布网站时更新；哪天网站没发布，列表就不变。</li></ul></div>`;
+}
+
+export function renderAccessPage(st, { msg = '', dbNote = '', feed } = {}) {
   const f = MSG[msg];
   const flash = f ? `<div class="flash ${f[0]}" role="status">${esc(f[1])}</div>` : '';
   const noDb = !!st.noDb;
@@ -374,6 +470,7 @@ ${warn}${flash}
 <label for="pw2">再输一遍</label><input id="pw2" name="pw2" type="password" autocomplete="new-password" required minlength="${PW_MIN}" maxlength="${PW_MAX}"${dis}>
 <button type="submit"${dis}>设新口令</button></form>
 </div>
+${feedCard(feed)}
 <div class="card"><h2>要知道</h2><ul>
 <li>改了口令，已经进来的家人要用新口令重新输一次。</li>
 <li>改动最多 15 秒内对所有人生效。</li>
@@ -386,7 +483,8 @@ ${warn}${flash}
 // 设置页不许被别的网站嵌进框里（X-Frame-Options、frame-ancestors）
 const NO_STORE = { 'Cache-Control': 'no-store', ...BASE, 'X-Frame-Options': 'DENY', 'Content-Security-Policy': "frame-ancestors 'none'" };
 
-export async function accessGet(req, env, now = Date.now()) {
+// ownerHash：站长钥匙指纹（index.js 核过格式的 STATS_KEY_HASH），播客订阅算钥匙用；不给就不显示订阅地址
+export async function accessGet(req, env, now = Date.now(), ownerHash = '') {
   const url = new URL(req.url);
   const msg = url.searchParams.get('msg') || '';
   const db = env && env.VISITS;
@@ -402,15 +500,28 @@ export async function accessGet(req, env, now = Date.now()) {
       dbNote = `读数据库出错（${String((e && e.message) || e).slice(0, 160)}）${ACCESS_STATE.value ? '，下面是本实例上次读到的' : ''}。`;
     }
   }
-  const html = renderAccessPage(st, { msg: Object.prototype.hasOwnProperty.call(MSG, msg) ? msg : '', dbNote });
+  // 播客订阅一块：单独读一次随机数（不看缓存），顺手更新本实例的缓存；读不到只影响这一块
+  let feed = { noDb: true };
+  if (db) {
+    try {
+      const f = await loadFeed(db);
+      FEED_STATE.value = f;
+      FEED_STATE.at = now;
+      const key = f.nonce ? await feedKey(ownerHash, f.nonce) : '';
+      feed = key ? { on: true, url: feedBase(key) + '/feed.xml', ts: f.ts } : { on: false };
+    } catch (e) {
+      feed = { err: true };
+    }
+  }
+  const html = renderAccessPage(st, { msg: Object.prototype.hasOwnProperty.call(MSG, msg) ? msg : '', dbNote, feed });
   return new Response(req.method === 'HEAD' ? null : html, { status: 200, headers: { ...NO_STORE, 'Content-Type': 'text/html; charset=utf-8' } });
 }
 
 const back = (msg) => seeOther(`${ACCESS_PATH}?msg=${msg}`);
 const charLen = (s) => Array.from(s).length;
 
-// POST /frontier/_access（index.js 已确认是站长）
-export async function accessPost(req, env, now = Date.now()) {
+// POST /frontier/_access（index.js 已确认是站长）。ownerHash 同 accessGet，播客订阅用
+export async function accessPost(req, env, now = Date.now(), ownerHash = '') {
   if (req.headers.get('Origin') !== SITE_ORIGIN) return plain(403, '只能从网站页面提交');
   const form = await readForm(req);
   if (form instanceof Response) return form;
@@ -441,6 +552,19 @@ export async function accessPost(req, env, now = Date.now()) {
       ACCESS_STATE.at = now;
       console.log('开放程度：站长设了新的家人口令');      // 不记口令
       return back('pwset');
+    }
+    if (op === 'feed') {                                  // 播客订阅：on 打开（已开就不动）、new 换新地址、off 关闭
+      const act = form.get('action');
+      if (!['on', 'new', 'off'].includes(act)) return back('bad');
+      if (act !== 'off' && !/^[0-9a-f]{64}$/.test(String(ownerHash || ''))) return back('feed-nohash');
+      const cur = await loadFeed(db);
+      if (act === 'on' && cur.nonce) return back('feed-on');
+      const nonce = act === 'off' ? '' : randomHex(16);
+      await writeSetting(db, FEED_NONCE_KEY, nonce, now);
+      FEED_STATE.value = { nonce, ts: now };
+      FEED_STATE.at = now;
+      console.log(`播客订阅：站长${act === 'off' ? '关闭了订阅' : act === 'new' ? '换了新地址' : '打开了订阅'}`);   // 不记钥匙、不记随机数
+      return back('feed-' + act);
     }
   } catch (e) {
     console.log(`开放程度：写数据库出错（${String((e && e.name) || 'error')}）`);
