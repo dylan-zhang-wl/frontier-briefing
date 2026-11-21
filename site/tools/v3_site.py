@@ -29,8 +29,12 @@ ACCENTS_EN = {"blue": "ocean blue", "amber": "amber", "coral": "coral", "violet"
 
 # ---------------------------------------------------------------- 页脚（v3.2：一行话，只在这里改）
 # {accent} 换成当天主题色的名字；{past} 换成“往期”按钮（点开日历）。中文页面用 FOOT_ZH，英文页面用 FOOT_EN。
-FOOT_ZH = "本期由 AI 自动化工作流生成 · 主题色：{accent} · {past} · 每日AI科技前沿简报"
-FOOT_EN = "Produced by an automated AI workflow · Colour: {accent} · {past} · Daily AI & Tech Frontier Briefing"
+# 按“ · ”分段，每段内部不折行（style.css 的 #foot .ft-seg）：一段太长，手机上会横向溢出。
+# 11-21 用户定加“声音为 AI 合成”（两位主播是 AI 合成的虚拟角色，写明免得被当成真人）。中文照用户的写法用逗号接在第一段里
+#   （手机上这一段 269 像素，375 宽的手机可用 343）；英文接成一段约 380 像素放不下，所以“AI-synthesised voice”单独成一段。
+#   要退回：把这两行改回不带这半句的写法（app.js 里 foot_line 兜底的两句同改），下一期组装后全站页脚跟着变回去。
+FOOT_ZH = "本期由 AI 自动化工作流生成，声音为 AI 合成 · 主题色：{accent} · {past} · 每日AI科技前沿简报"
+FOOT_EN = "Produced by an automated AI workflow · AI-synthesised voice · Colour: {accent} · {past} · Daily AI & Tech Frontier Briefing"
 FOOT_PAST = ("往期", "Past issues")      # {past} 那个按钮上的字
 
 # 配乐署名（v3.2）：CC BY 4.0 不管商用与否都要求署名，但允许放在合理的位置：11-01 用户定放进折叠的“参考来源”末尾。
