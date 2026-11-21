@@ -414,7 +414,8 @@ def pitch_flags(he):
 def listen_material(iss):
     """配音程序那次转写（选用的那一条）和原稿的差异，每处带编号、混音版位置、拼音判断。
     返回 dict：{"处": [...], "块": [...], "只差空格": n, "时间": 说明, "指标": [...], "共几块": n, "读不到": [块号…]}；
-    qc.json 读不了返回 None。"读不到"：有原稿、却找不到选用那一条转写的块（11-21 加；不为空时第 25 项算没查成，见 merge_items）。"""
+    qc.json 读不了返回 None。"读不到"：有原稿、却找不到选用那一条转写的块（11-21 加；选用的是废条、没转写的也算；
+    不为空时第 25 项算没查成，见 merge_items）。"""
     human = read_json(iss.p(iss.ed["人声"] + "/qc.json"), None)
     if not isinstance(human, dict) or not isinstance(human.get("各块"), list):
         return None
@@ -430,7 +431,9 @@ def listen_material(iss):
     out, blocks, spaces, unread = [], [], 0, []
     for b in rows:
         takes = [x for x in b.get("各条") or [] if isinstance(x, dict) and x.get("第几条") == b.get("选用第几条")]
-        if not takes or "转写" not in takes[0]:
+        # 读不到：没有选用那一条、那一条没有"转写"（没开对稿）或是 None、或是废条（tts_qc.discarded 记"没转写": true、"转写": ""，
+        # 时长异常当场丢掉、没转写——全是废条时选用的就是它）。这些不能当成"转写是空的"去比，否则整块都成了"原稿的中文少了"
+        if not takes or takes[0].get("转写") is None or takes[0].get("没转写") is True:
             if str(b.get("原稿") or "").strip():
                 unread.append(b.get("块"))
             continue

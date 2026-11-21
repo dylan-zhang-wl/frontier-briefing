@@ -833,6 +833,19 @@ class SundayDialog(unittest.TestCase):
             self.assertIn("第 25 项", g.results[-1]["说明"])
             self.assertTrue(json.loads((d / BR.RECORD).read_text(encoding="utf-8"))["gate 读法自查"]["对得上"])
 
+    def test_discarded_take_counts_as_unread(self):
+        """选用的是废条（tts_qc.discarded：时长异常当场丢掉、"没转写": true、"转写": ""）：算读不到，不当成整块都少了。"""
+        with tempfile.TemporaryDirectory() as t:
+            qc = dialog_qc()
+            qc["各轮"][1]["各条"] = [{"第几条": 1, "转写": "", "没转写": True, "废条": True, "差异": []}]
+            d = make_sunday(t, qc=qc)
+            lm = BR.listen_material(BR.Issue(SUN, d))
+            self.assertEqual(lm["读不到"], [2])
+            self.assertFalse(any(x["块"] == 2 for x in lm["处"]))
+            chat, rc, v, md = sunday_review(d)
+            self.assertEqual([x["项"] for x in v[gate.MIMO_MISSED]], [25])
+            self.assertIn("| 25 | 查不了 | 查不了：人声 qc.json 有 1 块读不到", md)
+
     def test_unrecognized_relisten_counts_as_missed(self):
         with tempfile.TemporaryDirectory() as t:
             qc = dialog_qc()
