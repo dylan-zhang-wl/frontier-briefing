@@ -175,6 +175,10 @@ def note_lines(day, notes, head):
         listen_sorted = sorted([n for n in tell if n["类"] == gate.LISTEN], key=gate.listen_order)
         rest = sorted([n for n in tell if n["类"] != gate.LISTEN], key=lambda n: order.get(n["类"], 9))
         facts = 0
+        redo = [n for n in listen_sorted if n.get("配音复核") is True]
+        if redo:          # 11-15：配音程序重录 2 次还被第二个听写模型判念错的，排在最前面先听（下面按时间排的顺序不动）
+            where = "、".join(str(n["说明"]).split("：", 1)[0] for n in redo)
+            lines.append("- 先听这几处（配音程序重录 2 次后，两个听写模型复核还是念错）：%s" % where)
         for n in rest + listen_sorted:
             mark = ""
             if n["类"] == gate.LISTEN and gate.listen_fact(n):

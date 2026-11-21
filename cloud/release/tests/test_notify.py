@@ -92,6 +92,24 @@ class NotifyTest(unittest.TestCase):
         self.assertFalse(rows[2].startswith("- 【事实】"))                      # 审片写了 false 就不加
         self.assertIn("行首带【事实】的是", body)
 
+    def test_配音复核的先听_排在最前面一行_顺序不变(self):
+        """11-15：配音程序重录 2 次、第二个听写模型复核还判念错的，审片写"配音复核": true；邮件在请你耳听最前面加一行"先听这几处"。"""
+        self.listen([
+            {"位置": "播客 6:44", "说明": "原稿“有着落了吗”，转写“有着了吗”", "判断": "多半真念错", "依据": "少了落；配音复核念错", "配音复核": True},
+            {"位置": "播客 0:23", "说明": "原稿“损害”，转写“损失”", "判断": "多半真念错", "依据": "复核念错", "配音复核": True},
+            {"位置": "播客 2:44", "说明": "原稿“一千零九页”，转写“109 页”", "判断": "多半真念错", "依据": "数字", "关乎事实": True},
+            {"位置": "视频 61 秒", "说明": "原稿“十六次”", "判断": "多半真念错", "依据": "x", "配音复核": "是"}])
+        write_verdict(self.issue, self.root)
+        need, subject, body = notify.build(self.issue, published="yes")
+        self.assertTrue(need)
+        rows = [l for l in body.splitlines() if l.startswith("- ")]
+        self.assertEqual(rows[0], "- 先听这几处（配音程序重录 2 次后，两个听写模型复核还是念错）：播客 0:23、播客 6:44")
+        self.assertEqual([r.split("：")[1] for r in rows[1:]], ["视频 61 秒", "播客 0:23", "播客 2:44", "播客 6:44"])
+        self.assertTrue(rows[3].startswith("- 【事实】请你耳听：播客 2:44"))
+        n = gate.listen_note({"位置": "播客 6:44", "说明": "x", "配音复核": True})
+        self.assertIs(n["配音复核"], True)
+        self.assertNotIn("配音复核", gate.listen_note({"位置": "p", "说明": "x", "配音复核": "是"}))   # 只认 true
+
     def test_listen_order_认得出的写法(self):
         self.assertEqual(gate.listen_order({"位置": "视频 4–17 秒（开场）"}), (0, 4))
         self.assertEqual(gate.listen_order({"位置": "播客 10:24"}), (1, 624))

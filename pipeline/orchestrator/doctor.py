@@ -259,6 +259,23 @@ class Doctor:
         eon, ewhy = excerpt_photo_switch()     # 11-15 加：摘录卡压在章图上（用户定开）
         self.add(OK, "摘录卡压在章图上（开关）", "%s（%s）%s" % ("开" if eon else "关", ewhy,
                                                     "：截图退回摘录时，摘录卡后面立这一章的配图" if eon else "：截图退回摘录时只有白卡"))
+        self.qc_switches()
+
+    def qc_switches(self):
+        """11-15 加：对稿的数字整数比对、第二个听写模型（pipeline/tts_qc.py）。只报开没开；第二个听写模型开着时看环境和模型在不在
+        （只查文件，不载入模型）。没装好不挡出刊：对稿照旧，数字不符照常重录。"""
+        if str(PIPE) not in sys.path:
+            sys.path.insert(0, str(PIPE))
+        import tts_qc as Q                     # noqa: E402
+        non, nwhy = Q.numbers_switch()
+        self.add(OK, "对稿数字整数比对（开关）", "%s（%s）" % ("开" if non else "关", nwhy))
+        aon, awhy = Q.asr2_switch()
+        py, models, _ = Q._asr2_paths()
+        have = py.exists() and (models / "SenseVoiceSmall" / "model.pt").exists() and (models / "paraformer-zh" / "model.pt").exists()
+        self.add(OK if (not aon or have) else WARN, "对稿第二个听写模型（开关）", "%s（%s）%s" % (
+            "开" if aon else "关", awhy, ("；环境和两个模型都在" if have else "；没装好（%s、%s），这一期不复核" % (py, models)) if aon else ""),
+            "" if (not aon or have) else "照 cloud/asr2_requirements.txt 开头装 ~/.venvs/fd-asr2，模型下进 ~/.cache/fd-asr2（见 .github/workflows/frontier-daily.yml"
+                                         "“装第二个听写模型”）；或把 fd_开关.json 的“对稿第二个听写模型”改成“关”")
 
     def disk(self):
         u = shutil.disk_usage(str(Path.home()))

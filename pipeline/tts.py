@@ -65,6 +65,9 @@ MiMo 的行内标记（如"（轻笑）""（温柔 活泼）"，括号里只有�
       废条（11-14 加，tts_qc.overlong）：配出来的一条比按字数估计的长 2 倍以上、而且多出 30 秒以上（11-11 有一条 181 秒、
       估计 55 秒，多念了 612 个字），不转写、不量音高音色，直接当"需重录"丢掉重录，算进现有的重录次数
       （先占对稿的 retakes，把关时再占"最多再录"），各条记"废条""没转写"；全是废条时才补量一次选中的那条、标需人工复听。
+      数字不符、第二个听写模型复核判念错（11-15 加，fd_开关.json 两个开关，规则见 tts_qc.py 文件头）：这一块最多重录 2 次
+      （tts_qc.MISREAD_RETAKES；只因为这两项要重录时预算不够就不录、不报错），重录后选用的那条还在，qc.json 那一块写
+      "数字不符（请你耳听）""复核念错（请你耳听）"；每一条的"复核"记着两个新模型各听到了什么。开关关着时和以前一样。
 音高把关（11-01 加，命令行默认开）：同一个声音每次合成的音高会漂。每块配完量音高中位数，和声音档案
       （voice_profile.json 各声音的"参考"）里的参考音高比，差超过 1.5 个半音就重录，最多再录 2 次，挑最接近的；
       语速和参考差超过一成在 qc.json 里标出来。阈值在档案的"音高把关"里；--pitch-ref off 关掉、给数字就用那个 Hz。
@@ -1032,6 +1035,8 @@ class _Taker:
             else:
                 hyp = Q.transcribe(raw, wdir)
             res = Q.check(spoken(text), hyp, seconds, est)
+            # 11-15：数字不符、可疑处交给第二个听写模型复核（开关关着、没有可疑处时什么也不做）
+            Q.confirm([(res, spoken(text), raw, done)], log=self.log)
             flag = "；".join(res["原因"]) if res["需重录"] else "通过"
             soft = [x["名字"] for x in res.get("专名读音") or [] if x.get("只提醒")]
             if soft:       # 11-09：清单标了只提醒的名字（Claude）不重录，qc.json 那一块写"专名读音（请你耳听）"
@@ -1065,8 +1070,20 @@ class _Taker:
         废条（11-14 加，tts_qc.overlong：时长超过估计 2 倍、多 30 秒以上）不转写、不量，当"需重录"：先占对稿的重录次数；
         把关时挑出来的还是废条（各条都是废条），再占"最多再录"重录（记"为废条再录"）。都用完了还是废条，才补量一次、照旧标需人工复听。"""
         takes = [self.one(cfg, text, est, 0, tag, block, measure)]
-        while takes[-1]["qc"].get("需重录") and len(takes) < 1 + self.retakes:
-            takes.append(self.one(cfg, text, est, len(takes), tag, block, measure))
+        while takes[-1]["qc"].get("需重录"):
+            q = takes[-1]["qc"]
+            only_new = Q.misread_only(q)
+            if len(takes) < 1 + self.retakes and not only_new:
+                takes.append(self.one(cfg, text, est, len(takes), tag, block, measure))
+            elif Q.misread(q) and len(takes) < 1 + max(self.retakes, Q.MISREAD_RETAKES):
+                # 11-15：数字不符、复核念错最多重录 2 次；预算不够就不录（不报错、不换备用声音），照旧标需人工复听
+                tk = self.one(cfg, text, est, len(takes), tag, block, measure, soft=True)
+                if tk is None:
+                    self.log(f"    预算不够，没为数字不符／复核念错重录（预算 ${self.ledger.budget:.2f}，已花 ${self.ledger.spent:.3f}）")
+                    break
+                takes.append(tk)
+            else:
+                break
         info, best = None, None
         if measure:
             info = {"为音高再录": 0}
@@ -1115,6 +1132,15 @@ class _Taker:
                 info["说明"] = (info["说明"] + "；" if info.get("说明") else "") + note
                 self.log("    ⚠ " + note)
         return takes, best if best is not None else self.pick(takes), info
+
+
+def _asr2_note(log):
+    """11-15：对稿的两个新开关各开没开写进日志；第二个听写模型开着就先起进程（模型在后台载入，配音照常往下走）。"""
+    on_n, why_n = Q.numbers_switch()
+    on_a, why_a = Q.asr2_switch()
+    if on_n or on_a:
+        log(f"  对稿：数字整数比对{'开' if on_n else '关'}（{why_n}）；第二个听写模型{'开' if on_a else '关'}（{why_a}）")
+    Q.asr2_warm()
 
 
 def timbre_failed(x):
@@ -1475,6 +1501,8 @@ def make_episode(script, cfg, out_dir, title=None, ledger=None, fresh=False, qc=
     (CACHE / "chunks").mkdir(parents=True, exist_ok=True)
     gate = gate or Q.gate_settings()
     taker = _Taker(ledger, fresh, qc, retakes, log, gate)
+    if qc:
+        _asr2_note(log)
     qc_rows, finals = [], []
     if cfg.engine == "mimo" and cfg.model == E.MIMO_DESIGN and len(chunks) > 1:
         log("  注意：声音设计模型每块都会重新设计一次音色，块与块之间可能对不上；要稳就改用 --clone-ref")
@@ -1553,6 +1581,7 @@ def make_episode(script, cfg, out_dir, title=None, ledger=None, fresh=False, qc=
                         **({"专名读音（请你耳听）": best["qc"]["专名读音"]} if best["qc"].get("专名读音") else {}),
                         **({"数字单位（请你耳听）": best["qc"]["数字单位"]} if best["qc"].get("数字单位") else {}),
                         **({"英文名漏念（请你耳听）": best["qc"]["英文名漏念"]} if best["qc"].get("英文名漏念") else {}),
+                        **Q.listen_fields(best["qc"]),
                         "去掉首尾静音秒数": round(trimmed, 2), "响度": ln,
                         **({"风格": ccfg.style} if (style_map or host) else {}),
                         **({"语气": styles[ch["chapter"]][1]} if host else {}),
@@ -1634,6 +1663,8 @@ def make_episode_whole(script, cfg, out_dir, title=None, ledger=None, fresh=Fals
     run.mkdir(parents=True, exist_ok=True)
     (CACHE / "chunks").mkdir(parents=True, exist_ok=True)
     taker = _Taker(ledger, fresh, qc, retakes, log, gate)
+    if qc:
+        _asr2_note(log)
     # 分组：按章累加，估计超过 max_seconds 就另起一次请求（通常整篇一次）
     texts = ["\n".join(c["paras"]) for c in chapters]
     groups, cur, acc = [], [], 0.0
@@ -1720,10 +1751,14 @@ def make_episode_whole(script, cfg, out_dir, title=None, ledger=None, fresh=Fals
                            "选用第几条": best["take"], "共录几条": len(takes),
                            "切点": cuts, **{k: v for k, v in _gate_fields(best, info, ref).items() if k != "音高"},
                            "各条": [_take_row({k: v for k, v in x.items() if not k.startswith("_")}) for x in takes]})
+        piece_res = [Q.check(spoken(texts[ci]), hyps[str(piece_wavs[k])]) if qc else {
+            "需重录": False, "字错率": None, "原因": [], "最长多出": 0, "最长少掉": 0} for k, ci in enumerate(g)]
+        if qc:       # 11-15：切开后每章的数字不符、可疑处也交给第二个听写模型复核（只记、不重录，和这里别的检查一样）
+            Q.confirm([(piece_res[k], spoken(texts[ci]), piece_wavs[k],
+                        run / "whisper_pieces" / f"{piece_wavs[k].stem}_whisper.json") for k, ci in enumerate(g)], log=log)
         for k, ci in enumerate(g):
             ch_text = texts[ci]
-            res = Q.check(spoken(ch_text), hyps[str(piece_wavs[k])]) if qc else {
-                "需重录": False, "字错率": None, "原因": [], "最长多出": 0, "最长少掉": 0}
+            res = piece_res[k]
             if qc and res["需重录"]:
                 log(f"    ⚠ 第{ci + 1}章切开后对稿：{'；'.join(res['原因'])}")
             norm, trimmed, ln = _post(piece_wavs[k], run / f"chapter{ci + 1:02d}")
@@ -1737,6 +1772,7 @@ def make_episode_whole(script, cfg, out_dir, title=None, ledger=None, fresh=Fals
                             **({"专名读音（请你耳听）": res["专名读音"]} if res.get("专名读音") else {}),
                             **({"数字单位（请你耳听）": res["数字单位"]} if res.get("数字单位") else {}),
                             **({"英文名漏念（请你耳听）": res["英文名漏念"]} if res.get("英文名漏念") else {}),
+                            **Q.listen_fields(res),
                             "去掉首尾静音秒数": round(trimmed, 2), "响度": ln,
                             **({"音高": per[k]} if ref and ref.get("音高Hz") else {}),
                             **({"音色": best["_tv"][k]} if best.get("_tv") else {}),
