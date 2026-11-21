@@ -76,7 +76,7 @@
 | 选题、写稿、审读、改稿、视频导演、审片 | Claude Opus 5.5（`claude -p --model opus`）；写稿（第 4–9 步）思考强度用 xhigh（11-10 起；11-14 看了三天定保留；仓库变量 `FD_WRITE_EFFORT` 可改，写 `default` 回到默认档）；视频导演、审片、读者反馈初看用默认档（11-10 本机对比：导演设 xhigh 在现行时限下第一轮超时退回，`FD_DIRECTOR_EFFORT` 可改） | 用户的 Claude 订阅 | 这一期停在选题前、发邮件；仓库变量 `FD_MIMO_BACKUP` 写 `on` 时，登录失效或额度用完由 MiMo 备用写稿、审片（那天只出播客和网页，不出视频；见第四节"MiMo 备用"） |
 | 事件卡 | MiMo `mimo-v2.6-pro` | 用户的 MiMo 包月套餐（和期刊监控共用） | 再跑一次；改用 Claude 订阅做事件卡（待做） |
 | 配图 | Codex | 用户的 ChatGPT 订阅（云端单独一份登录） | 网页原图、原文截图、程序封面 |
-| 配音 | Gemini 3.8 Flash TTS，走 Vertex；Shirley 用声音"庚A"，Dylan 用"男声03" | Google 主账号订阅的每月赠金（Google Cloud 项目 frontier-daily） | MiMo 复刻的备用声音 → 只出不带播客的"数据版" |
+| 配音 | Gemini 3.8 Flash TTS，走 Vertex；Shirley 用声音"庚A"，Dylan 用"男声03"；云端身份要的 `GCP_WIF_PROVIDER`、`GCP_SERVICE_ACCOUNT` 值在 Secrets（11-21 起），旧的同名仓库变量留到确认日志打码后再删 | Google 主账号订阅的每月赠金（Google Cloud 项目 frontier-daily） | MiMo 复刻的备用声音 → 只出不带播客的"数据版" |
 | 转写对稿、视频对齐 | faster-whisper large-v3-turbo（云端）；mlx-whisper（mini） | 免费，在机器上跑 | — |
 | 对稿复核（11-15 加） | SenseVoiceSmall、Paraformer-zh（阿里开源听写模型，funasr；环境 `~/.venvs/fd-asr2`，模型 `~/.cache/fd-asr2`） | 免费，在机器上跑 | 没装好就不复核，对稿照旧 |
 | 归并 | LaBSE | 免费 | — |
