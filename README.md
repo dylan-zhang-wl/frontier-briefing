@@ -73,7 +73,7 @@
 
 | 用在哪 | 用什么 | 记在谁账上 | 不行时 |
 |---|---|---|---|
-| 选题、写稿、审读、改稿、视频导演、审片 | Claude Opus 5.5（`claude -p --model opus`）；写稿（第 4–9 步）思考强度用 xhigh（11-10 起；11-14 看了三天定保留；仓库变量 `FD_WRITE_EFFORT` 可改，写 `default` 回到默认档）；视频导演、审片、读者反馈初看用默认档（11-10 本机对比：导演设 xhigh 在现行时限下第一轮超时退回，`FD_DIRECTOR_EFFORT` 可改） | 用户的 Claude 订阅 | 这一期停在选题前、发邮件 |
+| 选题、写稿、审读、改稿、视频导演、审片 | Claude Opus 5.5（`claude -p --model opus`）；写稿（第 4–9 步）思考强度用 xhigh（11-10 起；11-14 看了三天定保留；仓库变量 `FD_WRITE_EFFORT` 可改，写 `default` 回到默认档）；视频导演、审片、读者反馈初看用默认档（11-10 本机对比：导演设 xhigh 在现行时限下第一轮超时退回，`FD_DIRECTOR_EFFORT` 可改） | 用户的 Claude 订阅 | 这一期停在选题前、发邮件；仓库变量 `FD_MIMO_BACKUP` 写 `on` 时，登录失效或额度用完由 MiMo 备用写稿、审片（那天只出播客和网页，不出视频；见第四节"MiMo 备用"） |
 | 事件卡 | MiMo `mimo-v2.6-pro` | 用户的 MiMo 包月套餐（和期刊监控共用） | 再跑一次；改用 Claude 订阅做事件卡（待做） |
 | 配图 | Codex | 用户的 ChatGPT 订阅（云端单独一份登录） | 网页原图、原文截图、程序封面 |
 | 配音 | Gemini 3.8 Flash TTS，走 Vertex；Shirley 用声音"庚A"，Dylan 用"男声03" | Google 主账号订阅的每月赠金（Google Cloud 项目 frontier-daily） | MiMo 复刻的备用声音 → 只出不带播客的"数据版" |
@@ -107,13 +107,21 @@
 | `upload_media` | 另传一份带音频、视频的整期目录（私有仓库发行版里的 `media-<日期>.tar.gz`） |
 | `test_mode` | 开：不发布、邮件只打印、配图和导演新要的图各最多画 1 张、和别的运行不排队；正式运行要关 |
 | `gemini` | `off` 不用 Gemini，用 MiMo 备用声音、预算 0；`trial` 只试配一句验证身份；`default` 正式，每期 $0.6、每月 $8 |
-| `extra` | 只剩 `none`（试画一张挪到私有仓库的"配图"，mode 选 trial；测试邮件挪到私有仓库的"放行发布"，勾 test_mail） |
+| `extra` | `none`（试画一张挪到私有仓库的"配图"，mode 选 trial；测试邮件挪到私有仓库的"放行发布"，勾 test_mail）；`mimo_backup_test`（11-17 加，只在 `test_mode` 开着时能选）：两次 `claude -p` 用故意填错的令牌，真走一遍"Claude 不能用 → MiMo 备用写稿、审片"，不看 `FD_MIMO_BACKUP`；接着跑一期出过的（`from_run`）时先把那一期 Claude 的稿子、审读、审片、放行结论挪进期目录的 `_claude原稿/` |
 
 **定时**：每天 4 个触发时刻（UTC）：主力是 Cloudflare 上的保底触发器（`cloud/trigger/`）04:17，它再在 04:43、06:47（晚补）各叫一次；GitHub 自己的定时（04:17、05:11）11-10 实测从没准点触发过（`gh run list --event schedule` 是空的），2026-11 拆仓库时先不写进公开仓库的流程文件（切换前公开仓库就建好了，定时要是来了会和旧仓库同时出刊），切换稳定以后要加回再说。保底触发器按正式的输入叫，一律按正式走：Gemini 主声音、Codex 画图、视频导演和审片都开（导演不新画图）、邮件真发、跨天状态提交回私有仓库的 main，发布看私有仓库的 `SITE_DEPLOY_ENABLED`。
 - **同一天只出一期**：流程第一段 `claim` 往仓库推标签 `issue/<日期>` 认领这一天，推上去的那次才出刊，其余一分钟左右跳过（显示 skipped，不算失败、不发邮件）。测试运行和接着跑不认领。
 - **出错再试**：第 4 步以前出错（还没用 Claude、没花钱）自动删掉标签，下一个时刻再试；第 4 步以后出错标签留着、发邮件，由人处理（邮件里写接着跑和删标签重跑的命令）。
 - **周六**（11-14 起）：正式运行自动只跑第 1–3 步，状态照样提交回 main，出错才发邮件。
 - 同一时间只跑一个正式运行或手动放行，不会两期抢着配音。详见 `cloud/云端全流程_2026-11-08.md` 第一节。
+
+**MiMo 备用**（11-17 加；用户定：备用那天只出播客和网页，不出视频；Claude 审片跑不了时由 MiMo 审片）：
+- **怎么认**：第 4–9 步、审片那两次 `claude -p` 没成时，`cloud/claude_down.py` 看它的输出认是不是"Claude 不能用"——登录失效或额度用完（分"原话""宽认"两档，见程序开头）。别的错（服务忙、轮数用完、超时）照旧报错。日志里只印类别。
+- **总开关**：公开仓库的仓库变量 `FD_MIMO_BACKUP` 写 `on` 才切；没设或别的值，只认、只印一句，不写记号、不切，那一步照旧失败，和加这一段以前一样。**11-17 查过，还没设**；设它要你同意（命令见 `cloud/密钥与重置手册.md`）。
+- **切了以后**：写稿交给"第 4–9 步备用：MiMo"（`cloud/backup_writer.py --no-video`，从 fd 停下的那一步接着写；Claude 已写好的稿子、审读意见照用），第 10–17 步带 `FD_VIDEO=off`（不出视频）；审片交给"审片备用：MiMo"（`cloud/backup_review.py`，另一个分支在做）。这两步只拿 MiMo 的钥匙。备用写稿过了 job 开始后 200 分钟不再新开 MiMo 调用；来不及就停下，发"没出刊"邮件。
+- **MiMo 审片**（11-17 晚改）：三次调用按 A（请你耳听分拣）→ C（第 11 项人名、头衔，事实检查）→ B（清单其余几项）的顺序；这一步最多 60 分钟，开始 40 分钟后（也不晚于 job 开始后 330 分钟）不再新开调用。有调用没成、或回答里缺了某几项可用结果的（不看图、视频：关这类设计上就查不了的不算），`审片结论.json` 记一栏 `MiMo没查成`，邮件标题和正文写哪几项没查，放行判定第 9 条不自动放行（开关 `cloud/release/gate.py` 的 `MIMO_REVIEW_INCOMPLETE_BLOCKS`，默认开；改成 False 就只说不挡）。MiMo 备用写稿那天审片第 1 项不再要 `自检.md`（备用写稿不写它）。
+- **记号**：期目录根上的 `Claude不能用.json`（原因、哪一步、预计几点恢复、连续第几天、自动放行没有）和 `备用写稿.json`（谁写了哪份、MiMo 调了几次、用了多少、要人看的），跟着文件包走，正式运行提交回私有仓库。仓库变量 `FD_MIMO_AUTORELEASE` 写 `true` 时记号里"自动放行"是 true（放行判定、邮件怎么用它，看 `cloud/release/`）。**用户 11-17 定"改成等我看过"：这个变量不设**——MiMo 写稿的那天不自动发布，发邮件，等你看过再手动放行；Claude 写稿、只是审片换成 MiMo 的那天，放行判定按审完、过了照常自动放行，没审完就挡（MiMo 审片现在只审"视频：关"那天，Claude 写稿那天视频开着，它不审，实际上照旧不自动放行）。要设成 `true` 得你再同意。
+- 测试：输入 `extra` 选 `mimo_backup_test`（见上表）。
 
 **发布开关**：私有仓库的仓库变量 `SITE_DEPLOY_ENABLED` 为 `true`、而且不是测试运行，才真的发布；否则只打包、跑 `wrangler deploy --dry-run` 检查。打开、关上的命令见私有仓库的 `cloud/密钥与重置手册.md`"仓库变量"一节。11-09 19:23 UTC 起开着。
 
@@ -136,7 +144,7 @@
 **存在哪**：
 - 发布了的期：网页文件存进本仓库的 `site-archive` 分支（`cloud/deploy/archive.py`），网站每次发布都带上全部往期。
 - 跨天状态（往期事件库、月度账本、每期的选题、事件卡、网页稿、播客稿）：正式运行时提交回私有仓库的 `测试版/`（流程文件"提交跨天状态"那一步）；测试运行只作为文件包 `state-<日期>.tar.gz` 保留。
-- 每期的文字记录（11-10 加）：`测试版/<日期>/` 根上的 `审片.md`、`审片结论.json`、`放行结论.json`、`00_调度报告.md`、`自检.md`、`审读意见.md`、`审读处理.md`、`花费.json`，在同一步一起提交回仓库，一期合计约 65 KB；文件不在就跳过，测试运行不提交。周六维护时直接在仓库里看这一周每期 `审片.md` 的"请你耳听"，不用再赶在产物和成品库 7 天过期以前。
+- 每期的文字记录（11-10 加）：`测试版/<日期>/` 根上的 `审片.md`、`审片结论.json`、`放行结论.json`、`00_调度报告.md`、`自检.md`、`审读意见.md`、`审读处理.md`、`花费.json`（11-17 起还有 MiMo 备用那天的 `备用写稿.json`、`Claude不能用.json`，第二天算"连续第几天"要读），在同一步一起提交回仓库，一期合计约 65 KB；文件不在就跳过，测试运行不提交。周六维护时直接在仓库里看这一周每期 `审片.md` 的"请你耳听"，不用再赶在产物和成品库 7 天过期以前。
 - 每次运行的整期文件包（2026-11 起不再上传成产物，公开仓库的产物谁都能下载）：私有仓库的发行版 `run-<运行编号>`（草稿，只有你看得到）里的 `issue-<日期>.tar.gz`（网页、日志、文稿、审片、报告、花费）、`media-<日期>.tar.gz`（带音频、视频，没放行或测试时才有）、`state-<日期>.tar.gz`（事件库、账本），留 14 天，"放行发布"流程清理。
 
 ## 五、本机怎么跑
@@ -162,7 +170,8 @@
 - `摘录卡压在章图上`（11-15 加，用户看了新旧并排图定开）：原文截图没截成、退回白色原句摘录时，摘录卡后面立这一章的配图（这张卡原来写的图，没有就用这一章第一张），做成四周留白的圆角图板，章首不再只剩一张白卡。关掉就和加开关以前逐像素一样。
 - `对稿数字整数比对`（11-15 加）：配音对稿时原稿里的数按整个数和转写比（"一千零九页"念成"109 页"逐字比只差一个 0，原来拦不住），对不上就重录那一块，最多 2 次；还错写进 qc.json"数字不符（请你耳听）"。
 - `对稿第二个听写模型`（11-15 加）：Whisper 和原稿不带声调的拼音对不上的地方（英文名除外），截几秒交给 SenseVoiceSmall、Paraformer-zh 再听，至少一个也听错才算念错、重录（最多 2 次）；两个都听成原稿就是 Whisper 听错，不重录。11-16 补：挨着英文名的中文差异也拆出来复核；"小艺"写成"小一"这类同音不再误判；专名读音清单、读音表"人名"里用汉字写的名字（黄仁勋）只差声调的也复核，按带声调比。没装这两个模型时不复核。这两个开关没写按"关"，关掉就和加以前一样。规则见 `pipeline/tts_qc.py` 文件头。
-- 只管一次的话，在命令前加环境变量，比文件优先：`FD_MOTION=off ./fd run …`、`FD_DIRECTOR=off ./fd run …`、`FD_DIRECTOR_NARRATION=off ./fd run …`、`FD_VIDEO_ZH_WRAP=off ./fd run …`、`FD_EXCERPT_PHOTO=off ./fd run …`、`FD_QC_NUMBERS=off ./fd run …`、`FD_QC_ASR2=off ./fd run …`。
+- `视频`（11-17 加，默认开）：关掉就是这一期不出视频，管第 6–17 步——第 6 步只要播客和网页两份稿子，第 7 步（和第 9 步改后复查）不跑分镜检查、摘要写"视频：关，分镜不查"；第 10 步不要视频图，第 11 步不配视频旁白，第 14 步跳过，第 15 步把旧视频挪开、网页不带视频，第 14、15 步的说明写"视频：关"，报告、自检不把视频算"少了"。放行判定只在 MiMo 备用那天放过视频那几条：fd 记着第 14 或 15 步视频开关是"关"、期目录根上又有 `备用写稿.json` 而且它的"视频"写"关"，两个记号都在才算；只在这里关掉（没有 `备用写稿.json`）的一期，放行判定照旧当视频没出、不自动放行。MiMo 备用那天流程自动带 `FD_VIDEO=off`；平常正式出刊不要手动关。
+- 只管一次的话，在命令前加环境变量，比文件优先：`FD_MOTION=off ./fd run …`、`FD_DIRECTOR=off ./fd run …`、`FD_DIRECTOR_NARRATION=off ./fd run …`、`FD_VIDEO_ZH_WRAP=off ./fd run …`、`FD_EXCERPT_PHOTO=off ./fd run …`、`FD_QC_NUMBERS=off ./fd run …`、`FD_QC_ASR2=off ./fd run …`、`FD_VIDEO=off ./fd run …`。
 - 网页"听这一段"怎么定跳点，有三处只用环境变量管（默认开，写 `off` 退回原来的做法）：`FD_LISTEN_SENTENCE`（周日对谈从一轮半中间那句跳）、`FD_LISTEN_HEADLINE`（热点按内容找讲它的那一章）、`FD_LISTEN_SCORE`（11-16 加：往前找这一条开讲的那一段，打分时数字统一写法、英文一个词算一个）；第 16 步转写核对查不查跳晚是 `FD_LISTEN_LATE`。
 
 **测试**（不花钱）：
@@ -175,7 +184,7 @@ $PY site/tools/test_video3_director.py                          # site/tools/ �
 python3 -m unittest discover -s cloud/release/tests -v          # 放行、邮件
 python3 -m unittest discover -s cloud/deploy/tests -v           # 上线包、往期存档
 python3 -m unittest discover -s cloud/trigger/tests -v          # 认领（同一天只出一期）
-python3 -m unittest discover -s cloud/tests -v                  # 本机取回成品（cloud/取回成品.py）、Codex 登录失效、额度用完判定（cloud/codex_login_check.py）
+python3 -m unittest discover -s cloud/tests -v                  # 本机取回成品（cloud/取回成品.py）、Codex 登录失效、额度用完判定（cloud/codex_login_check.py）、Claude 不能用判定（cloud/claude_down.py）、MiMo 备用写稿（cloud/backup_writer.py）、MiMo 备用审片（cloud/backup_review.py）；后两样要用项目环境的 Python
 cd cloud/deploy && node --test tests/worker.test.js             # 网站 Worker
 cd cloud/trigger && node --test tests/worker.test.js            # 保底触发器 Worker
 ```
@@ -219,6 +228,7 @@ cd cloud/trigger && node --test tests/worker.test.js            # 保底触发�
 | 成品有什么毛病 | `审片.md`（给人看）、`审片结论.json`（程序读） |
 | 为什么没发布 | `放行结论.json`：每条过没过、证据在哪个文件 |
 | 云端这次运行 | 公开仓库 Actions 运行页面的摘要（只有状态）；内容在私有仓库发行版 `run-<运行编号>` 的整期文件包里，fd 第 10–17 步的详细输出在期目录 `logs/云端_fd第10到17步.log` |
+| Claude 不能用那天（MiMo 备用） | 期目录根上的 `Claude不能用.json`、`备用写稿.json`；MiMo 每次调用的提示和回答在 `logs/备用写稿/`，fd 的输出在 `logs/备用写稿_fd输出.log` |
 | 钥匙丢了、过期了 | `cloud/密钥与重置手册.md`（Cloudflare 令牌 2027-11-08 到期；Claude 令牌约一年，原文待核；Codex 登录失效时邮件会提醒；额度用完不用动钥匙，邮件会单独说） |
 | 网站回退、暂停、下线 | `cloud/deploy/README.md` 最后一节 |
 | 以前踩过的坑 | `文档/经验/问题与解决办法.md` 第三部分 |

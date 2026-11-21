@@ -43,8 +43,9 @@ def _hide(text):
     return text.replace(key, "<已隐藏>") if key else text
 
 
-def chat(model, system, user, max_tokens=8000, temperature=0.3, timeout=600, retries=3):
-    """返回 {"content", "usage", "seconds", "model"}；失败抛 RuntimeError（信息里不含密钥）。"""
+def chat(model, system, user, max_tokens=8000, temperature=0.3, timeout=600, retries=3, extra=None):
+    """返回 {"content", "usage", "seconds", "model"}；失败抛 RuntimeError（信息里不含密钥）。
+    extra：额外的请求字段，原样并进请求，如 {"thinking": {"type": "disabled"}}（MiMo 文档：关深度思考）。"""
     if not str(model).startswith("mimo-v2.6"):
         raise ValueError(f"不允许使用旧模型 {model}，请用 {FLASH} 或 {PRO}")
     key, base = os.environ.get("MIMO_API_KEY", ""), os.environ.get("MIMO_BASE_URL", "")
@@ -53,6 +54,7 @@ def chat(model, system, user, max_tokens=8000, temperature=0.3, timeout=600, ret
     payload = {"model": model, "temperature": temperature, "max_tokens": max_tokens,
                "messages": [{"role": "system", "content": system},
                             {"role": "user", "content": user}]}
+    payload.update(extra or {})
     req_body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     url = base.rstrip("/") + "/chat/completions"
     last = ""

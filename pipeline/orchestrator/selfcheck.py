@@ -33,8 +33,18 @@ def _cut(s, n=160):
     return s if len(s) <= n else s[:n - 1] + "…"
 
 
-def images_summary(issue, want_web=None, want_vid=None):
-    """配图：网页图几张（谁画的）、视频图几张（按 来源.json 分来源）。want_* 是第 10 步要的图（没给就只数有的）。"""
+VIDEO_OFF_LINE = "视频：关，这一期不出视频（第 14 步跳过，第 15 步网页不带视频）"
+
+
+def video_off(steps):
+    """这一期是不是按"视频"开关不出视频（2026-11-17 加）：看 fd 记录里第 14、15 步的 附加.视频开关 是不是"关"。
+    读记录、不读开关本身：fd status、放行判定跑的时候不一定带着 FD_VIDEO。steps：fd_state 的"步骤"。"""
+    return any(((((steps or {}).get(k) or {}).get("附加")) or {}).get("视频开关") == "关" for k in ("video", "web2"))
+
+
+def images_summary(issue, want_web=None, want_vid=None, video_off=False):
+    """配图：网页图几张（谁画的）、视频图几张（按 来源.json 分来源）。want_* 是第 10 步要的图（没给就只数有的）。
+    video_off（2026-11-17 加）：这一期视频开关关着，视频图那一行只写"不要"。"""
     issue = Path(issue)
     web_dir, vid_dir = issue / "06_配图", issue / "06_配图" / "视频"
     web = {f.stem.lower() for f in web_dir.glob("*") if f.suffix.lower() in IMG_EXT} if web_dir.is_dir() else set()
@@ -61,7 +71,9 @@ def images_summary(issue, want_web=None, want_vid=None):
             src = "来源.json 里没记"
         kinds[src] = kinds.get(src, 0) + 1
     by = "、".join("%s %d 张" % (k, n) for k, n in kinds.items())
-    if want_vid is not None:
+    if video_off:
+        lines.append("视频图：视频：关，这一期不要视频图")
+    elif want_vid is not None:
         miss = [v for v in want_vid if v not in vid]
         lines.append("视频图：分镜要新画 %d 张，06_配图/视频/ 里共 %d 张%s%s" % (
             len(want_vid), len(vid), "（%s）" % by if by else "", "；缺 %s，那几块不带图" % "、".join(miss) if miss else ""))
@@ -92,7 +104,9 @@ def build(issue, steps, costs, month, image_lines, now):
             voice += "（导演旁白重配 %s 次，%s $%.4f）" % (p.get("次数"), p.get("引擎"), float(p.get("美元") or 0))
     L.append("- " + voice)
     L += ["- " + x for x in image_lines]
-    if not st("video"):
+    if video_off(steps):                       # 视频开关关着（2026-11-17 加）
+        L.append("- " + VIDEO_OFF_LINE)
+    elif not st("video"):
         L.append("- 视频：第 14 步没跑")
     elif dr.get("结果") == "用导演版":
         L.append("- 视频：导演版（导演环节 %s 分钟，新画 %d 张：%s）" % (

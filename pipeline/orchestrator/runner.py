@@ -10,7 +10,7 @@ from pathlib import Path
 from . import report
 from .common import (DONE, FAILED, SKIPPED, WAITING, TODO, RUNNING, ROOT, PY, TESTDIR, DEFAULT_DB, DEFAULT_LEDGER, EDITIONS,
                      TOOLS, State, Lock, Busy, Proc, child_env, pick_edition, frozen_editions, stamp, iso, rel, fp_file,
-                     write_json, motion_switch)
+                     write_json, motion_switch, video_switch)
 from .ledger import Ledger
 from .steps import STEPS, BY_KEY, R, find_step
 
@@ -171,6 +171,10 @@ def header(c):
     print("  " + "；".join(mode))
     on, why = motion_switch()
     print("  新动效和原文截图：%s（%s）" % ("开" if on else "关，视频按 11-06 以前的画法出、不截图", why))
+    von, vwhy = video_switch()
+    if not von:                   # 视频开关（2026-11-17 加）：只在关着时多印这一行，开着时屏幕输出和原来一样
+        print("  视频：关（%s）：这一期不出视频——第 6–9 步不要求、不查视频分镜；第 10 步不要视频图，第 11 步不配视频旁白，"
+              "第 14 步跳过，第 15 步网页不带视频（有旧的视频就挪开）" % vwhy)
     print()
 
 

@@ -39,7 +39,19 @@
 #   不写进 .git/config）。第 4–9 步、审片的 claude -p 环境里没有 Gemini 令牌和 STATE_REPO_TOKEN；第 14 步视频导演的 claude -p
 #   由 video3_director.run_claude 去掉 MiMo、Gemini、STATE_REPO_TOKEN（它只有读写文件的工具，没有命令行）。
 #   这个仓库里没有 Cloudflare、邮件、Codex 的钥匙。
+#   MiMo 备用（2026-11-17 加，见下一段）那两步只拿 MiMo 的两把钥匙（MIMO_API_KEY、MIMO_BASE_URL），没有 Claude、Gemini、STATE_REPO_TOKEN。
 # Gemini 三档（输入 gemini）：off 测试默认，不用；trial 只试配一句；default 正式，程序默认每期 $0.6、月上限 $8。
+# MiMo 备用（2026-11-17 加；用户定：备用那天只出播客和网页，不出视频；Claude 审片跑不了时由 MiMo 审片）：
+#   第 4–9 步、审片那两次 claude -p 退出码不是 0 时，跑 cloud/claude_down.py 认一下是不是"Claude 不能用"（登录失效、额度用完）。
+#   仓库变量 FD_MIMO_BACKUP 写 on 才切：认出来就把那一步交给 MiMo——写稿交给"第 4–9 步备用：MiMo"（cloud/backup_writer.py --no-video），
+#   第 10–17 步带 FD_VIDEO=off；审片交给"审片备用：MiMo"（cloud/backup_review.py）。记号 Claude不能用.json 写在期目录根上。
+#   FD_MIMO_BACKUP 没设（或不是 on）：只认、只在日志里印一句类别，不写记号、不切，那一步照旧以 claude 的退出码失败（和加这一段以前一样）。
+#   仓库变量 FD_MIMO_AUTORELEASE 写 true 时，记号里"自动放行"是 true（放行判定、邮件怎么用它见 cloud/release/）。
+#   用户 11-17 定"改成等我看过"：这个变量不设——MiMo 写稿那天不自动发布、发邮件，等用户看过再手动放行；
+#   Claude 写稿、只是审片换成 MiMo 的那天，放行判定按审完、过了照常自动放行，没审完就挡（MiMo 审片现在只审"视频：关"那天，
+#   视频开着的那天它不审，实际上照旧不自动放行）。设成 true 要用户再同意。
+#   测试：extra=mimo_backup_test（只在 test_mode 时能选）——两次 claude -p 都拿一个故意填错的令牌，真走一遍"认出 → 切备用"，不看 FD_MIMO_BACKUP；
+#   接着跑（from_run）时先把那一期 Claude 的稿子、审读、审片、放行结论挪进期目录的 _claude原稿/。
 
 name: frontier-daily
 
@@ -103,13 +115,15 @@ on:
           - "default"
       extra:
         # 2026-11 拆仓库以后这里没有附加试验了：试画一张在私有仓库的"配图"（images.yml，mode=trial），测试邮件在私有仓库的"放行发布"。
-        # 输入留着（只有 none），保底触发器和出错邮件里的命令都带 extra=none，不用跟着改
-        description: "附加试验：只剩 none（试画一张、测试邮件挪到私有仓库的“配图”“放行发布”）"
+        # 输入留着，保底触发器和出错邮件里的命令都带 extra=none，不用跟着改。
+        # 11-17 加 mimo_backup_test：只在 test_mode=true 时能选（正式运行选了就报错），见文件开头"MiMo 备用"一段
+        description: "附加试验：none；mimo_backup_test＝只在测试时：两次 claude -p 用故意填错的令牌，真走一遍 Claude 不能用 → MiMo 备用写稿、审片（不出视频）"
         required: true
         default: "none"
         type: choice
         options:
           - "none"
+          - "mimo_backup_test"
 
 permissions:
   contents: write     # 只为认领：往这个仓库推、删标签 issue/<日期>（cloud/trigger/claim.py）。凭证只在 claim、unclaim 那两步临时给
@@ -182,7 +196,9 @@ jobs:
     needs: claim
     if: needs.claim.outputs.run_issue == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 360        # GitHub 自带机器的上限（6 小时）：写稿最多 150、制作最多 200（第 14 步含视频导演，最坏约 1 小时）、审片最多 60
+    timeout-minutes: 360        # GitHub 自带机器的上限（6 小时）：写稿最多 150、制作最多 200（第 14 步含视频导演，最坏约 1 小时）、审片最多 60；
+                                # MiMo 备用那天（不出视频）：备用写稿过了 job 开始后 200 分钟不再新开 MiMo 调用，MiMo 审片最多 60
+                                # （那一步开始 40 分钟后、job 开始 330 分钟后都不再新开 MiMo 调用；11-17 晚从 45／28 放宽）
     # 正式运行（含接着跑）同一组 frontier-daily：一次只跑一个，免得两期同时配音。（排队组只在本仓库里算；发布在私有仓库的
     # "放行发布"里，它在私有仓库自己排同名的组。）job 一级和流程一级的组名在整个仓库里是同一套（GitHub 文档："a single job or workflow using the same concurrency group"）。
     # queue: max：排队的依次等着（最多 100 个），不会像默认那样被后来的挤掉（被挤掉的那一期标签已认领却没跑，当天就没了）。
@@ -261,7 +277,12 @@ jobs:
 
       - name: 定日期、查参数
         id: day
+        env:
+          # MiMo 备用总开关（仓库变量，2026-11-17 加）：写 on 才在正式运行里切备用；没设或别的值，和加这一段以前一样
+          MIMO_BACKUP_VAR: ${{ vars.FD_MIMO_BACKUP }}
         run: |
+          # job 开始的时刻（秒）：MiMo 备用写稿按它算"什么时候以后不再新开调用"（文件开头"MiMo 备用"一段）
+          echo "JOB_T0=$(date -u +%s)" >> "$GITHUB_ENV"
           DAY="${IN_DATE:-$(date -u +%F)}"
           # 定时触发没有输入：跑到第几步按正式的 17
           IN_UNTIL="${IN_UNTIL:-17}"
@@ -311,10 +332,18 @@ jobs:
           REVIEW=true; [ "$IN_REVIEW" = "false" ] && REVIEW=false
           MEDIA=false; [ "$IN_MEDIA" = "true" ] && MEDIA=true
           RESUME=false; [ -n "$IN_FROM_RUN" ] && RESUME=true
+          # MiMo 备用（11-17 加）：mimo_backup_test 只在测试时能选；测试时不看仓库变量，一定切
+          MIMO_TEST=false
+          if [ "${IN_EXTRA:-none}" = "mimo_backup_test" ]; then
+            if [ "$TEST" != "true" ]; then echo "::error::extra=mimo_backup_test 只在测试（test_mode=true）时能选"; exit 1; fi
+            MIMO_TEST=true
+          fi
+          BACKUP=false; { [ "$MIMO_BACKUP_VAR" = "on" ] || [ "$MIMO_TEST" = "true" ]; } && BACKUP=true
           {
             echo "gemini=$GEMINI"; echo "review=$REVIEW"; echo "test=$TEST"; echo "media=$MEDIA"; echo "resume=$RESUME"
-            echo "extra=${IN_EXTRA:-none}"; echo "saturday=$SATURDAY"
+            echo "extra=${IN_EXTRA:-none}"; echo "saturday=$SATURDAY"; echo "mimo_test=$MIMO_TEST"; echo "backup=$BACKUP"
           } >> "$GITHUB_OUTPUT"
+          echo "MiMo 备用：Claude 不能用时切不切 $BACKUP（仓库变量 FD_MIMO_BACKUP：${MIMO_BACKUP_VAR:-没设}；强制测试：$MIMO_TEST）"
           echo "触发：$GITHUB_EVENT_NAME；测试：$TEST；周六只抓取：$SATURDAY；认领：${IN_CLAIM_TAG:-不认领}；Claude 两个环节（导演、审片）：$REVIEW；带音视频的产物（测试时）：$MEDIA；附加试验：${IN_EXTRA:-none}"
           { echo "DAY=$DAY"; echo "FROM_STEP=$FROM_STEP"; echo "OFFLINE_FLAG=$OFFLINE_FLAG"; echo "VOICE_FLAGS=$VOICE_FLAGS"; } >> "$GITHUB_ENV"
           echo "这一期：$DAY；跑到第 $IN_UNTIL 步；从第 $FROM_STEP 步起（接着跑：${IN_FROM_RUN:-否}）；Gemini：$GEMINI（配音参数 $VOICE_FLAGS）"
@@ -547,6 +576,25 @@ jobs:
           echo "用的是 $got；fd 现在每一步的状态："
           python cloud/release/steps_brief.py "测试版/$DAY"
 
+      # 测试 MiMo 备用（extra=mimo_backup_test，11-17 加）接着跑一期已经出过的：那一期第 4–9 步全是"做完"、产出都在，
+      # 不挪开的话 fd 会跳过、MiMo 一次都不写；审片、放行结论不挪开，期目录里会躺着 Claude 那份"放行"。
+      # 挪进期目录的 _claude原稿/（照原来的相对路径），跟着文件包走，测完拿来和 MiMo 那份比。选题、事件卡不动（沿用那一期的）。
+      # 上一次备用测试留下的记录也挪开，不然备用写稿会以为"写过了"。只挪文件，不印内容。
+      - name: 测试 MiMo 备用：挪开那一期 Claude 的稿子、审读、审片、放行结论
+        if: steps.day.outputs.mimo_test == 'true' && steps.day.outputs.resume == 'true'
+        run: |
+          D="测试版/$DAY"; K="$D/_claude原稿"
+          n=0
+          shopt -s nullglob
+          for f in "$D"/04_文稿/claude_播客_*.md "$D"/04_文稿/claude_对谈_*.md "$D/04_文稿/claude_网页.json" "$D/04_文稿/视频v3_分镜.json" \
+                   "$D/审读意见.md" "$D"/审读处理*.md "$D/自检.md" "$D/审片.md" "$D/审片结论.json" "$D/放行结论.json" \
+                   "$D/备用写稿.json" "$D/Claude不能用.json" "$D"/logs/备用写稿* "$D"/logs/备用审片*; do
+            [ -e "$f" ] || continue
+            rel="${f#"$D"/}"; mkdir -p "$K/$(dirname "$rel")"; mv "$f" "$K/$rel"; n=$((n + 1))
+          done
+          echo "挪进 _claude原稿/ 的：$n 个（选题、事件卡沿用那一期的）；fd 现在每一步的状态："
+          python cloud/release/steps_brief.py "$D"
+
       - name: 第 1–3 步：抓取、粗筛归并、入库
         if: steps.day.outputs.fetch == 'true'
         run: ./fd run --date "$DAY" --until 3 --budget-usd 0 $OFFLINE_FLAG
@@ -557,14 +605,19 @@ jobs:
         if: steps.day.outputs.write == 'true'
         run: echo "stage4=started" >> "$GITHUB_OUTPUT"
 
+      # 名字开头"第 4–9 步"不能改：cloud/trigger/claim.py 的 STEP4_PREFIX 靠它判断第 4 步开始了没有
       - name: 第 4–9 步：选题到改稿（claude -p）
+        id: write
         if: steps.day.outputs.write == 'true'
         timeout-minutes: 150
         env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # 测试 MiMo 备用（extra=mimo_backup_test）时给一个故意填错的令牌：真走一遍"登录失效 → 认出 → 切备用"，不花 Claude 额度
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.day.outputs.mimo_test == 'true' && 'fd-mimo-backup-test-deliberately-invalid' || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           FD_WRITE_EFFORT: ${{ vars.FD_WRITE_EFFORT }}   # 空＝xhigh
           MIMO_API_KEY: ${{ secrets.MIMO_API_KEY }}
           MIMO_BASE_URL: ${{ secrets.MIMO_BASE_URL }}
+          BACKUP_ON: ${{ steps.day.outputs.backup }}
+          FD_MIMO_AUTORELEASE: ${{ vars.FD_MIMO_AUTORELEASE }}
         run: |
           if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
             echo "::error::仓库 Secrets 里没有 CLAUDE_CODE_OAUTH_TOKEN（用户本人运行 claude setup-token 后填）"; exit 1
@@ -582,6 +635,8 @@ jobs:
           WRITE_EFFORT="${FD_WRITE_EFFORT:-xhigh}"
           EFFORT_ARGS=(); [ "$WRITE_EFFORT" != "default" ] && EFFORT_ARGS=(--effort "$WRITE_EFFORT")
           echo "写稿：claude -p --model opus ${EFFORT_ARGS[*]}"
+          t0=$(date +%s)
+          set +e
           claude -p "$PROMPT" \
             --model opus "${EFFORT_ARGS[@]}" \
             --permission-mode bypassPermissions \
@@ -590,9 +645,85 @@ jobs:
             --output-format stream-json --verbose \
             > "测试版/$DAY/logs/云端_claude主会话.jsonl" \
             2> "测试版/$DAY/logs/云端_claude主会话_stderr.log"
+          rc=$?
+          set -e
           # 不在公开日志里印 Claude 最后的总结（里面有选题、稿子的字）：全过程在 logs/云端_claude主会话.jsonl，跟着文件包进私有仓库
-          echo "写稿那一步结束：$(date -u '+%F %T') UTC；第 4–9 步每一步的状态："
+          echo "写稿那一步结束：$(date -u '+%F %T') UTC，退出码 $rc；第 4–9 步每一步的状态："
           python cloud/release/steps_brief.py "测试版/$DAY" || true
+          # 11-17 加：claude 没成时认一下是不是"Claude 不能用"（cloud/claude_down.py，只印类别）。
+          #   BACKUP_ON 不是 true（仓库变量 FD_MIMO_BACKUP 没写 on，也不是 mimo_backup_test）：--dry 只判断、不写记号，下面照旧 exit $rc（和以前一样）。
+          #   认出来（退出码 10）、开关开着：记号写好，这一步算过，交给下一步"第 4–9 步备用：MiMo"；
+          #   认出来但第 4–9 步的产出都在（退出码 11，Claude 写完以后才倒）、开关开着：照常往下（带视频）；
+          #   没认出（0）或认法程序自己出错（其他）：照旧 exit $rc。
+          if [ "$rc" != "0" ]; then
+            DRY=--dry; [ "$BACKUP_ON" = "true" ] && DRY=""
+            cd_rc=0
+            python cloud/claude_down.py --issue "测试版/$DAY" --step 写稿 --rc "$rc" --since "$t0" $DRY \
+              --stream "测试版/$DAY/logs/云端_claude主会话.jsonl" --stderr "测试版/$DAY/logs/云端_claude主会话_stderr.log" || cd_rc=$?
+            if [ "$BACKUP_ON" = "true" ] && [ "$cd_rc" = "10" ]; then
+              why=$(python -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8'))['原因'])" "测试版/$DAY/Claude不能用.json" || echo 认出了)
+              echo "claude_down=$why" >> "$GITHUB_OUTPUT"
+              echo "### 第 4–9 步：Claude 不能用（$why），交给 MiMo 备用写稿（这一期不出视频）" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            if [ "$BACKUP_ON" = "true" ] && [ "$cd_rc" = "11" ]; then
+              echo "Claude 写完第 4–9 步以后才倒：不切备用，照常往下（带视频）"; exit 0
+            fi
+          fi
+          exit $rc
+
+      # ---- MiMo 备用写稿（11-17 加）：上一步认出 Claude 不能用、开关开着才跑。不出视频（--no-video、FD_VIDEO=off）。
+      #      钥匙只有 MiMo 的两把（不给 Claude、Gemini、STATE_REPO_TOKEN）。时限靠程序自己的 --no-calls-after：job 开始后 200 分钟
+      #      不再新开 MiMo 调用（一次调用最长约 15 分钟），留出配图、第 10–17 步、审片、打包的时间（改动清单 2.3）；
+      #      timeout-minutes 只是兜底。屏幕上只印步骤、状态和用量数字；fd 的输出、MiMo 的提示和回答都在期目录 logs/ 里。
+      #      停下（退出码 2）就和以前一样：这一步失败，后面跳过，发"没出刊"邮件，认领标签留着。
+      #      名字开头也是"第 4–9 步"：claim.py 把它当成第 4 步开始了，结果一样（标签留着）。
+      - name: 第 4–9 步备用：MiMo 写稿（Claude 不能用时；不出视频）
+        id: backup
+        if: steps.day.outputs.write == 'true' && steps.write.outputs.claude_down != ''
+        timeout-minutes: 210
+        env:
+          MIMO_API_KEY: ${{ secrets.MIMO_API_KEY }}
+          MIMO_BASE_URL: ${{ secrets.MIMO_BASE_URL }}
+          FD_VIDEO: "off"
+        run: |
+          unset ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
+          # claude 倒下时它叫起的 fd run 可能还没退（锁还在，备用写稿会拿到"另有一个 fd run 在跑"停下）：最多等 5 分钟
+          for i in $(seq 1 30); do
+            pgrep -f "/fd run " >/dev/null || break
+            [ "$i" = 1 ] && echo "还有 fd run 在跑，等它结束（最多 5 分钟）"
+            sleep 10
+          done
+          NO_CALLS_AFTER=$(date -u -d "@$(( JOB_T0 + 200 * 60 ))" +%Y-%m-%dT%H:%M)
+          # 调用次数、token 上限先用程序默认（14 次、150 万 token；改动清单第 7 节第 7 条，等用户定）
+          set +e
+          ~/.venvs/frontier-daily/bin/python -u cloud/backup_writer.py run --date "$DAY" --no-video \
+            --max-calls 14 --max-tokens 1500000 --no-calls-after "$NO_CALLS_AFTER" -- --budget-usd 0 $OFFLINE_FLAG
+          rc=$?
+          set -e
+          echo "备用写稿结束：$(date -u '+%F %T') UTC，退出码 $rc；第 4–9 步每一步的状态："
+          python cloud/release/steps_brief.py "测试版/$DAY" || true
+          if [ "$rc" = "0" ]; then r="走完了"; else r="停下了（退出码 $rc）"; fi
+          echo "### 第 4–9 步备用：MiMo 写稿$r" >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
+
+      # 这一期出不出视频（11-17 加）：第 4–9 步刚交给了 MiMo，或者接着跑的这一期本来就是 MiMo 备用写的（期目录里 备用写稿.json 的"视频"
+      # 以"关"开头，比如从第 10 步接着跑、写稿那一步没跑），就不出视频。后面配图、第 10–17 步、审片、MiMo 审片都看这里的 off：
+      # 平常是空的，那几步和以前一样。
+      - name: 定这一期出不出视频（MiMo 备用写的那一期不出）
+        id: video
+        if: always() && steps.day.outputs.day != ''
+        env:
+          DOWN: ${{ steps.write.outputs.claude_down }}
+        run: |
+          off=""
+          if [ -n "$DOWN" ]; then
+            off=true
+          elif python -c "import json,sys; d=json.load(open(sys.argv[1], encoding='utf-8')); sys.exit(0 if str(d.get('视频') or '').startswith('关') else 1)" "测试版/$DAY/备用写稿.json" 2>/dev/null; then
+            off=true
+          fi
+          echo "off=$off" >> "$GITHUB_OUTPUT"
+          if [ "$off" = "true" ]; then echo "这一期不出视频（MiMo 备用写稿）：配图不打包分镜，第 10–17 步带 FD_VIDEO=off、视频导演关"; fi
 
       # ---- 配图（2026-11 起在私有仓库画）：这边不装 Codex、没有 Codex 登录。
       #      把画图材料（网页稿、视频分镜，和 06_配图/ 里已经有的图，免得重画）打成小包放进私有仓库发行版 run-<运行编号>（草稿），
@@ -608,12 +739,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.STATE_REPO_TOKEN }}
           IS_TEST: ${{ steps.day.outputs.test }}
+          # MiMo 备用那天不出视频（11-17 加）：不打包分镜（私有仓库"有分镜才画视频图"，免得白花 Codex 额度）。平常是空的，和以前一样
+          NO_VIDEO: ${{ steps.video.outputs.off == 'true' && 'true' || '' }}
         run: |
           D="测试版/$DAY"
           if [ ! -f "$D/04_文稿/claude_网页.json" ]; then echo "没有网页稿，不画图（第 10–17 步用程序封面）"; exit 0; fi
           M="$RUNNER_TEMP/img-mat"; mkdir -p "$M"
           parts=(04_文稿/claude_网页.json)
-          for p in 04_文稿/视频v3_分镜.json 06_配图; do [ -e "$D/$p" ] && parts+=("$p"); done
+          for p in 04_文稿/视频v3_分镜.json 06_配图; do
+            [ "$p" = 04_文稿/视频v3_分镜.json ] && [ "$NO_VIDEO" = "true" ] && continue
+            [ -e "$D/$p" ] && parts+=("$p")
+          done
           tar -czf "$M/materials-$DAY.tar.gz" -C "$D" "${parts[@]}"
           REL="run-$GITHUB_RUN_ID"
           retry() { for i in 1 2 3; do "$@" && return 0; echo "没成（第 $i 次），等一会儿再试"; sleep $((i * 10)); done; return 1; }
@@ -695,8 +831,11 @@ jobs:
           FD_REMOTE_IMAGES_MAX: ${{ steps.day.outputs.test == 'true' && '1' || '' }}
           # 视频导演的思考强度：默认不设（用 claude 自己的默认档）。11-10 本机对比 xhigh 在现行时限下超时退回；仓库变量 FD_DIRECTOR_EFFORT 可改
           FD_DIRECTOR_EFFORT: ${{ vars.FD_DIRECTOR_EFFORT }}
-          # 输入 review 关掉时，视频导演也关（只管这一次）；开着时不设，按 fd_开关.json 的"视频导演"（现在是开）
-          FD_DIRECTOR: ${{ steps.day.outputs.review != 'true' && 'off' || '' }}
+          # 输入 review 关掉时，视频导演也关（只管这一次）；开着时不设，按 fd_开关.json 的"视频导演"（现在是开）。
+          # MiMo 备用那天（第 4–9 步交给了 MiMo，11-17 加）也关：不出视频，也不该再叫 Claude
+          FD_DIRECTOR: ${{ (steps.day.outputs.review != 'true' || steps.video.outputs.off == 'true') && 'off' || '' }}
+          # MiMo 备用那天不出视频（11-17 用户定）：FD_VIDEO=off；平常是空的（按 fd_开关.json 的"视频"，现在是开），和以前一样
+          FD_VIDEO: ${{ steps.video.outputs.off == 'true' && 'off' || '' }}
           # 只有正式（gemini=default）才给令牌；off、trial 这里是空的，配音程序也带着 --use-backup --budget-usd 0
           GCP_ACCESS_TOKEN: ${{ steps.day.outputs.gemini == 'default' && steps.gcp.outputs.access_token || '' }}
           FD_FW_TIMING: "1"
@@ -738,9 +877,14 @@ jobs:
         continue-on-error: true
         timeout-minutes: 60
         env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # 测试 MiMo 备用（extra=mimo_backup_test）时和写稿那一步一样给故意填错的令牌
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.day.outputs.mimo_test == 'true' && 'fd-mimo-backup-test-deliberately-invalid' || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           IS_TEST: ${{ steps.day.outputs.test }}
           GEMINI_MODE: ${{ steps.day.outputs.gemini }}
+          BACKUP_ON: ${{ steps.day.outputs.backup }}
+          FD_MIMO_AUTORELEASE: ${{ vars.FD_MIMO_AUTORELEASE }}
+          # 这一期是 MiMo 备用写的（不出视频）才是 true；平常是空的
+          NO_VIDEO: ${{ steps.video.outputs.off == 'true' && 'true' || '' }}
         run: |
           D="测试版/$DAY"
           # 告诉审片这一期是测试还是正式（11-09 改：原来不分情况一律说"云端测试"，正式那次会让审片按测试的标准放过缺图、换声音）
@@ -754,12 +898,16 @@ jobs:
           else
             IMG_NOTE="这一期是云端正式运行：配图由 Codex 先画（在私有仓库画好取回来；网页图 cloud/web_images.py，视频图 site/tools/video3_images.py），画不成的网页图用程序画的主题色封面、视频那一块不带图，缺了哪几张要照实写进审片；视频导演可以新画图（叫私有仓库用 Codex 画，最多等 12 分钟，没回来的那一块不带图，也要照实写）"
           fi
+          # MiMo 备用那天不出视频（11-17 加）：告诉审片视频那几项不适用；平常是空的，提示和以前一样
+          VIDEO_NOTE=""
+          [ "$NO_VIDEO" = "true" ] && VIDEO_NOTE="；这一期视频：关（Claude 不能用，第 4–9 步由 MiMo 备用写稿，按规矩不出视频），审片清单里视频那几项不适用，第 14、15 步跳过、说明是“视频：关”的不算没做完"
           mkdir -p "$RUNNER_TEMP/review"
           unset ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
           # 只许写这两个文件：期目录里已有的文件先设成只读（目录不动，好让它新建这两个文件）；审完核对有没有别的文件变了、多了
           find "$D" -type f ! -name 审片.md ! -name 审片结论.json -exec sha256sum {} + | sort -k2 > "$RUNNER_TEMP/review/before.txt"
           find "$D" -type f -exec chmod a-w {} +
-          PROMPT="你在 GitHub Actions 的云端 Ubuntu 机器上，项目目录就是当前目录（$GITHUB_WORKSPACE）。先完整读 文档/方案/每日审片.md：开头'云端版'一段和'任务说明'一节，按云端版给 DAY=$DAY 这一期做独立审片。云端的替换：项目目录＝当前目录；Python＝~/.venvs/frontier-daily/bin/python -u；转写用环境变量 FD_WHISPER_BIN 指的 mlx_whisper（Linux 替身，内部是 faster-whisper，参数和输出与 mlx-whisper 一样，模型名照写 mlx-community/whisper-large-v3-turbo，调用时设 HF_HUB_OFFLINE=1）；截帧、截音频等临时文件放 $RUNNER_TEMP/review。这一次只许写两个文件：$D/审片.md 和 $D/审片结论.json（期目录里已有的文件都设成了只读）；F 步那一行日志不写进 测试版/每日运行日志.md，改写在 审片.md 末尾；E 步跳过。$IMG_NOTE；$VOICE_NOTE。不发布、不 git commit、不 git push。"
+          PROMPT="你在 GitHub Actions 的云端 Ubuntu 机器上，项目目录就是当前目录（$GITHUB_WORKSPACE）。先完整读 文档/方案/每日审片.md：开头'云端版'一段和'任务说明'一节，按云端版给 DAY=$DAY 这一期做独立审片。云端的替换：项目目录＝当前目录；Python＝~/.venvs/frontier-daily/bin/python -u；转写用环境变量 FD_WHISPER_BIN 指的 mlx_whisper（Linux 替身，内部是 faster-whisper，参数和输出与 mlx-whisper 一样，模型名照写 mlx-community/whisper-large-v3-turbo，调用时设 HF_HUB_OFFLINE=1）；截帧、截音频等临时文件放 $RUNNER_TEMP/review。这一次只许写两个文件：$D/审片.md 和 $D/审片结论.json（期目录里已有的文件都设成了只读）；F 步那一行日志不写进 测试版/每日运行日志.md，改写在 审片.md 末尾；E 步跳过。$IMG_NOTE；$VOICE_NOTE$VIDEO_NOTE。不发布、不 git commit、不 git push。"
+          t0=$(date +%s)
           set +e
           claude -p "$PROMPT" \
             --model opus \
@@ -780,6 +928,81 @@ jobs:
           cp "$RUNNER_TEMP/review/"云端_claude审片* "$D/logs/" || true
           # 不在公开日志里印审片的总结和 审片结论.json 的开头（里面有稿子的字）：都在期目录里，跟着文件包进私有仓库
           echo "审片结束：退出码 $rc；审片.md $([ -s "$D/审片.md" ] && echo 写了 || echo 没写)，审片结论.json $([ -s "$D/审片结论.json" ] && echo 写了 || echo 没写)"
+          # 11-17 加：claude 没成时认一下是不是"Claude 不能用"（和写稿那一步同一个程序、同一套开关）。放在上面"动了别的文件"那次核对之后，
+          # 记号 Claude不能用.json 才不会被当成审片动了别的文件。认出来（10）、开关开着：交给下一步"审片备用：MiMo"；
+          # 审片结论.json 已经写好（11）就不交。这一步本来就 continue-on-error，照旧 exit $rc。
+          if [ "$rc" != "0" ]; then
+            DRY=--dry; [ "$BACKUP_ON" = "true" ] && DRY=""
+            cd_rc=0
+            python cloud/claude_down.py --issue "$D" --step 审片 --rc "$rc" --since "$t0" $DRY \
+              --stream "$D/logs/云端_claude审片.jsonl" --stderr "$D/logs/云端_claude审片_stderr.log" || cd_rc=$?
+            if [ "$BACKUP_ON" = "true" ] && [ "$cd_rc" = "10" ]; then
+              echo "claude_down=yes" >> "$GITHUB_OUTPUT"
+              echo "### 审片：Claude 不能用，交给 MiMo 审片" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+          exit $rc
+
+      # ---- MiMo 审片（11-17 加）：Claude 审片那一步认出 Claude 不能用、开关开着才跑。程序 cloud/backup_review.py（11-17 合进来，命令已核对）；
+      #      它写 审片.md、审片结论.json（字段和 Claude 那份一样，另加 "审片": "MiMo（备用）"），日志写进 logs/备用审片*。
+      #      照抄上面 Claude 审片的保护：期目录里别的文件先设成只读，审完核对有没有别的文件变了、多了。钥匙只有 MiMo 的两把。
+      #      程序的屏幕输出写进 logs/备用审片_屏幕输出.log（跟着文件包进私有仓库），公开日志只印退出码、写没写。
+      #      第 10–17 步没跑完（fd 退出码不是 0）的不审：这一期本来就出不了刊（"出刊了没有"判没出），不白花 MiMo。
+      #      现在只审"视频：关"那天（MiMo 备用写的那一期）：视频开着、只是审片时 Claude 才不能用的那天，程序不审、一个文件不写（退出码 2），
+      #      没有审片结论，放行判定第 9 条不过，不自动放行、发邮件（改动清单第 7 节第 5 条的 (b)）。
+      #      退出码照 Claude 审片那一步的做法：这一步 continue-on-error，过不过、放不放行都由放行判定第 9 条读 审片结论.json 来定——
+      #        0  两份文件写好了：审片没过（"立即"不空、"放行"是 false）也是 0，第 9 条读到"不放行"就不过；
+      #           有调用没成、或回答里缺了某几项的结果（结论里有"MiMo没查成"）也是 0，第 9 条按开关定挡不挡（默认挡）；
+      #        2  没审（视频开着、期目录不对），一个文件没写：第 9 条"没有 审片结论.json"不过；
+      #        1  程序自己出错（含写完后用放行判定的读法自查对不上、期目录里别的文件变了）：和 Claude 审片退出码不是 0 一样，
+      #           这一步记失败、往下走；写好的 审片结论.json 照旧交给第 9 条判，公开日志印一句提醒。
+      - name: 审片备用：MiMo（Claude 审片不能用时；只许写 审片.md、审片结论.json、logs/备用审片*）
+        id: review_backup
+        if: always() && steps.day.outputs.produce == 'true' && steps.produce.outcome == 'success' && steps.review.outputs.claude_down != '' && hashFiles(format('测试版/{0}/logs/fd_state.json', steps.day.outputs.day)) != ''
+        continue-on-error: true
+        timeout-minutes: 60
+        env:
+          MIMO_API_KEY: ${{ secrets.MIMO_API_KEY }}
+          MIMO_BASE_URL: ${{ secrets.MIMO_BASE_URL }}
+          # MiMo 备用写的那一期不出视频；只是审片时 Claude 才不能用的那天，视频照常（空＝按 fd_开关.json）
+          FD_VIDEO: ${{ steps.video.outputs.off == 'true' && 'off' || '' }}
+        run: |
+          D="测试版/$DAY"
+          unset ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
+          mkdir -p "$RUNNER_TEMP/review_backup" "$D/logs"
+          # 视频关着（MiMo 备用写的那一期）才明说 --no-video；开着时不加，程序照 FD_VIDEO 和 fd_开关.json 认出"开着"就不审（退出码 2）
+          NV=(); [ "$FD_VIDEO" = "off" ] && NV=(--no-video)
+          # 时限：一次 MiMo 调用最长约 15 分钟（对方约 900 秒断开），这一步 60 分钟，所以这一步开始 40 分钟后不再新开调用（40＋15＜60）；
+          # 也不晚于 job 开始后 330 分钟（job 最多 360 分钟，后面还要放行判定、打包、提交、叫放行发布）。
+          # 11-17 晚从 45／28 放宽：那天云端试跑 A 697 秒、B 608 秒、B 重给 JSON 488 秒，过了 28 分钟，第 11 项（调用 C）没跑。
+          # 程序也改成 A → C → B，事实检查 C 只会被 A 挤。过了时限没调成的那几项记"查不了"，另记进审片结论的"MiMo没查成"，
+          # 放行判定第 9 条读到就不自动放行（开关 gate.MIMO_REVIEW_INCOMPLETE_BLOCKS）、邮件写哪几项没查；
+          # 三次都没调成就"立即"写一条、不放行（程序自己的做法）。调用次数、token 上限用程序默认（8 次、40 万；11-17 本机试 3 次、24.7 万）
+          now=$(date -u +%s); dl=$(( now + 40 * 60 )); jl=$(( JOB_T0 + 330 * 60 )); [ "$jl" -lt "$dl" ] && dl=$jl
+          NO_CALLS_AFTER=$(date -u -d "@$dl" +%Y-%m-%dT%H:%M)
+          # 只许写 审片.md、审片结论.json、logs/备用审片*：别的文件先设成只读（目录不动），审完前后比对
+          others() { find "$D" -type f ! -name 审片.md ! -name 审片结论.json ! -path "$D/logs/备用审片*" "$@"; }
+          others -exec sha256sum {} + | sort -k2 > "$RUNNER_TEMP/review_backup/before.txt"
+          others -exec chmod a-w {} +
+          set +e
+          # 11-17 合并时核对过：参数照 cloud/backup_review.py 的 run 子命令（--date 定期目录 测试版/<日期>），退出码见上面
+          ~/.venvs/frontier-daily/bin/python -u cloud/backup_review.py run --date "$DAY" "${NV[@]}" \
+            --max-calls 8 --max-tokens 400000 --no-calls-after "$NO_CALLS_AFTER" > "$D/logs/备用审片_屏幕输出.log" 2>&1
+          rc=$?
+          set -e
+          find "$D" -type f -exec chmod u+w {} +
+          others -exec sha256sum {} + | sort -k2 > "$RUNNER_TEMP/review_backup/after.txt"
+          if ! diff -q "$RUNNER_TEMP/review_backup/before.txt" "$RUNNER_TEMP/review_backup/after.txt" >/dev/null; then
+            echo "::warning::MiMo 审片动了别的文件（应该只写 审片.md、审片结论.json、logs/备用审片*）："
+            diff "$RUNNER_TEMP/review_backup/before.txt" "$RUNNER_TEMP/review_backup/after.txt" | head -20
+          fi
+          echo "MiMo 审片结束：退出码 $rc；审片.md $([ -s "$D/审片.md" ] && echo 写了 || echo 没写)，审片结论.json $([ -s "$D/审片结论.json" ] && echo 写了 || echo 没写)（屏幕输出在 logs/备用审片_屏幕输出.log）"
+          case "$rc" in
+            0) r="写好了（放不放行由放行判定第 9 条读结论定）" ;;
+            2) r="没审（视频开着或期目录不对），第 9 条不过、不自动放行" ;;
+            *) r="程序出错（退出码 $rc）"; echo "::warning::MiMo 审片程序出错（退出码 $rc），原因在期目录 logs/备用审片_屏幕输出.log；写好的审片结论照旧交给放行判定第 9 条" ;;
+          esac
+          echo "### 审片备用：MiMo $r" >> "$GITHUB_STEP_SUMMARY"
           exit $rc
 
       # ---------------- 放行判定（只在"跑到第 17 步"时做）。打包、发布、存往期、发邮件在私有仓库的"放行发布"（publish.yml，它再判一遍）----------------
@@ -872,6 +1095,8 @@ jobs:
       # 下一期要读：事件库（往期已讲、周末汇总）、月度账本（Gemini 月上限）、近 30 天的文字（今日一词去重、往期已讲、补前一天，
       # 见 cloud/准备报告 A 节）。只加这一天的，更早的不删，git 历史里都在。推送凭证只在这一步临时给。
       # 11-10 加：这一期的审片、审读、放行、调度报告、自检、花费几份文字记录也存回来（期目录根上，一期合计约 65 KB）。
+      # 11-17 加：MiMo 备用的两份记号 备用写稿.json、Claude不能用.json（不含稿子的字）。第二天算"Claude 连续第几天不能用"要读往期的
+      # Claude不能用.json；平常这两份不在，跳过，提交的东西和以前一样。
       # 周六维护要看这一周每期审片里的"请你耳听"。文件不在就跳过（周六只跑第 1–3 步、半路出错时，后面几份本来就没有）。
       # 2026-11 起提交进私有仓库（公开仓库不放内容）：重新浅克隆私有仓库（只取 测试版/），把同一批文件拷进去再提交、推送。
       - name: 提交跨天状态（事件库、账本、这一期的文字，进私有仓库）
@@ -887,7 +1112,7 @@ jobs:
           for f in 测试版/往期事件库 测试版/月度账本 "$D/02_选题/最终选题.json" "$D/03_事件卡/cards_写稿用.json" \
                    "$D/04_文稿/claude_网页.json" "$D"/04_文稿/claude_播客_*.md "$D"/04_文稿/claude_对谈_*.md \
                    "$D/审片.md" "$D/审片结论.json" "$D/放行结论.json" "$D/00_调度报告.md" "$D/自检.md" \
-                   "$D/审读意见.md" "$D"/审读处理*.md "$D/花费.json"; do
+                   "$D/审读意见.md" "$D"/审读处理*.md "$D/花费.json" "$D/备用写稿.json" "$D/Claude不能用.json"; do
             [ -e "$f" ] && files+=("$f")
           done
           [ ${#files[@]} -eq 0 ] && { echo "没有要提交的"; exit 0; }

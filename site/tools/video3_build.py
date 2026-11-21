@@ -616,8 +616,20 @@ def en_name_warnings(sb, reg):
     return warn
 
 
-def prepare(issue, gen=True):
-    """读分镜 → 补配图（image_requests）→ 结构检查（数据不够的模板去掉）→ 事实、数字、原话、标志核对 → 写配音用的旁白 → 触发词对旁白。核不上就停。"""
+def prepare(issue, gen=True, on_fail=None):
+    """读分镜 → 补配图（image_requests）→ 结构检查（数据不够的模板去掉）→ 事实、数字、原话、标志核对 → 写配音用的旁白 → 触发词对旁白。核不上就停。
+
+    on_fail（2026-11-17 加，第 7 步分镜检查"一次报全"用）：不给（默认，组装视频和别的地方都这样用）和原来一模一样，哪一道核不上就
+    SystemExit。给了的话，每一道核不上时调 on_fail(道名, SystemExit) 记下来，接着查后面互不依赖的几道；"画面字和数字""帖子卡原话"
+    要用"事实核对"的结果，事实核对没过就不查，调 on_fail(道名, None) 说一声。每一道怎么判一条没改，只是不再"报完一道才看下一道"。"""
+    def stage(name, fn):
+        try:
+            return True, fn()
+        except SystemExit as e:
+            if on_fail is None:
+                raise
+            on_fail(name, e)
+            return False, None
     sb = SB.load(issue / STORYBOARD)
     if SB.motion_off():               # 11-07：新动效总开关关着 → 组装前去掉新块和新字段，退回 11-06 以前的画法（开着时什么都不做）
         for w in SB.strip_motion(sb):
@@ -626,18 +638,29 @@ def prepare(issue, gen=True):
     for w in SB.structure(sb, issue):
         say("  提醒：" + w)
     cards = {c["event_id"]: c for c in json.loads((issue / "03_事件卡/cards_写稿用.json").read_text(encoding="utf-8"))}
-    facts = SB.check_facts(sb, cards)
+    ok_facts, facts = stage("事实核对", lambda: SB.check_facts(sb, cards))
     reg = en_registry()
     SB.NAME_TOKENS = sorted({t for e in reg for t in [e["en"]] + e["zh"] if re.search(r"\d", t) and re.search(r"[A-Za-z]", t)})
-    SB.attach_datelines(facts, issue)  # 11-15：原文开头的"X 月 X 日消息"记到来源上，出处签日期对不上就只写媒体名
-    n = SB.check_labels(sb, facts)
-    for w in SB.check_posts(sb, facts) + SB.check_logos(sb, facts) + SB.check_layers(sb) + en_name_warnings(sb, reg) + SB.source_warnings(sb):
-        say("  提醒：" + w)
+    n, failed = 0, not ok_facts
+    if ok_facts:
+        SB.attach_datelines(facts, issue)  # 11-15：原文开头的"X 月 X 日消息"记到来源上，出处签日期对不上就只写媒体名
+        ok_l, n = stage("画面字和数字", lambda: SB.check_labels(sb, facts))
+        ok_p, posts = stage("帖子卡原话", lambda: SB.check_posts(sb, facts))
+        failed = not (ok_l and ok_p)
+        # 下面这几样只出提醒；标志那一项还会把缺的平台标志补进 site/assets/logos。原来只在前两道都过了才走到这里，
+        # "一次报全"时照旧：前两道有一道没过就不走（不多写文件），只少几条提醒，过不过不受影响
+        if not failed:
+            for w in (posts or []) + SB.check_logos(sb, facts) + SB.check_layers(sb) + en_name_warnings(sb, reg) + SB.source_warnings(sb):
+                say("  提醒：" + w)
+    else:
+        on_fail("画面字和数字、帖子卡原话", None)
     md = SB.narration_md(sb)
     p = issue / NARRATION
     if not p.exists() or p.read_text(encoding="utf-8") != md:
         p.write_text(md, encoding="utf-8")
-    SB.check_cues(sb, video_align.norm)
+    ok, _ = stage("触发词", lambda: SB.check_cues(sb, video_align.norm))
+    if failed or not ok:              # 只在"一次报全"时会走到这里：有哪一道没过，就不写"已核对"那句
+        return sb, cards, facts
     say("分镜：%d 章（%s），%d 个模板，%d 条事实、%d 处字已核对" % (
         len(sb["chapters"]), "、".join(c["id"] for c in sb["chapters"]), sum(len(c.get("blocks") or []) for c in sb["chapters"]), len(facts), n))
     return sb, cards, facts

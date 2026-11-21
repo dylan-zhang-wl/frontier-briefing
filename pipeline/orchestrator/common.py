@@ -262,6 +262,36 @@ def excerpt_photo_switch():
                    else "fd_开关.json 没写“%s”（或值认不出），按“关”" % EXCERPT_PHOTO_KEY)
 
 
+# ---------------------------------------------------------------- 视频开关（2026-11-17 加，feat/mimo-fallback 分支；第 10–17 步 feat/mimo-release 分支）
+# 开（默认）：和加开关以前一样，第 6 步要三份稿子（播客、网页、视频分镜），第 7、9 步查分镜，第 10–17 步照旧。
+# 关：这一期不出视频——第 6 步只要播客和网页两份；第 7 步（和第 9 步改后复查）不跑分镜检查（helpers.py storyboard），
+#   易歧义词只看播客稿，摘要写"视频：关，分镜不查"；第 8、9 步给人的说明里不再提分镜。
+#   第 10 步不要视频图（不读分镜）；第 11 步不配视频旁白（不花钱），附加记"视频旁白": "不配（视频：关）"、"视频开关": "关"；
+#   第 14 步"跳过"，说明"视频：关，这一期不出视频"；第 15 步网页不带视频（旧的 11_视频v3 挪开），附加"带视频": False；
+#   第 16 步验收本来就不要求视频；第 17 步报告、自检.md 写明这一期不出视频。第 11、14、15 步的输入指纹关着时多一项"=视频=关"，
+#   一换开关就重做（开着时和加开关以前一字不差）。放行判定（cloud/release/gate.py）只在 MiMo 备用写稿那天（期目录有
+#   备用写稿.json、"视频"一栏写"关"）才放过不要视频的那几条；正常那天关了视频照旧不自动放行。
+# 先看环境变量 FD_VIDEO（只管这一次，比如 FD_VIDEO=off ./fd run …），再看 fd_开关.json 的"视频"；都没有或读不出来按"开"。
+# 判"这一期是不是按开关不出视频"（报告、自检、fd status、放行）读记录里第 14、15 步的 附加.视频开关，不读这个开关本身。
+VIDEO_KEY = "视频"
+
+
+def video_switch():
+    """返回 (开着没有, 从哪来的一句话)。"""
+    env = str(os.environ.get("FD_VIDEO") or "").strip().lower()
+    if env in _OFF:
+        return False, "环境变量 FD_VIDEO=%s" % env
+    if env in _ON:
+        return True, "环境变量 FD_VIDEO=%s" % env
+    try:
+        v = str(json.loads(SWITCH_FILE.read_text(encoding="utf-8")).get(VIDEO_KEY) or "").strip().lower()
+    except (OSError, ValueError, AttributeError):
+        return True, "没有 fd_开关.json（或读不出来），按“开”"
+    if v in _OFF:
+        return False, "fd_开关.json 的“视频”写着“关”"
+    return True, "fd_开关.json 的“视频”写着“开”" if v in _ON else "fd_开关.json 的“视频”值认不出（%r），按“开”" % v
+
+
 def monthly_cap():
     prof = read_json(PROFILE, {}) or {}
     v = prof.get("每月 Gemini 配音上限美元（建议）")
