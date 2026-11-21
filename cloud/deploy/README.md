@@ -271,6 +271,8 @@ python3 cloud/deploy/run_wrangler.py --assets $P --run-dir $R dev --local --ip 1
 - 本机 `wrangler dev`（http://127.0.0.1）上用浏览器点按钮会回 403（Origin 不是 `https://wenlongzhang.com`，同设置页）；本机试的时候在运行目录的 `_dev_entry.js` 里改写请求的 Origin，或者用 curl 带上 `Origin: https://wenlongzhang.com`。
 - iPhone 真机还没试：Safari 要在点击里直接开始放，程序是先 `play()`、等音频的元数据到了再跳到起点（照网页播客的做法）。
 
+**本机试过**（11-21，`wrangler dev --local`，本机 D1、本机专用的假站长钥匙；做法同上面“本机模拟”，`_dev_entry.js` 另把本机浏览器 POST 的 Origin 改写成 `https://wenlongzhang.com`；上线包是本机排练放行发布做的，往期存档里三期有原始条目）：匿名 GET、POST、导出都 404，坏站长 Cookie 404 → `_listen/` 下的条目文件和大小写、`%5F`、双斜杠、`%2F` 变体匿名和站长都 404 → 站长打开列表 200（三期）、一期 200（24 张卡），`no-store`、CSP、`X-Frame-Options: DENY` → 播客、视频旁白带 Range 回 206 → 无头 Chrome 里点“▶”：从这一段起点放、放到终点自动停，浏览器发的是 Range 请求、回 206 → 三张卡分别点念对了、念错了（带备注）、没听出来，回 200、卡上显示“已选”→ 刷新后三条都还在 → 第一条改成念错了、刷新后是新的 → 没有脚本的表单提交回 303 回到那一条 → 本机 D1 里四行、改过的那条只有一行 → 导出 JSON 带位置、判断、结果和备注。手机 375 宽没有横向滚动，最矮的按钮 52px。线上、真机都还没试。
+
 ## 往期从哪来（存放）
 
 Cloudflare 每发布一次就是一个新版本，新版本只有这次上传清单里的文件（[官方说明](https://developers.cloudflare.com/workers/static-assets/direct-upload/)：清单 "is used to track assets associated with each Worker version"）。没变的文件按内容指纹认出来，不会重复上传，但清单里必须有。云端每次是空机器，所以每次发布前都要把全部往期拿回来。
