@@ -1883,7 +1883,27 @@ def screen_model(sb, T, marks):
         #   （BARE_MOTION：柱子、价位块、刻度尺、点阵、手机、国内外对折）动起来的那几秒；白卡类上的动效（数字递进、摘录的荧光笔、
         #   对比卡的条、分岔路的线和字牌、传播链）不算。11-18 评审章 86.0–107.5、补丁章 115.2–121.8，11-20 口译章 81.3–94.4
         #   都是旧量法里"有动效"、审片判"没有图"的那几段。
-        cov, bare, cur = sorted((a, z) for a, z, k, b in pieces if k in HERO or (k == "motion" and b.get("type") in BARE_MOTION)), [], v0
+        #   镜头归属也改准一点：分岔路的字牌 a/b 说到时镜头不动（TPL.fork.cams 只在画路时动一次），不算抢到镜头
+        #   （11-15"要他回来"章 111.8 秒字牌 a 出来时镜头还在路尽头那张带图的帖子卡上）。旧量法的 own、pieces 一点不动。
+        ev_b = sorted((v, j) for j, (b, ts) in enumerate(zip(blocks, tms)) if b.get("type") != "image_card"
+                      for k2, v in ts.items() if not (b.get("type") == "fork" and k2 in ("a", "b")))
+        own_b = {}
+        for k, (v, j) in enumerate(ev_b):
+            a = min(c0, v) if k == 0 else v
+            z = ev_b[k + 1][0] if k + 1 < len(ev_b) else cend
+            if z > a:
+                own_b.setdefault(j, []).append((a, z))
+        pieces_b = [x for x in pieces if x[3].get("type") == "image_card"]
+        for j, (b, ts) in enumerate(zip(blocks, tms)):
+            if b.get("type") == "image_card":
+                continue
+            for a, z, kind in _moments(b, ts, over_ok=fork_photo(c)):
+                for oa, oz in own_b.get(j, []):
+                    lo, hi = max(a, oa), min(z, oz)
+                    if hi > lo + 1e-6:
+                        pieces_b.append((lo, hi, kind, b))
+        pieces_b.sort(key=lambda x: x[0])
+        cov, bare, cur = sorted((a, z) for a, z, k, b in pieces_b if k in HERO or (k == "motion" and b.get("type") in BARE_MOTION)), [], v0
         for a, z in cov:
             if a > cur:
                 bare.append((cur, a))
@@ -1891,6 +1911,8 @@ def screen_model(sb, T, marks):
         if cur < v1:
             bare.append((cur, v1))
         bare = [(a, min(z, v1)) for a, z in bare if min(z, v1) > a]
+        heroes_b = [a for a, z, k, _b in pieces_b if k in HERO and z > v0]
+        hero_b = max(v0, min(heroes_b)) if heroes_b else None
         # 时间轨被别的模板从中间打断：它的日子有的说在别的模板开始之后（贴在尽头的手机也算，和播放器 tlSegments 一样）
         cuts = []
         for j, (b, ts) in enumerate(zip(blocks, tms)):
@@ -1923,7 +1945,8 @@ def screen_model(sb, T, marks):
                 if hi > cur:
                     lonely.append((cur, hi, b))
         out.append({"c": c, "i": i, "v0": v0, "v1": v1, "pieces": pieces, "gaps": gaps, "hero": hero, "cuts": cuts,
-                    "lonely": [(a, z, b) for a, z, b in lonely if z > a], "bare": bare, "own": own, "blocks": blocks, "tms": tms})
+                    "lonely": [(a, z, b) for a, z, b in lonely if z > a], "bare": bare, "own_b": own_b, "pieces_b": pieces_b,
+                    "hero_b": hero_b, "blocks": blocks})
     return out
 
 
@@ -1941,6 +1964,7 @@ def screen_warnings(sb, T, marks, est=False, limit=SCREEN_GAP, bare=False):
     for ch in screen_model(sb, T, marks):
         c, v0 = ch["c"], ch["v0"]
         if bare:
+            ch = dict(ch, hero=ch["hero_b"])          # 章首主角也按 bare 的镜头归属算
             for a, z in ch["bare"]:
                 if z - a > limit and not (a <= v0 + 0.05 and (ch["hero"] is None or ch["hero"] > v0 + OPENER_SEC)):   # 章首那段归下面"开口没主角"报
                     warn.append(BARE_WARN % (c["id"], a, z, z - a, limit))
@@ -2016,10 +2040,10 @@ def bare_spans(sb, T, marks, limit=SCREEN_GAP):
     之外超过 limit 秒没有图的写 bare。"""
     out = {}
     for ch in screen_model(sb, T, marks):
-        v0, lst = ch["v0"], []
-        late = ch["hero"] is None or ch["hero"] > v0 + OPENER_SEC
+        v0, lst, hero = ch["v0"], [], ch["hero_b"]
+        late = hero is None or hero > v0 + OPENER_SEC
         if late:
-            lst.append([round(v0, 2), round(ch["hero"] if ch["hero"] is not None else ch["v1"], 2), "opener"])
+            lst.append([round(v0, 2), round(hero if hero is not None else ch["v1"], 2), "opener"])
         for a, z in ch["bare"]:
             if z - a > limit and not (late and a <= v0 + 0.05):
                 lst.append([round(a, 2), round(z, 2), "bare"])
@@ -2075,7 +2099,7 @@ def fix_bare(sb, T, marks, has_image, rounds=3):
     for _ in range(rounds):
         changed = False
         for ch in screen_model(sb, T, marks):
-            c, v0, blocks, own = ch["c"], ch["v0"], ch["blocks"], ch["own"]
+            c, v0, blocks, own = ch["c"], ch["v0"], ch["blocks"], ch["own_b"]
             spans = [(a, z) for a, z, _w in (bare_spans(sb, T, marks).get(c["id"]) or [])]
             if not spans:
                 continue
@@ -2106,7 +2130,7 @@ def fix_bare(sb, T, marks, has_image, rounds=3):
                     slot = _bare_slot(c, b)
                     if not slot:
                         continue
-                    prev = [(pa, _piece_image(pb)) for pa, _pz, k, pb in ch["pieces"] if k == "img" and pa < a + 0.05 and pb is not b]
+                    prev = [(pa, _piece_image(pb)) for pa, _pz, k, pb in ch["pieces_b"] if k == "img" and pa < a + 0.05 and pb is not b]
                     prev = [(pa, n) for pa, n in prev if n and has_image(n)]
                     name = max(prev)[1] if prev else (first_imgs[0] if first_imgs else None)
                     if not name:
@@ -2164,9 +2188,31 @@ def _common_phrases(text, narr, n_min=SYNC_FOOT_MIN):
     return out
 
 
-def card_cues(sb, T, marks, find):
+def find_in(al, phrase, after, scene, num=False):
+    """在对齐结果（al["units"]，只有字、字母、数字）里找 phrase，返回 (开始秒, 结束秒) 或 None；after 之前、别的章的不算。
+    num：找的是数，前一个字是数字的不算（"50"不落进"111.50"、"83"不落进"183"——对齐结果里没有小数点和逗号），
+    找的字以数字结尾时，后一个字是数字的也不算。"""
+    import video_align
+    key = video_align.norm(phrase)
+    units = (al or {}).get("units") or []
+    if not key or not units:
+        return None
+    flat = "".join(u["c"] for u in units)
+    i = flat.find(key)
+    while i >= 0:
+        u0, u1, j = units[i], units[i + len(key) - 1], i + len(key)
+        ok = u0["s"] >= after - 1e-6 and (scene is None or u0.get("scene") == scene)
+        if ok and num and ((i > 0 and flat[i - 1].isdigit()) or (key[-1].isdigit() and j < len(flat) and flat[j].isdigit())):
+            ok = False
+        if ok:
+            return u0["s"], u1["e"]
+        i = flat.find(key, i + 1)
+    return None
+
+
+def card_cues(sb, T, marks, al):
     """开关"卡片数值跟着旁白出"开着时，第 14 步对齐以后调（video3_build.post_align）：给对比卡（compare_panel）没写触发词的条、
-    大数字、底注，和 quota_bars 的底注，按旁白补时刻，写进 T。find(字, after, 章序号) → (开始秒, 结束秒) 或 None。返回说明。"""
+    大数字、底注，和 quota_bars 的底注，按旁白补时刻，写进 T。al 是对齐结果（找字用 find_in）。返回说明。"""
     notes = []
     chs = sb.get("chapters") or []
     for i, c in enumerate(chs):
@@ -2188,20 +2234,21 @@ def card_cues(sb, T, marks, find):
             nxt = min([x for jj, x in enumerate(starts) if x is not None and x > show + 0.05 and blocks[jj].get("type") != "image_card"]
                       or [marks[i]["end"]])
 
-            def hit(phrases):
+            def hit(phrases, num=True):
                 import video_align
                 for ph in phrases:
                     if len(video_align.norm(ph)) < 2:      # 只剩一位数（"2%" 去掉 % 是"2"）：旁白里到处都是，不找
                         continue
-                    f = find(ph, show - 0.3, i)
+                    f = find_in(al, ph, show - 0.3, i, num=num)
                     if f and f[0] < nxt - 0.3:
-                        return f
+                        return f + (ph,)
                 return None
 
             def put(key, f, what):
                 T[pre + key] = round(f[0], 3)
                 T[pre + key + ".end"] = round(f[1], 3)
-                notes.append("「%s」%s/%s 的%s跟着旁白在 %.1f 秒出（卡片 %.1f 秒出来）" % (c["id"], t, b.get("id"), what, f[0], show))
+                notes.append("「%s」%s/%s 的%s跟着旁白在 %.1f 秒出（卡片 %.1f 秒出来；旁白里对上的字：%s）" % (
+                    c["id"], t, b.get("id"), what, f[0], show, f[2]))
             if t == "compare_panel":
                 for k, bar in enumerate((b.get("bars") or [])[:4]):
                     if not isinstance(bar, dict) or (pre + "bars%d" % k) in T or bar.get("cue"):
@@ -2219,7 +2266,7 @@ def card_cues(sb, T, marks, find):
             foot = b.get("foot")
             foot = foot.get("zh") if isinstance(foot, dict) else foot
             if foot and (pre + "foot") not in T:
-                f = hit(_common_phrases(foot, c.get("narration") or ""))
+                f = hit(_common_phrases(foot, c.get("narration") or ""), num=False)
                 if f:
                     put("foot", f, "底注")
     return notes

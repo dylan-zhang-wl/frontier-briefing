@@ -86,6 +86,17 @@ class BareModel(unittest.TestCase):
         self.assertAlmostEqual(ch["hero"], 23.0)
         self.assertEqual(SB.bare_spans(sb, T, mk), {"interp": [[10.0, 23.0, "opener"]]})
 
+    def test_fork_sign_does_not_take_camera(self):
+        """照 11-15"要他回来"：分岔路尽头先立起带图的帖子卡，字牌 a 晚一点出来——镜头还在帖子卡上，不算空档。"""
+        c = {"id": "voices", "kind": "story", "blocks": [
+            {"type": "fork", "id": "split", "a": {"zh": "a"}, "b": {"zh": "b"}},
+            {"type": "post_card", "id": "letter", "text": {"zh": "x"}, "who": {"zh": "y"}, "image": "v_letter"},
+            {"type": "post_card", "id": "fake", "text": {"zh": "x"}, "who": {"zh": "y"}, "image": "v_lab"}]}
+        T = {"voices.split.fork": 10.1, "voices.letter.show": 11.0, "voices.split.a": 12.5, "voices.fake.show": 17.0,
+             "voices.split.b": 25.0}
+        sb, mk = sb_of(c), marks((10.0, 27.0, 28.0))
+        self.assertEqual(SB.bare_spans(sb, T, mk), {})
+
     def test_3d_relation_motion_still_counts(self):
         c = {"id": "q", "kind": "story", "blocks": [
             {"type": "quote_card", "id": "a", "text": {"zh": "x"}, "image": "v1"},
@@ -152,15 +163,14 @@ class FixBare(unittest.TestCase):
         self.assertEqual(SB.fix_bare(sb, T, mk, lambda n: False), [])
 
 
-def fake_find(text, t0, step=0.2, scene=1):
-    """旁白每个字 step 秒，从 t0 开始；和 video_align.find 一样只比字、字母、数字。"""
+def fake_al(text, t0, step=0.2, scene=1):
+    """旁白每个字 step 秒，从 t0 开始；和 video_align 的对齐结果一样只留字、字母、数字。"""
     units, t = [], t0
     for ch in text:
         if video_align.is_unit(ch):
             units.append({"c": ch.lower(), "s": round(t, 3), "e": round(t + step, 3), "scene": scene})
         t += step
-    al = {"units": units}
-    return lambda ph, after, i: (lambda f: f and (f[0], f[1]))(video_align.find(al, ph, after=after, scene=i))
+    return {"units": units}
 
 
 class CardCues(unittest.TestCase):
@@ -176,8 +186,7 @@ class CardCues(unittest.TestCase):
 
     def test_derive(self):
         sb, T, mk = self.case()
-        find = fake_find(self.NARR, 19.0)
-        notes = SB.card_cues(sb, T, mk, find)
+        notes = SB.card_cues(sb, T, mk, fake_al(self.NARR, 19.0))
         self.assertGreater(T["ipo.raise.bars0"], T["ipo.raise.bars1"])          # 先说 813、后说 750
         self.assertGreater(T["ipo.raise.kpi"], 20.0 + SB.SYNC_KPI_LATE)
         self.assertGreater(T["ipo.raise.foot"], T["ipo.raise.bars0"])
@@ -188,15 +197,24 @@ class CardCues(unittest.TestCase):
         b = sb["chapters"][1]["blocks"][0]
         T["ipo.raise.bars0"] = 21.0
         b["kpi"]["value"] = {"zh": "跌超 2%"}
-        SB.card_cues(sb, T, mk, fake_find(self.NARR, 19.0))
+        SB.card_cues(sb, T, mk, fake_al(self.NARR, 19.0))
         self.assertEqual(T["ipo.raise.bars0"], 21.0)
         self.assertNotIn("ipo.raise.kpi", T)
+
+    def test_number_boundary(self):
+        al = fake_al("开盘冲到 111.50 美元，收盘 97.17 美元，发行价 83 美元，去年 183 家。", 10.0)
+        self.assertIsNone(SB.find_in(al, "50", 9.0, 1, num=True))                   # 不落进 111.50
+        self.assertIsNotNone(SB.find_in(al, "50", 9.0, 1, num=False))
+        f = SB.find_in(al, "83", 9.0, 1, num=True)
+        g = SB.find_in(al, "183", 9.0, 1, num=True)
+        self.assertLess(f[0], g[0])                                                 # 找到的是"83 美元"，不是"183"
+        self.assertIsNone(SB.find_in(al, "18", 9.0, 1, num=True))                  # "18" 后面还跟着数字
 
     def test_not_after_next_block(self):
         sb, T, mk = self.case()
         sb["chapters"][1]["blocks"].append({"type": "quote_card", "id": "nx", "text": {"zh": "x"}})
         T["ipo.nx.show"] = 22.0                       # 下一块 22 秒就来了：旁白后面才说到的都不补
-        SB.card_cues(sb, T, mk, fake_find(self.NARR, 19.0))
+        SB.card_cues(sb, T, mk, fake_al(self.NARR, 19.0))
         self.assertNotIn("ipo.raise.foot", T)
 
 
