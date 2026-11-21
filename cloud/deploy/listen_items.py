@@ -21,7 +21,8 @@ _listen/ 下的文件 Worker 对谁都不直接给（src/index.js），只在站
       终点不知道音频多长，超过结尾浏览器自己会停。
     · group：front（多半真念错、拿不准、没写判断）／mid（多半转写听错，但只是一两个时刻）／batch（多半转写听错的成批条目：
       区间长到 BATCH_SPAN 秒以上、时刻有 BATCH_POINTS 个以上、写着“多处、起、等”、或者认不出时刻；页面上折起来放最后，写“可不听”）。
-      排序：组 → 关乎事实的在前 → 多半真念错、没写判断、拿不准、多半转写听错 → 先视频后播客 → 时刻先后 → 原来的顺序。
+      排序：成批的放最后 → 其余的关乎事实的在最前（判成多半转写听错的单处事实条目也算，回归集 1116-06 就是这样的条目
+      用户耳听是真错）→ 多半真念错、没写判断、拿不准、多半转写听错 → 先视频后播客 → 时刻先后 → 原来的顺序。
     · 认不出时刻的（“其余”“播客多处”“播客、视频多处同音字”）照样列出来，clips 为空，页面上只显示文字、提示去播客或视频里听。
 不调用模型、不联网、不读音频文件；同样的输入两次做出来逐字节一样（不写生成时间）。
 """
@@ -280,7 +281,7 @@ def build_issue(day, raw, audio=("播客", "视频"), edition=""):
         items.append({"id": iid, "pos": pos, "note": note, "say": say, "heard": heard, "judge": judge, "basis": str(x.get("依据") or "").strip(),
                       "fact": fact, "group": _group(judge, clips, many), "clips": cl, "parsed": bool(clips), "_i": i,
                       "_med": 0 if (clips and clips[0]["src"] == "视频") else 1, "_t": clips[0]["at"][0] if clips else 1e9})
-    items.sort(key=lambda it: (GROUP_RANK[it["group"]], 0 if it["fact"] else 1, JUDGE_RANK.get(it["judge"], 1), it["_med"], it["_t"], it["_i"]))
+    items.sort(key=lambda it: (it["group"] == "batch", 0 if it["fact"] else 1, JUDGE_RANK.get(it["judge"], 1), it["_med"], it["_t"], it["_i"]))
     for n, it in enumerate(items, 1):
         it["n"] = n
         for k in ("_i", "_med", "_t"):

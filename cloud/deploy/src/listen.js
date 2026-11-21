@@ -236,9 +236,9 @@ export function renderIssue(data, votes, { dbNote = '', msg = '' } = {}) {
   const total = items.length;
   const v = (it) => (votes ? votes.get(it.id) : null);
   const done = items.filter((it) => v(it)).length;
-  const facts = items.filter((it) => it.fact).length;
   const main = items.filter((it) => it.group !== 'batch');
   const batch = items.filter((it) => it.group === 'batch');
+  const facts = main.filter((it) => it.fact).length;          // 折起来的成批条目里的不算（它们在最后）
   const f = MSG[msg];
   const flash = (f ? `<div class="flash ${f[0]}" role="status">${esc(f[1])}</div>` : '') + (dbNote ? `<div class="flash">${esc(dbNote)}</div>` : '');
   const sum = `<div class="sum"><span class="pill">共 ${total} 处</span>${facts ? `<span class="pill fact">【事实】${facts} 处，排在最前</span>` : ''}`

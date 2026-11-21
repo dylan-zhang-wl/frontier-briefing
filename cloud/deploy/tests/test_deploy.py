@@ -704,11 +704,19 @@ class ListenParseTest(unittest.TestCase):
         items = a["items"]
         self.assertEqual([it["n"] for it in items], list(range(1, len(items) + 1)))
         groups = [it["group"] for it in items]
-        self.assertEqual(groups, sorted(groups, key=listen_items.GROUP_RANK.get), "front → mid → batch")
+        self.assertEqual(groups, sorted(groups, key=lambda g: g == "batch"), "成批的都在最后")
         front = [it for it in items if it["group"] == "front"]
         self.assertTrue(all(it["fact"] for it in front[:3]) and not any(it["fact"] for it in front[3:]), "【事实】的排最前")
         self.assertEqual([it["pos"] for it in front[:3]], ["播客 1:23", "播客 2:05（另 2:40、3:01）", "视频 7 秒；播客 4:00"], "事实里：先多半真念错、后拿不准，同一判断里先视频后播客、按时刻")
         self.assertEqual([it["pos"] for it in front[3:5]], ["播客 7:00", "播客 7:00"], "不关乎事实的多半真念错")
+        # 判成多半转写听错、但关乎事实的单处条目：也排在所有不关乎事实的前面（只有成批的才放最后）
+        mixed = listen_items.build_issue("2026-11-30", [
+            {"位置": "播客 1:00", "说明": "甲", "判断": "多半真念错", "关乎事实": False},
+            {"位置": "视频 5 秒", "说明": "乙", "判断": "多半转写听错", "关乎事实": True},
+            {"位置": "播客 2:00–3:00", "说明": "丙", "判断": "多半转写听错", "关乎事实": True},
+            {"位置": "播客 0:20", "说明": "丁", "判断": "拿不准", "关乎事实": True}])["items"]
+        self.assertEqual([(it["pos"], it["group"]) for it in mixed],
+                         [("播客 0:20", "front"), ("视频 5 秒", "mid"), ("播客 1:00", "front"), ("播客 2:00–3:00", "batch")])
         by = {it["pos"]: it for it in items}
         self.assertEqual(by["播客 0:30"]["group"], "mid", "单个时刻的转写听错不折叠")
         self.assertEqual(by["播客 5:00–6:40（第乙段）"]["group"], "batch", "长区间的转写听错折叠")
