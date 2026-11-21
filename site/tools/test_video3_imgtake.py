@@ -6,7 +6,9 @@ DeepSeek 章 68.8 秒该回到机房图，IT之家截图仍盖满画面。原因
 就一直留到章末；配图要么挂在截图卡右后方（被挡住），要么立在分岔路尽头（镜头不在那里）。
 
 查三件事：
-  1. 开关：只认环境变量 FD_VIDEO_IMAGE_TAKE 写 on／1／开……，没设或别的值都是关；组装数据只在开着、而且 fix1108 也写了时多写 imgtake。
+  1. 开关：先看环境变量 FD_VIDEO_IMAGE_TAKE（on／1／开……开，off／0／关……关），没设再看 fd_开关.json 的"配图收截图卡"，都没有按关
+     （11-21 接进开关文件）；组装程序、fd（pipeline/orchestrator/common.py）读到的是同一个值；第 14 步指纹关着记空字符串（往期不重做）；
+     组装数据只在开着、而且 fix1108 也写了时多写 imgtake。
   2. 播放器：新画法全在 TAKE 后面（TAKE = FX && imgtake），没有 imgtake 的数据走原来的路；takeOver 只在 TAKE 开着时调；
      用 node 把 takeOver 那几个小函数单独跑一遍，11-16 两处都接手、时刻对，不该接手的（截图卡刚开讲、分岔路上的卡、
      章里有 over_photo 要点卡、不是截图卡）都不接手。
@@ -22,6 +24,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -31,22 +34,76 @@ TOOLS = Path(__file__).resolve().parent
 ROOT = TOOLS.parents[1]
 JS = ROOT / "site" / "v3" / "video3.js"
 BUILD = TOOLS / "video3_build.py"
+for _p in (TOOLS, ROOT / "pipeline"):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+import video3_storyboard as SB  # noqa: E402
 
 
 class Switch(unittest.TestCase):
-    def on(self, v):
-        src = BUILD.read_text(encoding="utf-8")
-        fn = re.search(r"\ndef image_take_on\(\):\n.*?\n\n", src, re.S).group(0)
-        ns = {"os": os, "IMAGE_TAKE_ENV": "FD_VIDEO_IMAGE_TAKE"}
-        exec(fn, ns)                      # 只取这一个函数（整份组装程序要载很多东西）
-        with mock.patch.dict(os.environ, {"FD_VIDEO_IMAGE_TAKE": v}):
-            return ns["image_take_on"]()
+    """11-21：原来只认环境变量；同日接进 fd_开关.json（"配图收截图卡"），规则和"画面空档自动补图"那两个一样。"""
+
+    def on(self, v, fv=None):
+        """环境变量写 v（None＝不设）、开关文件写 fv（None＝没有这个文件）时，组装程序和 fd 各读到什么。"""
+        from orchestrator import common
+        with tempfile.TemporaryDirectory() as td:
+            f = Path(td) / "fd_开关.json"
+            if fv is not None:
+                f.write_text(json.dumps({"配图收截图卡": fv}, ensure_ascii=False), encoding="utf-8")
+            env = dict(os.environ)
+            env.pop("FD_VIDEO_IMAGE_TAKE", None)
+            if v is not None:
+                env["FD_VIDEO_IMAGE_TAKE"] = v
+            with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(SB, "MOTION_SWITCH_FILE", f), \
+                    mock.patch.object(common, "SWITCH_FILE", f):
+                return SB.image_take_switch()[0], common.image_take_switch()[0]
 
     def test_env(self):
         for v in ("on", "1", "开", "TRUE"):
-            self.assertTrue(self.on(v), v)
-        for v in ("", "off", "0", "关", "maybe"):
-            self.assertFalse(self.on(v), v)
+            self.assertEqual(self.on(v), (True, True), v)
+        for v in ("off", "0", "关"):
+            self.assertEqual(self.on(v, "开"), (False, False), v)      # 环境变量写关，文件写开也是关（环境变量优先）
+        for v in ("", "maybe"):
+            self.assertEqual(self.on(v), (False, False), v)            # 没设、认不出：看文件，没有文件按关
+
+    def test_file(self):
+        self.assertEqual(self.on(None, "开"), (True, True))
+        self.assertEqual(self.on(None, "关"), (False, False))
+        self.assertEqual(self.on(None, "随便"), (False, False))
+        self.assertEqual(self.on(None, None), (False, False))           # 没有开关文件：关
+        self.assertEqual(self.on("on", "关"), (True, True))             # 环境变量写开：只管这一次
+
+    def test_same_value_as_fd(self):
+        """组装程序（video3_storyboard.image_take_switch，video3_build.image_take_on 用它）和 fd（common.image_take_switch）
+        在各种环境变量 × 开关文件写法下读到同一个值。"""
+        for v in (None, "", "on", "off", "开", "关", "maybe"):
+            for fv in (None, "开", "关", "on", "x"):
+                a, b = self.on(v, fv)
+                self.assertEqual(a, b, (v, fv))
+
+    def test_repo_switch_file_matches(self):
+        """仓库里那份 fd_开关.json：两边读到的一样（不设环境变量）。"""
+        from orchestrator import common
+        env = dict(os.environ)
+        env.pop("FD_VIDEO_IMAGE_TAKE", None)
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(SB.image_take_switch()[0], common.image_take_switch()[0])
+        self.assertIn("配图收截图卡", json.loads((ROOT / "fd_开关.json").read_text(encoding="utf-8")))
+
+    def test_build_uses_switch(self):
+        src = BUILD.read_text(encoding="utf-8")
+        fn = re.search(r"\ndef image_take_on\(\):\n.*?\n\n", src, re.S).group(0)
+        self.assertIn("SB.image_take_switch()[0]", fn)                 # 组装程序不再自己读环境变量
+
+    def test_fingerprint_off_is_empty(self):
+        """第 14 步输入指纹：关着记空字符串（往期不因此重做），开了记"开"（一换开关第 14 步重做）。"""
+        from orchestrator import runner, steps
+        src = (ROOT / "pipeline" / "orchestrator" / "steps.py").read_text(encoding="utf-8")
+        self.assertIn('"=配图收截图卡=" + ("开" if image_take_switch()[0] else "")', src)
+        old = {"=卡片数值跟旁白=": ""}
+        self.assertEqual(runner.diff_inputs(old, {"=卡片数值跟旁白=": "", "=配图收截图卡=": ""}), [])
+        self.assertEqual(runner.diff_inputs(old, {"=卡片数值跟旁白=": "", "=配图收截图卡=": "开"}), ["=配图收截图卡="])
+        self.assertTrue(hasattr(steps, "image_take_switch"))
 
     def test_build_writes_key_only_when_on(self):
         src = BUILD.read_text(encoding="utf-8")

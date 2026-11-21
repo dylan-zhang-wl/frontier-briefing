@@ -18,7 +18,8 @@ from .common import (DONE, FAILED, SKIPPED, WAITING, PIPE, TOOLS, PROMPTS, PROFI
                      WEB_DRAFT, STORYBOARD, NARRATION, VIDEO_VOICE, CARDS, LINEUP, NO_PODCAST,
                      read_json, write_json, rel, fp_file, fp_dir, key_lines, tail, running_scripts, today_utc, hours_ago,
                      gemini_price_out, episode_title, iso, motion_switch, director_switch, narration_switch,
-                     zh_wrap_switch, excerpt_photo_switch, video_switch, bare_fix_switch, card_sync_switch)
+                     zh_wrap_switch, excerpt_photo_switch, video_switch, bare_fix_switch, card_sync_switch,
+                     image_take_switch)
 from .ledger import usage_new_spend, chunk_spend_since, mimo_tokens_since
 
 IMG_EXT = (".png", ".jpg", ".jpeg", ".webp")
@@ -1334,7 +1335,8 @@ class Video(Step):
                 "=摘录卡压图=" + ("" if excerpt_photo_switch()[0] else "关"),
                 # 11-21：两个默认关的开关反过来记——关着是空字符串（往期不重做），开了记"开"，一换开关第 14 步自动重做
                 "=空档补图=" + ("开" if bare_fix_switch()[0] else ""),
-                "=卡片数值跟旁白=" + ("开" if card_sync_switch()[0] else "")] + video_fp(c, self.key)    # 11-17：视频开关（做法同第 7 步）；11-15 加、同日用户定开：和整词换行同样做法，开着是空字符串（往期不重做）
+                "=卡片数值跟旁白=" + ("开" if card_sync_switch()[0] else ""),
+                "=配图收截图卡=" + ("开" if image_take_switch()[0] else "")] + video_fp(c, self.key)    # 11-17：视频开关（做法同第 7 步）；11-15 加、同日用户定开：和整词换行同样做法，开着是空字符串（往期不重做）
 
     def shots_plan(self, c):
         on, why = motion_switch()

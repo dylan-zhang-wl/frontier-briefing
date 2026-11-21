@@ -268,6 +268,9 @@ def excerpt_photo_switch():
 # site/tools/video3_storyboard.py 的 bare_fix_switch、card_sync_switch 是同一套规则，两边要一起改。
 BARE_FIX_KEY = "画面空档自动补图"
 CARD_SYNC_KEY = "卡片数值跟着旁白出"
+# 配图收截图卡（经验库第 92 件；11-21 接进 fd_开关.json，原来只认环境变量 FD_VIDEO_IMAGE_TAKE）：同一套做法，默认关。
+# site/tools/video3_storyboard.py 的 image_take_switch 是同一套规则，两边要一起改。
+IMAGE_TAKE_KEY = "配图收截图卡"
 
 
 def _switch_off_default(env_name, key):
@@ -295,6 +298,11 @@ def bare_fix_switch():
 def card_sync_switch():
     """返回 (开着没有, 从哪来的一句话)。默认关。"""
     return _switch_off_default("FD_CARD_SYNC", CARD_SYNC_KEY)
+
+
+def image_take_switch():
+    """配图收截图卡。返回 (开着没有, 从哪来的一句话)。默认关。"""
+    return _switch_off_default("FD_VIDEO_IMAGE_TAKE", IMAGE_TAKE_KEY)
 
 
 # ---------------------------------------------------------------- 视频开关（2026-11-17 加，feat/mimo-fallback 分支；第 10–17 步 feat/mimo-release 分支）

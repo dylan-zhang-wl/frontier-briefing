@@ -248,6 +248,8 @@ def excerpt_photo(issue, c, b, owner, warn, where):
 #   · 卡片数值跟着旁白出（FD_CARD_SYNC）：对比卡条尾的数跟着各自的条一起出，大数字、底注等旁白说到再出（card_cues）。
 BARE_FIX_KEY = "画面空档自动补图"
 CARD_SYNC_KEY = "卡片数值跟着旁白出"
+# 11-21 imagecard 那一路（经验库第 92 件）原来只认环境变量 FD_VIDEO_IMAGE_TAKE；同日接进 fd_开关.json，做法和上面两个一样（默认关）
+IMAGE_TAKE_KEY = "配图收截图卡"
 
 
 def _switch(env_name, key, default=False):
@@ -276,6 +278,11 @@ def bare_fix_switch():
 def card_sync_switch():
     """返回 (开着没有, 从哪来的一句话)。默认关。"""
     return _switch("FD_CARD_SYNC", CARD_SYNC_KEY)
+
+
+def image_take_switch():
+    """配图收截图卡（video3_build.image_take_on 用它）。返回 (开着没有, 从哪来的一句话)。默认关。"""
+    return _switch("FD_VIDEO_IMAGE_TAKE", IMAGE_TAKE_KEY)
 
 
 # 视频导演开关（2026-11-08 晚加；pipeline/orchestrator/common.py 的 director_switch 是同一套规则，两边要一起改）：

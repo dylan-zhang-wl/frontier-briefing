@@ -8,7 +8,8 @@ import sys
 from pathlib import Path
 
 from .common import (ROOT, PIPE, PY, VENV, CACHE, PLAYWRIGHT, PROFILE, TESTDIR, DEFAULT_LEDGER, SWITCH_FILE, tts_constants, read_json, rel,
-                     motion_switch, director_switch, zh_wrap_switch, excerpt_photo_switch, bare_fix_switch, card_sync_switch)
+                     motion_switch, director_switch, zh_wrap_switch, excerpt_photo_switch, bare_fix_switch, card_sync_switch,
+                     image_take_switch)
 from .ledger import Ledger
 
 OK, BAD, WARN = "✓ 好了", "✗ 缺了", "! 提醒"
@@ -265,6 +266,9 @@ class Doctor:
         con, cwhy = card_sync_switch()         # 11-21 加：卡片数值跟着旁白出（默认关）
         self.add(OK, "卡片数值跟着旁白出（开关）", "%s（%s）%s" % ("开" if con else "关", cwhy,
                                                      "：对比卡条尾的数跟着条出，大数字、底注等旁白说到" if con else "：卡片上的数随卡片一起出"))
+        ion, iwhy = image_take_switch()        # 11-21 加：配图收截图卡（原来只认环境变量 FD_VIDEO_IMAGE_TAKE）
+        self.add(OK, "配图收截图卡（开关）", "%s（%s）%s" % ("开" if ion else "关", iwhy,
+                                                "：配图卡说到时，前一张原文截图卡收起、配图立在它的位置" if ion else "：截图卡留到下一块或章末"))
         self.qc_switches()
 
     def qc_switches(self):
