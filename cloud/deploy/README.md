@@ -22,6 +22,8 @@
 | `/frontier/_enter` | 只收 POST：“凭口令”档时门页上的口令框提交到这里（11-10 加） |
 | `/frontier/podcast/<钥匙>/feed.xml` | 私有播客订阅源（11-19 加，默认没开）：钥匙对才回，三档都不用 Cookie；同一把钥匙下还有 `cover.jpg`、`<日期>.mp3`、`<日期>.jpg`、`<日期>.chapters.json`。见下面“播客订阅源” |
 | `/frontier/_podcast/…` | 上线包里的订阅源模板：谁直接来要都 404（站长也一样） |
+| `/frontier/_listen` | 站长的“耳听点选”页（11-21 加，默认没有条目）：只认站长 Cookie，别人 404。不带参数是最近 14 期的列表；`?date=<日期>` 是那一期的逐条点选页；`?export=json` 导出全部结果。见下面“耳听点选页” |
+| `/frontier/_listen/…` | 上线包里的点选页条目：谁直接来要都 404（站长也一样） |
 
 每期为什么不直接放在 `/frontier/2026-11-09/` 目录里：网页是一页，按 `?date=` 读 `issues/日期/issue.js`；页面里的字体、脚本都写的相对地址（如 `issues/2026-11-09/fonts/…`），换到下一层目录就全错位。跳转一下最省事，`site/` 一行不用改。
 
@@ -30,18 +32,20 @@
 | 文件 | 作用 |
 |---|---|
 | `wrangler.toml` | Worker 配置：名字、两条路由、不开 `*.workers.dev`、静态文件目录（占位 `__ASSETS_DIR__`，运行时替换）；访问统计数据库 D1 `frontier-visits`（绑定名 `VISITS`，11-10 加）；没有定时任务；机密变量两个，都不写在这个文件里：`GH_FEEDBACK_TOKEN`（读者反馈用，由 `feedback-setup.yml` 写入）、`STATS_KEY_HASH`（站长钥匙的指纹，由 `stats-setup.yml` 写入） |
-| `src/index.js` | 每个请求先过这里：只许 GET/HEAD（例外三个 POST：`/frontier/feedback` 收读者反馈，`/frontier/_enter`、`/frontier/_access` 是开放程度的）；站长钥匙 `?k=`；统计页、设置页的门；`/frontier` 跳 `/frontier/`；开放程度的门；目录给 `index.html`；加三个响应头；定浏览器缓存；音频按 Range 截段（见下）；不在 `/frontier` 下的一律 404 |
+| `src/index.js` | 每个请求先过这里：只许 GET/HEAD（例外四个 POST：`/frontier/feedback` 收读者反馈，`/frontier/_enter`、`/frontier/_access` 是开放程度的，`/frontier/_listen` 是耳听点选页的）；站长钥匙 `?k=`；统计页、设置页、耳听点选页的门；`/frontier` 跳 `/frontier/`；开放程度的门；目录给 `index.html`；加三个响应头；定浏览器缓存；音频按 Range 截段（见下）；不在 `/frontier` 下的一律 404 |
 | `src/access.js` | 开放程度（11-10 加）：读写档位和访问口令（D1 的 `site_settings` 表）、门页、凭口令进入、站长设置页 |
 | `src/visits.js` | 匿名访问统计（11-10 加）：判断要不要记、记哪些字段、写进 D1；顺手清 400 天以前的记录 |
 | `src/stats.js` | 站长的统计页 `/frontier/_visits`（SQL 汇总 → 一页 HTML；导出 CSV） |
-| `migrations/` | 数据库的表结构：`0001_visits.sql`（访问统计）、`0002_settings.sql`（开放程度，11-10 加）；`run_wrangler.py` 把它和 `src/` 一起复制到运行目录 |
+| `migrations/` | 数据库的表结构：`0001_visits.sql`（访问统计）、`0002_settings.sql`（开放程度，11-10 加）、`0003_listen.sql`（耳听点选页，11-21 加）；`run_wrangler.py` 把它和 `src/` 一起复制到运行目录 |
 | `tests/worker.test.js`、`package.json` | Worker 的本机测试：`cd cloud/deploy && node --test tests/worker.test.js`（Node 22.13 及以上，不用装任何东西；统计和开放程度的测试用 Node 自带的 SQLite 当假 D1，会打印一行“实验功能”的提示，不影响）。要整份文件一起跑：开放程度加上以后，“统计：不记的”“统计：数据库坏了”两条旧测试默认本实例已经读到过档位（由前面的测试读到），单独挑出来跑会失败 |
 | `assemble.py` | 做上线包：往期（往期存档）＋这一期（`测试版/<日期>/10_网页v3/issues/<日期>/`）＋网页外壳（仓库里现在的 `site/v3`、`site/vendor`）→ `<上线包>/frontier/…`；写往期目录 `issues/index.js` 和往期页 `past/index.html`；检查文件数、单个文件大小、不引用外网、noindex |
 | `archive.py` | 往期存档：已发布的每一期存在本仓库的 `site-archive` 分支；`pull` 取下来，`push` 存这一期 |
 | `run_wrangler.py` | 运行 wrangler 的入口：把本目录复制到仓库以外的运行目录、填上上线包位置；发布前再检查一遍上线包 |
-| `tests/test_deploy.py` | `assemble.py`、`archive.py`、`podcast_feed.py` 的单元测试（存档用本机的假远端，不联网） |
+| `tests/test_deploy.py` | `assemble.py`、`archive.py`、`podcast_feed.py`、`listen_items.py` 的单元测试（存档用本机的假远端，不联网） |
 | `podcast_feed.py` | 私有播客订阅源（11-19 加）：开关开着时由 `assemble.py` 调用，在上线包里做 `frontier/_podcast/` |
 | `podcast/cover-3000.jpg`、`podcast/make_cover.py` | 节目封面（3000×3000，程序画的占位图，待定）和画它的小程序（要 Pillow） |
+| `listen_items.py` | 耳听点选页的条目（11-21 加）：开关开着时由 `assemble.py` 调用做 `frontier/_listen/`，由 `archive.py push` 调用把这一期原始的“请你耳听”存进往期存档 `listen/<日期>.json` |
+| `src/listen.js`、`migrations/0003_listen.sql` | 耳听点选页本身（列表、逐条页、存结果、导出）和存结果的表 `listen_votes`（11-21 加） |
 
 浏览器缓存分两类：网页（html、目录）和往期目录 `issues/index.js` 每次向服务器核对（没变时只回“没变”，很快）；每期的音频、图片、字体缓存 7 天。其余（每期的 `issue.js`、程序 css/js、`vendor/`）10 分钟——文件名不带版本号，缓存太久会“新页面配旧程序”。同一天重新发布、换了音频的话，已经打开过的浏览器最多 7 天内可能还听到旧的。
 
@@ -51,7 +55,7 @@
 
 ## 读者反馈：POST 例外之一（11-10 加）
 
-除了 GET、HEAD，Worker 只多收三种请求：**POST `/frontier/feedback`**（页面底部“往期 · 反馈”点开的反馈框提交到这里），以及开放程度的 POST `/frontier/_enter`、`/frontier/_access`（见下面“开放程度”）。别的地址的 POST、PUT、DELETE 等照旧回 405。网站不是公开档时，不放行的人提交反馈回 403 `{"ok":false,"error":"网站暂未开放"}`，不转交。
+除了 GET、HEAD，Worker 只多收四种请求：**POST `/frontier/feedback`**（页面底部“往期 · 反馈”点开的反馈框提交到这里），开放程度的 POST `/frontier/_enter`、`/frontier/_access`（见下面“开放程度”），以及耳听点选页的 POST `/frontier/_listen`（11-21 加，只认站长，见下面“耳听点选页”）。别的地址的 POST、PUT、DELETE 等照旧回 405。网站不是公开档时，不放行的人提交反馈回 403 `{"ok":false,"error":"网站暂未开放"}`，不转交。
 
 - 校验：`Origin` 必须是 `https://wenlongzhang.com`（否则 403）；只收 `application/json`（否则 415）、不超过 8 KB（否则 413）；期号 `YYYY-MM-DD`、“哪里不对”必填且最多 1000 字、称呼最多 40 字、位置最多 80 字（否则 400，回中英文说明）；蜜罐栏 `website` 有值就当机器人，回 202 但不转交。
 - 限流：按 `CF-Connecting-IP`，同一 Worker 实例内存里 10 分钟最多 5 次（否则 429，带 `Retry-After: 600`）。
@@ -232,6 +236,40 @@ python3 cloud/deploy/run_wrangler.py --assets $P --run-dir $R dev --local --ip 1
 - 请求是 `http://`（不是 https）时钥匙对也回 404，不在明文连接上给内容。本机 `wrangler dev` 试的时候要加 `--local-protocol https`，curl 加 `-k`。
 
 **本机试过**（11-19，`wrangler dev --local --local-protocol https`，本机 D1、本机专用的假站长钥匙；做法同上面“本机模拟”，同样要 `_dev_entry.js` 的临时绕过；上线包是往期存档里两期加开关做的）：没开时钥匙路径 404 → 设置页点生成（303）、页面上出现订阅地址 → `feed.xml` 200、`application/rss+xml`、`private, no-cache`、占位全换成带钥匙的地址、XML 能解析 → mp3 整段 200（大小和文件一样）、`Range` 206 且内容逐字节相同、HEAD 200、超出 416 → 封面、单集封面、章节 200 → `_podcast` 和它的大小写、`%5F`、双斜杠、`%2F` 变体匿名和站长都 404 → 白名单外的写法 404 → 切到“只有我”：匿名首页和网页 mp3 都 403，钥匙路径照常 200／206 → 换新：旧钥匙 404、新钥匙 200 → 关闭：404；本机数据库里只有 `feed_nonce`（关闭后是空值）和 `access_mode` 两行。另外单独看了一下静态文件本身（前面不挡）怎么处理变体：大小写不同 404，`%5F`、双斜杠、`%2F` 回 307 跳到正常写法，`..` 直接解析成正常写法——所以真正挡住模板的是 Worker 前面那一道。线上、真机都还没试。
+
+## 耳听点选页（11-21 加）
+
+**是什么**：每期审片列出的“请你耳听”（配音可能念错的地方），在一个只有你能打开的页面上逐条放给你听：每处一张卡，卡上是位置、原稿那句、转写成什么、审片的判断（【事实】的排最前），点“▶”只放那几秒（前 2 秒到后 4 秒，放完自动停，可以重播），听完点“念对了／念错了／没听出来”，可以补一句备注。点的结果自动存进数据库，周六维护直接读，不用你再打字。手机优先：按钮至少 48px 高，一处一张卡。
+
+**两头的开关**（和播客订阅源一样用环境变量，不用命令行参数）：
+- 生成：私有仓库“放行发布”做上线包、存往期、发邮件三步写死 `FD_LISTEN_PAGE: "on"`。没设这个变量时上线包、往期存档、邮件都和以前逐字节一样。
+  - `assemble.py` 调 `listen_items.py`，给上线包里的每一期做 `frontier/_listen/<日期>.json`，再写一份目录 `frontier/_listen/index.json`。这一期的条目从这一期的 `审片结论.json` 取；往期的从往期存档的 `listen/<日期>.json` 取。存的是原始条目、每次发布现算，以后改了时刻的认法，往期也跟着用新认法。出任何错只是这次没有点选页的条目，运行摘要里多一行原因，上线包检查和退出码都不受影响。
+  - `archive.py push`（发布成功以后）把这一期 `审片结论.json` 里原样的“请你耳听”（只留位置、说明、判断、依据、关乎事实五栏）存进往期存档 `listen/<日期>.json`。这一段出任何错只打印一行，网页文件照常存进往期存档。
+  - `notify.py`：这一期发布了、又有“请你耳听”时，“放行”那封信里多一行“逐条听、点对错：https://wenlongzhang.com/frontier/_listen?date=<日期>（只有站长能打开）”。正常放行不发信的日子照旧不发。
+- 页面：Worker 认 `/frontier/_listen` 这一个写法、只认站长 Cookie（和 `/frontier/_access` 同一套判断）。路径的宽松写法（反复解码、改小写、`\` 换 `/`、并掉连续的 `/`）里含 `_listen` 的别的写法（上线包里的条目文件、大小写、`%5F`、双斜杠、多一层目录），谁来都 404，站长也一样，不去取静态文件（照 `_podcast` 的挡法）。
+
+**每条怎么算**（`listen_items.py` 文件头有全部细节）：
+- 编号：日期、位置、说明三样算出来的短指纹（sha256 前 10 位），同一期里写重了的加 `-2`。
+- 放哪段音频：播客用网页上那份 `issues/<日期>/audio/podcast.mp3`（审片的播客时刻按它算）。视频用网页上的视频旁白 `audio/video3.mp3`：审片的视频时刻按 `11_视频v3/预览.mp4` 算，预览.mp4 的声音就是这个文件从第 0 秒合进去的（`site/tools/video3_record.mjs` 第 81 行），网页上那份是同一个文件拷过去的（`site/tools/build_v3.py` 7c 节）。11-04、11-06 两期拿预览.mp4 的声音和网页那份比过，偏移 0 秒。
+- 一条可能有好几处（“播客 11:29（另 11:55、12:00）”“视频 47 秒；播客 7:07”）：每处一个“▶”按钮，投票仍按一条算，备注里可以写哪一处错。
+- 起止：一个时刻放前 2 秒到后 4 秒；一段区间放起点前 2 秒到终点后 4 秒；写着“一带、前后、左右”的放宽到前 4 后 8 秒；写着“起”的往后放 20 秒；“3:5x”当 3:50–3:59。页面底下的条可以勾“前后多放 5 秒”。审片写的时刻和真正念到那里的时刻可能差两三秒，没有逐处核过。
+- 括号里只认真时刻：“（另 11:55）”算，“（共 6 处）”“（第 41 轮）”不算。认不出时刻的（“其余”“播客多处”）照样列出来，只显示文字，提示去播客或视频里听。
+- 排序：“多半真念错”“拿不准”的在前，其中【事实】的排最前；“多半转写听错”只有一两个时刻的接着放；“多半转写听错”的成批条目（区间 10 秒以上、4 个时刻以上、写着“多处、起、等”、或者认不出时刻）折起来放最后，写“可不听”。
+
+**结果存在哪**：D1 数据库 `frontier-visits`（和访问统计、开放程度同一个）的 `listen_votes` 表：日期、条目编号、结果（`right` 念对了／`wrong` 念错了／`unsure` 没听出来）、备注、时间。一条一行，改了再点就覆盖，以最后一次为准。第一次点之前程序自己建表；想先建好（要你同意，会改线上数据库）：`python3 cloud/deploy/run_wrangler.py d1 migrations apply frontier-visits --remote`（执行 `migrations/0003_listen.sql`）。数据库出错时页面照样显示条目，只是没有已选的结果；点了回“没存上”。
+
+**周六维护怎么读**：列表页底部“导出全部结果（JSON）”，或者打开 `https://wenlongzhang.com/frontier/_listen?export=json`，下载一份 `listen-votes-<日期>.json`。每条带日期、编号、第几处、位置、原稿、转写成、说明、判断、关乎事实、依据、你点的结果、备注、时间（UTC）。现在发布用的 Cloudflare 令牌（Edit Cloudflare Workers 模板）不含 D1 权限，云端流程读不了这张表，所以还没做成每天自动提交回私有仓库；要自动，见交接记录里的几条路，都要你点头。
+
+**你怎么用**：
+1. 用你已经是站长的那台设备（手机或电脑）打开邮件里那条“逐条听、点对错”的链接，或者打开 https://wenlongzhang.com/frontier/_listen 选一期。新设备先在网址后面加一次 `?k=<钥匙>`（同统计页），比如 `https://wenlongzhang.com/frontier/_listen?k=<钥匙>`，会跳回不带钥匙的同一页。
+2. 一张卡一张卡往下：点“▶”听，听完点三个按钮之一。点错了再点另一个就行。
+3. 灰色折起来的那一组“多半是转写听错”可以不听。
+
+**要知道**：
+- 不计入访问统计；你放音频也不算“开始听”。页面不引用任何外网资源，不缓存，不许别的网站嵌进框里。
+- 列表只显示存过原始条目的期：开关打开以前发布的期不在里面（往期存档里没有它们的 `listen/<日期>.json`）。要补，见交接记录。
+- 本机 `wrangler dev`（http://127.0.0.1）上用浏览器点按钮会回 403（Origin 不是 `https://wenlongzhang.com`，同设置页）；本机试的时候在运行目录的 `_dev_entry.js` 里改写请求的 Origin，或者用 curl 带上 `Origin: https://wenlongzhang.com`。
+- iPhone 真机还没试：Safari 要在点击里直接开始放，程序是先 `play()`、等音频的元数据到了再跳到起点（照网页播客的做法）。
 
 ## 往期从哪来（存放）
 
