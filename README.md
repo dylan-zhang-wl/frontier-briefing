@@ -177,6 +177,7 @@
 - 只管一次的话，在命令前加环境变量，比文件优先：`FD_MOTION=off ./fd run …`、`FD_DIRECTOR=off ./fd run …`、`FD_DIRECTOR_NARRATION=off ./fd run …`、`FD_VIDEO_ZH_WRAP=off ./fd run …`、`FD_EXCERPT_PHOTO=off ./fd run …`、`FD_QC_NUMBERS=off ./fd run …`、`FD_QC_ASR2=off ./fd run …`、`FD_VIDEO=off ./fd run …`；11-21 加的两个默认关，要开就写 `FD_BARE_FIX=on`、`FD_CARD_SYNC=on`。
 - 视频配图卡收起前一张截图卡（11-21 尝试版，默认关，没有开关文件那一项）：命令前写 `FD_VIDEO_IMAGE_TAKE=on` 才开；配图卡说到时截图卡收起、配图立在截图卡的位置（11-16 英伟达章、DeepSeek 章那种）。说明见 `site/tools/README_video3.md`"配图＋动效结合"一节；等你看了并排图再定要不要常开。
 - 网页"听这一段"怎么定跳点，有三处只用环境变量管（默认开，写 `off` 退回原来的做法）：`FD_LISTEN_SENTENCE`（周日对谈从一轮半中间那句跳）、`FD_LISTEN_HEADLINE`（热点按内容找讲它的那一章）、`FD_LISTEN_SCORE`（11-16 加：往前找这一条开讲的那一段，打分时数字统一写法、英文一个词算一个）；第 16 步转写核对查不查跳晚是 `FD_LISTEN_LATE`。
+- 字母数字中间的冒号（D:5、10:30、1:1）当一个整体（11-21 加，只用环境变量 `FD_KEEP_TOKEN` 管，默认开，写 `off` 退回原来的做法）：视频字幕不在这里切成两条（`video_align.py`），网页和视频换行不在这类冒号后折（`zh_breaks.py`）。全角冒号只认两边都是数字的（3：2）。
 
 **测试**（不花钱）：
 ```bash

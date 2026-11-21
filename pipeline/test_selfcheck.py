@@ -146,5 +146,93 @@ class ReportStep(unittest.TestCase):
         self.assertIn("自检.md 末尾没补上", w[0])
 
 
+# 2026-11-21（11-16、11-17、11-18 审片清单第 6 项）："听这一段"不再一律写"正常"
+LISTEN_OUT = '听这一段按钮数： 14\n[{"button": "听 13 分钟", "audio": [{"t": 2, "paused": false}]}, ' \
+             '{"button": "听这一段0:45", "audio": [{"t": 47.6, "paused": false}]}]'
+WEB_WARN_1116 = ["注意：“听这一段” E002 跳到 0:45（热点一），但整集里最像它的话在“热点二” 3:20；请核对",
+                 "注意：“听这一段” E004 跳到 3:20（热点二），但整集里最像它的话在“热点三” 5:24；请核对",
+                 "注意：“听这一段” E001 跳到 5:14（热点三），但整集里最像它的话在“热点一” 2:50；请核对",
+                 "注意：别的提醒，不算"]
+
+
+class ListenSaid(unittest.TestCase):
+    def test_no_podcast(self):
+        self.assertEqual(steps.listen_said({"听这一段": "没有播客，跳过"}, "按钮数：0"), "'听这一段'：没有播客，不查")
+
+    def test_only_two_clicked(self):            # 转写核对没跑（旧状态、没有这一栏）：只说点了前几个
+        s = steps.listen_said({"听这一段": [{}, {}]}, LISTEN_OUT)
+        self.assertEqual(s, "'听这一段'点了前 2 个能从对的时间放（共 14 个）")
+        self.assertNotIn("正常", s)
+
+    def test_late_and_early(self):              # 11-17 那样：4 条跳晚
+        res = {"听这一段": [{}, {}], "听这一段转写核对": {"E016": "对", "E178": "对", "E013": "对", "E051": "对", "E050": "对", "E006": "跳早了"},
+               "听这一段可能跳晚": ["E016", "E178", "E013", "E051"], "听这一段可能跳早": ["E006"]}
+        s = steps.listen_said(res, LISTEN_OUT)
+        self.assertIn("转写核对 6 条：可能跳晚 4 条（E016、E178、E013、E051），可能跳早 1 条（E006），请耳听", s)
+
+    def test_clean_and_not_run(self):
+        self.assertIn("转写核对 3 条没听出跳早、跳晚", steps.listen_said({"听这一段": [{}], "听这一段转写核对": {"a": "对", "b": "对", "c": "对"}}, ""))
+        self.assertTrue(steps.listen_said({"听这一段": [{}], "听这一段转写核对": "没跑成"}, "").endswith("；转写核对没跑成"))
+        self.assertIn("转写核对跳过（没有人声版）", steps.listen_said({"听这一段": [{}], "听这一段转写核对": "没有人声版"}, ""))
+
+    def test_selfcheck_takes_real_accept_msg(self):     # 自检.md 那一节照验收的话写，不会再出现"正常"
+        res = {"听这一段": [{}, {}], "听这一段转写核对": {"E016": "对"}, "听这一段可能跳晚": ["E016"]}
+        st = dict(STEPS_1109, accept={"状态": "做完", "说明": "三种视图无报错、不横滚、不缺字；上标不掉行；" + steps.listen_said(res, LISTEN_OUT),
+                                      "提醒": ["'听这一段' E016 可能跳晚了：……"]})
+        sec = SC.build(Path("/无"), st, {}, {}, [], "t")
+        self.assertIn("可能跳晚 1 条（E016）", sec)
+        self.assertNotIn("'听这一段'正常", sec)
+        self.assertIn("；提醒 1 条（见 00_调度报告.md 第 16 步）", sec)
+
+
+class ListenLine(unittest.TestCase):
+    def test_web2_warnings_1116(self):          # 11-16：第 15 步报了三条头条串位的"请核对"，自检要带上
+        st = dict(STEPS_1109, web2={"状态": "做完", "说明": "网页带视频", "提醒": WEB_WARN_1116})
+        sec = SC.build(Path("/无"), st, {}, {}, [], "t")
+        self.assertIn("- '听这一段'：第 15 步组装网页时报了 3 条请核对（E002、E004、E001），验收没逐条核，见 00_调度报告.md 第 15 步", sec)
+
+    def test_falls_back_to_step13_and_silent_when_none(self):
+        st = {k: v for k, v in dict(STEPS_1109, web={"状态": "做完", "说明": "网页", "提醒": WEB_WARN_1116[:1]}).items() if k != "web2"}
+        self.assertIn("第 13 步组装网页时报了 1 条请核对（E002）", SC.listen_line(st))
+        st2 = dict(st, web2={"状态": "做完", "说明": "网页带视频", "提醒": []})      # 最后那一步没报：不写
+        self.assertEqual(SC.listen_line(st2), "")
+        self.assertNotIn("'听这一段'：", SC.build(Path("/无"), STEPS_1109, {}, {}, [], "t"))
+
+
+class AcceptListen(unittest.TestCase):
+    """第 16 步真走一遍（假的命令输出）：转写核对报了跳晚，验收那句话、验收.json 都照实写。"""
+
+    def test_accept_msg_follows_listen_text(self):
+        import os
+        from unittest import mock
+        from orchestrator import common
+        with tempfile.TemporaryDirectory() as t:
+            d = Path(t) / "2026-11-17"
+            (d / "10_网页v3").mkdir(parents=True)
+            (d / "logs").mkdir()
+            (d / "10_网页v3" / "index.html").write_text("<html></html>", encoding="utf-8")
+            (d / "10_网页v3" / "自检报告.json").write_text(json.dumps({"首屏": {"errors": [], "overflowX": 0, "totalKB": 900}}), encoding="utf-8")
+            jt = {"窗口秒": 20, "各条": {"E016": {"判断": "对", "跳晚": True, "跳点秒": 418.3, "跳点前在讲这一条（秒）": 14, "这一条约从（跳点前几秒）": 19},
+                                       "E050": {"判断": "对"}}}
+
+            def run(step, cmd, label="", timeout=None, env=None):
+                if label == "听这一段转写核对":
+                    (d / "logs" / "听这一段_转写核对.json").write_text(json.dumps(jt, ensure_ascii=False), encoding="utf-8")
+                    return 0, ""
+                return 0, {"截图自检": "", "上标": '390 {"lonely": []}', "听这一段": LISTEN_OUT}[label]
+            c = SimpleNamespace(issue=d, p=lambda x: d / x, env={}, run=run, py=lambda *a: ["py"] + [str(x) for x in a],
+                                state=SimpleNamespace(step=lambda k: {"附加": {"播客": "带音效"}} if k == "web" else None))
+            with mock.patch.object(common, "SWITCH_FILE", Path(t) / "没有.json"), mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("FD_VIDEO", None)
+                r = steps.Accept().run(c, "run")
+            res = json.loads((d / "logs" / "验收.json").read_text(encoding="utf-8"))
+        self.assertEqual(r.status, steps.DONE)
+        self.assertEqual(r.msg, "三种视图无报错、不横滚、不缺字；上标不掉行；'听这一段'点了前 2 个能从对的时间放（共 14 个）；"
+                                "转写核对 2 条：可能跳晚 1 条（E016），请耳听")
+        self.assertEqual(res["听这一段可能跳晚"], ["E016"])
+        self.assertEqual(res["听这一段可能跳早"], [])
+        self.assertTrue(any("E016 可能跳晚了" in w for w in r.warns))
+
+
 if __name__ == "__main__":
     unittest.main()

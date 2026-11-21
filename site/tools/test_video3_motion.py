@@ -795,6 +795,35 @@ class RendererFunctions(unittest.TestCase):
         self.assertIn('class="n v3n"', out[5])
         self.assertIn('class="w"', out[6])
 
+    def test_counter_keeps_label_decimals(self):
+        """11-21（11-17 审片第 51 项）：柱子分镜写 value 81.0、label "81.0%"，81.0 进了 JS 就是 81，按 value 算的小数位是 0，
+        原来落定成"81%"。11-08 渲染修复开着（FX）时照标签的写法：滚动按标签的小数位，滚完是"81.0"；关着和原来一样；
+        标签小数位不多于按 value 算的、数值对不上、带千位逗号（data-f）的都照旧；正负号照原来不管。"""
+        js = JS.read_text(encoding="utf-8")
+        helpers = "".join(re.search(r"\n  var %s = function \(.*?\n" % k, js).group(0) for k in ("clamp", "sat", "lerp", "out3"))
+        fn = re.search(r"\n  W\.counter = function \(lb, sel, a, b, at, dur, dec, fin\) \{.*?\n  \};\n", js, re.S).group(0)
+        tick = re.search(r"\n    // 数字滚动\n    \(this\.counters \|\| \[\]\)\.forEach\(function \(c\) \{.*?\n    \}\);\n", js, re.S).group(0)
+        src = helpers + "var W = {}, FX;" + fn + (
+            "function span(attrs) { return { textContent: '0', getAttribute: function (k) { return attrs[k] == null ? null : attrs[k]; } }; }"
+            "function run(fx, attrs, b, dec, fin) { FX = fx; var o = {}, s = span(attrs); W.counter.call(o, { el: { querySelector: function () { return s; } } }, 'x', 0, b, 0, 1, dec, fin);"
+            "  var seen = []; [0.5, 2].forEach(function (t) { (function () {" + tick + "}).call(o); seen.push(s.textContent); }); return seen; }"
+            "console.log(JSON.stringify(["
+            " run(true, {'data-c': '81.0'}, 81, 0), run(false, {'data-c': '81.0'}, 81, 0),"
+            " run(true, {'data-c': '90.5'}, 90.5, 1), run(true, {'data-c': '81'}, 81, 0),"
+            " run(true, {'data-c': '81.0'}, 80, 0), run(true, {'data-c': '-4.30'}, 4.3, 1),"
+            " run(true, {'data-c': '1318', 'data-f': '1,318'}, 1318, 0), run(true, {'data-c': '3200'}, 3200, 0, '3200')]));")
+        out = node_eval(src)
+        self.assertEqual(out[0][1], "81.0")                     # 11-17 月之暗面柱：落定照标签
+        self.assertRegex(out[0][0], r"^\d+\.\d$")              # 滚动中也是一位小数（和旁边 90.5 那根一样）
+        self.assertEqual(out[1], [out[1][0], "81"])             # 开关关着：和原来一样
+        self.assertRegex(out[1][0], r"^\d+$")
+        self.assertEqual(out[2][1], "90.5")                     # 小数位本来就对的不变
+        self.assertEqual(out[3][1], "81")                       # 标签没写小数的不加
+        self.assertEqual(out[4][1], "80")                       # 数值对不上的不动（照按 value 算的）
+        self.assertEqual(out[5][1], "4.30")                     # 负号照原来不显示，只补小数位
+        self.assertEqual(out[6][1], "1,318")                    # 千位逗号（data-f）照旧
+        self.assertEqual(out[7][1], "3200")                     # 传了 fin 的照旧
+
 
 def plain(x):
     """11-09 晚：中文整词换行开着时，画面文字的 textContent 里多了换行点（U+200B、U+2060）、数字和单位之间是不换行空格；

@@ -2958,6 +2958,12 @@
     var c = { el: span, a: a, b: b, at: at, dur: dur, dec: dec, _s: '' };
     if (fin != null) { c.fin = String(fin); c.comma = c.fin.indexOf(',') >= 0; }    // 动效尝试：滚完显示原样的字（3200、1,200、80.52）
     else if (FX && span.getAttribute('data-f')) { c.fin = span.getAttribute('data-f'); c.comma = true; }     // 11-08：emph 记下的原样数字（带千位逗号）
+    else if (FX) {
+      // 11-21：标签写的小数位比按 value 算的多时（分镜写 value 81.0、label "81.0%"，进了 JS 81.0 就是 81，原来落定成"81%"），
+      // 滚动和落定都照标签的写法：小数位取标签的，滚完显示标签上那个数（不带正负号，正负号照原来那样不管）。数值对不上不动
+      var w = String(span.getAttribute('data-c') || '').replace(/^[−\-]/, ''), wd = (w.split('.')[1] || '').length;
+      if (wd > (dec || 0) && isFinite(+w) && Math.abs(+w - Math.abs(b)) < 1e-9) { c.dec = wd; c.fin = w; }
+    }
     (this.counters || (this.counters = [])).push(c);
   };
 
