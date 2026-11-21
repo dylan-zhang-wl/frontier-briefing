@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from .common import (ROOT, PIPE, PY, VENV, CACHE, PLAYWRIGHT, PROFILE, TESTDIR, DEFAULT_LEDGER, SWITCH_FILE, tts_constants, read_json, rel,
-                     motion_switch, director_switch, zh_wrap_switch, excerpt_photo_switch)
+                     motion_switch, director_switch, zh_wrap_switch, excerpt_photo_switch, bare_fix_switch, card_sync_switch)
 from .ledger import Ledger
 
 OK, BAD, WARN = "✓ 好了", "✗ 缺了", "! 提醒"
@@ -259,6 +259,12 @@ class Doctor:
         eon, ewhy = excerpt_photo_switch()     # 11-15 加：摘录卡压在章图上（用户定开）
         self.add(OK, "摘录卡压在章图上（开关）", "%s（%s）%s" % ("开" if eon else "关", ewhy,
                                                     "：截图退回摘录时，摘录卡后面立这一章的配图" if eon else "：截图退回摘录时只有白卡"))
+        bon, bwhy = bare_fix_switch()          # 11-21 加：画面空档自动补图（默认关）
+        self.add(OK, "画面空档自动补图（开关）", "%s（%s）%s" % ("开" if bon else "关", bwhy,
+                                                    "：白卡期间垫图、分岔路的图提到章首，补不了的交给导演" if bon else "：空档只提醒"))
+        con, cwhy = card_sync_switch()         # 11-21 加：卡片数值跟着旁白出（默认关）
+        self.add(OK, "卡片数值跟着旁白出（开关）", "%s（%s）%s" % ("开" if con else "关", cwhy,
+                                                     "：对比卡条尾的数跟着条出，大数字、底注等旁白说到" if con else "：卡片上的数随卡片一起出"))
         self.qc_switches()
 
     def qc_switches(self):

@@ -523,6 +523,28 @@ def align(issue, vmp3, marks, dur, sb):
     return al, T, titles, narr
 
 
+def post_align(issue, sb, T, marks, al):
+    """对齐以后、组装数据以前（11-21 加，两个开关都默认关；关着时什么都不做，视频和加开关以前逐像素一样）：
+      · 卡片数值跟着旁白出（SB.card_cues）：对比卡没写触发词的条、大数字、底注按旁白里说到的地方补时刻；
+      · 画面空档自动补图（SB.fix_bare）：按"画面上有没有图"量空档，白卡期间垫上一张图、分岔路章把路尽头的图提到画路的时候。
+    改的是内存里的 sb 和 T（分镜文件不动）。返回 {"cardsync": [说明…], "barefix": [说明…]}（开关关着的那一项没有）；
+    说明只印进第 14 步日志，数据里只写 cardsync: true（build）。"""
+    out = {}
+    if SB.card_sync_switch()[0]:
+        notes = SB.card_cues(sb, T, marks, al)
+        say("  卡片数值跟着旁白出：开（%s）%s" % (SB.card_sync_switch()[1], "，补了 %d 处时刻" % len(notes) if notes else ""))
+        for n in notes:
+            say("    " + n)
+        out["cardsync"] = notes
+    if SB.bare_fix_switch()[0]:
+        notes = SB.fix_bare(sb, T, marks, lambda name: SB.find_image(issue, name) is not None)
+        say("  画面空档自动补图：开（%s）%s" % (SB.bare_fix_switch()[1], "，补了 %d 处" % len(notes) if notes else "，没有要补的"))
+        for n in notes:
+            say("    " + n)
+        out["barefix"] = notes
+    return out
+
+
 # ---------------------------------------------------------------- 4. 分镜：读入、校验、核对事实（规则在 site/tools/video3_storyboard.py）
 def spoken_sha(issue):
     """配音用的念法的指纹：分镜里的旁白改了，这个就变（据此决定要不要重配）。"""
@@ -830,7 +852,7 @@ def subset_fonts(out, title_text, body_text, latin_text):
 
 
 # ---------------------------------------------------------------- 8. 组装
-def build(issue, mp3, marks, dur, al, T, titles, narr, sb, cards, facts, pl=None, meas=None):
+def build(issue, mp3, marks, dur, al, T, titles, narr, sb, cards, facts, pl=None, meas=None, sync=None):
     clusters = SB.clusters(sb)
     out = issue / OUT_DIR
     out.mkdir(exist_ok=True)
@@ -980,6 +1002,10 @@ def build(issue, mp3, marks, dur, al, T, titles, narr, sb, cards, facts, pl=None
         say(("  " if tbl else "  提醒：") + msg)
     else:
         say("  中文整词换行：开关关着（%s），不加" % zwhy)
+    # 11-21：卡片数值跟着旁白出（video3.js 读 cardsync，只写 true；补了哪些时刻、垫了哪些图只记在第 14 步日志，不进数据）。
+    # 开关关着时不写这个键
+    if (sync or {}).get("cardsync") is not None:
+        data["cardsync"] = True
     js = "/* 视频 v3 场景数据 · %s · 由 site/tools/video3_build.py 生成，请勿手改 */\nwindow.FD_VIDEO3 = %s;\n" % (
         issue.name, json.dumps(data, ensure_ascii=False, separators=(",", ":")))
     (out / "data.js").write_text(js, encoding="utf-8")
@@ -1222,6 +1248,7 @@ def main(argv=None):
     check_length(sb, rules, actual=dur)      # 配完音按实际时长再查一遍
     al, T, titles, narr = align(issue, vmp3, marks, dur, sb)
     say("对齐：", json.dumps(al["accuracy"], ensure_ascii=False))
+    sync = post_align(issue, sb, T, marks, al)         # 11-21：两个开关（默认关）；关着时什么都不做
     for w in SB.check_gaps(sb, T, marks):
         say("  提醒：" + w)
     for m in marks:
@@ -1231,7 +1258,7 @@ def main(argv=None):
             if not k.endswith(".end"):
                 say("  %6.2f  %s" % (T[k], k))
         return 0
-    build(issue, mp3, marks, dur, al, T, titles, narr, sb, cards, facts, pl, meas)
+    build(issue, mp3, marks, dur, al, T, titles, narr, sb, cards, facts, pl, meas, sync=sync)
     return 0
 
 

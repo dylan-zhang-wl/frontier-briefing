@@ -18,7 +18,7 @@ from .common import (DONE, FAILED, SKIPPED, WAITING, PIPE, TOOLS, PROMPTS, PROFI
                      WEB_DRAFT, STORYBOARD, NARRATION, VIDEO_VOICE, CARDS, LINEUP, NO_PODCAST,
                      read_json, write_json, rel, fp_file, fp_dir, key_lines, tail, running_scripts, today_utc, hours_ago,
                      gemini_price_out, episode_title, iso, motion_switch, director_switch, narration_switch,
-                     zh_wrap_switch, excerpt_photo_switch, video_switch)
+                     zh_wrap_switch, excerpt_photo_switch, video_switch, bare_fix_switch, card_sync_switch)
 from .ledger import usage_new_spend, chunk_spend_since, mimo_tokens_since
 
 IMG_EXT = (".png", ".jpg", ".jpeg", ".webp")
@@ -1331,7 +1331,10 @@ class Video(Step):
                 "=视频导演=" + ("" if director_switch()[0] else "关"),
                 "=导演旁白=" + ("" if narration_switch()[0] else "关"),       # 11-09：视频旁白归导演开关，同样做法
                 "=中文整词换行=" + ("" if zh_wrap_switch()[0] else "关"),     # 11-09 晚：视频中文整词换行开关，同样做法
-                "=摘录卡压图=" + ("" if excerpt_photo_switch()[0] else "关")] + video_fp(c, self.key)    # 11-17：视频开关（做法同第 7 步）；11-15 加、同日用户定开：和整词换行同样做法，开着是空字符串（往期不重做）
+                "=摘录卡压图=" + ("" if excerpt_photo_switch()[0] else "关"),
+                # 11-21：两个默认关的开关反过来记——关着是空字符串（往期不重做），开了记"开"，一换开关第 14 步自动重做
+                "=空档补图=" + ("开" if bare_fix_switch()[0] else ""),
+                "=卡片数值跟旁白=" + ("开" if card_sync_switch()[0] else "")] + video_fp(c, self.key)    # 11-17：视频开关（做法同第 7 步）；11-15 加、同日用户定开：和整词换行同样做法，开着是空字符串（往期不重做）
 
     def shots_plan(self, c):
         on, why = motion_switch()
@@ -1580,8 +1583,10 @@ class Video(Step):
         dmsg, dwarns, dextra = self.director(c)          # 11-08 晚：老路组装成了再请导演；失败、超时都留着老路那一版
         sextra = dict(sextra, **dextra)
         # 组装程序对每一处退回摘录也会提醒一遍，和上面截图的结果重复，不再列（截图结果在 06_配图/原文截图/本期截图.json）
-        warns = swarns + [x.strip() for x in out.splitlines() if x.strip().startswith("提醒")
-                          and not (sextra.get("原文截图") and re.search(r"原句摘录|退回 source_excerpt", x))][:6]
+        # 11-21：开关"画面空档自动补图"开着时，自动补不了的空档、章首没主角（带"自动补不了"那几行）排在前面，免得被前 6 条挤掉；关着时没有这种行
+        bare = [x.strip() for x in out.splitlines() if x.strip().startswith("提醒") and "自动补不了" in x][:3]
+        warns = swarns + bare + [x.strip() for x in out.splitlines() if x.strip().startswith("提醒") and x.strip() not in bare
+                                 and not (sextra.get("原文截图") and re.search(r"原句摘录|退回 source_excerpt", x))][:6]
         media = read_json(c.p("11_视频v3/video3_media.json"), {}) or {}
         dur = float(media.get("duration") or 0)
         warns += dwarns
