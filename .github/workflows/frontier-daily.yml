@@ -799,8 +799,9 @@ jobs:
         if: steps.day.outputs.produce == 'true' && steps.day.outputs.gemini != 'off'
         uses: google-github-actions/auth@v3
         with:
-          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
-          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          # 11-21 改：这两个值在公开日志里会照印（步骤的输入），放进同名 Secrets 后 GitHub 打成 ***；Secrets 没设时照用原来的仓库变量
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER || vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT || vars.GCP_SERVICE_ACCOUNT }}
           token_format: access_token
           # 不写凭证文件、不导出环境变量：令牌只经下面两步的 env 传，别的步骤（审片的 claude -p）看不到
           create_credentials_file: false
