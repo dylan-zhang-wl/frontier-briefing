@@ -259,8 +259,8 @@ python3 cloud/deploy/run_wrangler.py --assets $P --run-dir $R dev --local --ip 1
 
 **结果存在哪**：D1 数据库 `frontier-visits`（和访问统计、开放程度同一个）的 `listen_votes` 表：日期、条目编号、结果（`right` 念对了／`wrong` 念错了／`unsure` 没听出来）、备注、时间。一条一行，改了再点就覆盖，以最后一次为准。第一次点之前程序自己建表；想先建好（要你同意，会改线上数据库）：`python3 cloud/deploy/run_wrangler.py d1 migrations apply frontier-visits --remote`（执行 `migrations/0003_listen.sql`）。数据库出错时页面照样显示条目，只是没有已选的结果；点了回“没存上”。
 
-**周六维护怎么读**：直接读私有仓库 main 的 `测试版/耳听结果.json`。每天发布以后，和每周六 06:23 UTC，都会自动存一次（11-21 用户定的做法）：
-- 私有仓库“放行发布”（`publish.yml`）在发布、存往期、发邮件之后多两步，私有仓库另有一个小流程“耳听点选结果”（`listen-export.yml`，每周六 06:23 UTC 定时，也能手动跑），跑的都是 `cloud/release/listen_export.py`，只写这一份。
+**周六维护怎么读**：直接读私有仓库 main 的 `测试版/耳听结果.json`。每天发布以后，和每周五 20:23 UTC，都会自动存一次（11-21 用户定的做法；定时原写周六 06:23，GitHub 定时实测会晚 6.9–8.5 小时、赶不上周六 07:07 的维护，11-21 改到周五晚）：
+- 私有仓库“放行发布”（`publish.yml`）在发布、存往期、发邮件之后多两步，私有仓库另有一个小流程“耳听点选结果”（`listen-export.yml`，每周五 20:23 UTC 定时（cron `23 20 * * 5`），也能手动跑），跑的都是 `cloud/release/listen_export.py`，只写这一份。
 - 取：只给私有仓库的 Secret `STATS_KEY_HASH`（站长钥匙的指纹，也就是网站认的站长 Cookie 的值），用 curl 带 Cookie 取导出地址（下面那个）。存：只给流程自带的令牌，内容和上次一样就不提交，提交说明是“耳听点选结果：N 条”。
 - 存进去的文件每条只有日期、条目编号、位置、结果、备注、时间，不放任何钥匙；原稿、转写、判断按位置到那一期的 `审片结论.json` 里对。
 - 出任何错（钥匙不对、超时、被 Cloudflare 的防机器人设置拦了、推不上去）都只在运行摘要里写一行原因，不挡发布；测试运行、试跑不取。

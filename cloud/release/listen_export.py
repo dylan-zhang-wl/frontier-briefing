@@ -2,7 +2,7 @@
 """耳听点选结果自动存回私有仓库（2026-11-21 加）：取站长页 /frontier/_listen?export=json 的导出，只留几栏，
 存进私有仓库 dylan-zhang-wl/frontier-daily 的 main：测试版/耳听结果.json（内容没变就不提交）。
 
-谁来跑：私有仓库的“放行发布”（publish.yml，每次发布以后）和“耳听点选结果”（listen-export.yml，每周六 06:23 UTC，也能手动跑）。
+谁来跑：私有仓库的“放行发布”（publish.yml，每次发布以后）和“耳听点选结果”（listen-export.yml，每周五 20:23 UTC，也能手动跑）。
 两处跑的都是这一个文件，分两步，钥匙和推送令牌不在同一步里：
     python cloud/release/listen_export.py fetch --out <文件>
         取导出。环境变量 STATS_KEY_HASH（私有仓库的 Secret：站长钥匙的指纹，也就是网站认的站长 Cookie fd_pass 的值），
