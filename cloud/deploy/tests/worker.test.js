@@ -1935,6 +1935,9 @@ test('耳听点选：站长打开一期——条目按顺序、【事实】在�
   assert.equal((html.match(/<button type="submit" name="result" value="(right|wrong|unsure)" aria-pressed="false">/g) || []).length, 15, '五条，每条三个按钮，都没选');
   assert.match(html, /共 5 处/);
   assert.match(html, /已点 0 处/);
+  // 页面脚本取输入框不能用 form.elements.item（那是“取第几个控件”的方法，11-21 本机浏览器里点按钮回 400 才发现）
+  assert.ok(!/elements\.(item|date|note)\b/.test(html), '脚本按 name 取输入框');
+  assert.match(html, /querySelector\('input\[name=' \+ k \+ '\]'\)/);
   // 没有这一期的条目：照样 200，说明一句
   const r2 = await lis('/frontier/_listen?date=2026-01-01', { db, headers: ownerCookie });
   assert.equal(r2.status, 200);

@@ -313,9 +313,9 @@ const SCRIPT = `<script>
     if (!v || !window.fetch || !window.URLSearchParams) return;
     ev.preventDefault();
     var form = v.form, st = form.querySelector('.state'), btns = form.querySelectorAll('button[name=result]');
-    var body = new URLSearchParams();
-    body.set('date', form.elements.date.value); body.set('item', form.elements.item.value);
-    body.set('note', form.elements.note.value); body.set('result', v.value);
+    var body = new URLSearchParams();                // 按 name 取输入框：表单控件集合上的 item 是“取第几个”的方法，不是叫 item 的那一栏
+    ['date', 'item', 'note'].forEach(function (k) { var el = form.querySelector('input[name=' + k + ']'); body.set(k, el ? el.value : ''); });
+    body.set('result', v.value);
     st.className = 'state'; st.textContent = '正在存…';
     Array.prototype.forEach.call(btns, function (b) { b.disabled = true; });
     fetch(form.action, { method: 'POST', credentials: 'same-origin', headers: { Accept: 'application/json' }, body: body })
