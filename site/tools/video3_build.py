@@ -99,6 +99,14 @@ import video3_images as IMG  # noqa: E402  （视频配图：缺图时生成或�
 import video3_logos as LG  # noqa: E402  （品牌标志库：site/assets/logos/）
 import video3_zhwrap as ZWRAP  # noqa: E402  （11-09：中文整词换行，开关"视频中文整词换行"）
 
+# 11-21 尝试版（经验库第五部分第 92 件）：配图卡（image_card）的触发词落在原文截图卡开讲 2 秒以后时，截图卡到这时收起、配图立在它的位置。
+# 只认环境变量 FD_VIDEO_IMAGE_TAKE 写 on／1／开……（没设就是关；新动效和视频导演开关也都要开着，和 fix1108 一样）。关着时数据不多写键，视频和改之前逐像素一样。
+IMAGE_TAKE_ENV = "FD_VIDEO_IMAGE_TAKE"
+
+
+def image_take_on():
+    return str(os.environ.get(IMAGE_TAKE_ENV) or "").strip().lower() in ("on", "1", "true", "yes", "开", "打开")
+
 # ============================ 可改区 ============================
 
 STORYBOARD = "04_文稿/视频v3_分镜.json"         # 每期的视频分镜（写稿模型按 写稿_视频v3.md 写；本脚本只读它）
@@ -952,6 +960,9 @@ def build(issue, mp3, marks, dur, al, T, titles, narr, sb, cards, facts, pl=None
         data["fix1108"] = True
         if cover:
             data["cover"] = cover
+        if image_take_on():   # 11-21 尝试版：配图卡收起前一张截图卡（video3.js 读 imgtake，见那边的 TAKE）；没开时不写这个键
+            data["imgtake"] = True
+            say("  配图收起截图卡：开（环境变量 %s，尝试版）" % IMAGE_TAKE_ENV)
     # 所有英文显示字（章、模板、热点卡、片头片尾、标志名、署名）最后按英文名表过一遍：大小写和明确不用的写法直接改，中文名对不上的提醒
     nwarn = []
     for k in ("chapters", "clusters", "S", "logos", "credits"):

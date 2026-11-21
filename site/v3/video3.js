@@ -27,6 +27,10 @@
   // 11-08 渲染修复（K42 封面、K44 对比卡长数值、K45 卡片及时收起和柱子、K46 时间轴小图与小字、对比卡压图不出画、滚动数字千位逗号）：
   // 只在组装数据写了 fix1108（新动效开关和视频导演开关都开着）时起作用；任一个关着，这些地方和 11-08 以前逐像素一样。
   var FX = false;
+  // 11-21 尝试版（经验库第五部分第 92 件）：配图卡（image_card）的触发词落在一张原文截图卡（source_shot、source_excerpt、
+  // 带 shot 的 quote_card / post_card）开讲 2 秒以后时，截图卡到这时收起，配图立在截图卡原来的位置、填满这一镜（镜头不动）。
+  // 只在组装数据写了 imgtake（环境变量 FD_VIDEO_IMAGE_TAKE=on）时起作用；没写时和改之前逐像素一样。
+  var TAKE = false;
   var clamp = function (v, a, b) { return Math.min(b, Math.max(a, v)); };
   var sat = function (u) { return clamp(u, 0, 1); };
   var lerp = function (a, b, u) { return a + (b - a) * u; };
@@ -920,6 +924,7 @@
         o.hideAt = nx ? startT(nx) - 0.3 : null;
       }
       o.prev = real.length ? real[real.length - 1] : null;
+      if (TAKE) takeOver(b, real);
     });
     // 11-06 晚补：分岔路尽头的要点卡写了 over_photo，就不站在路的一头，而是立在路尽头那张配图的正前方（卡片压在配图上，配图当背景）；
     //   没有立在路尽头的配图时照旧
@@ -937,6 +942,7 @@
     real.forEach(function (b, i) { b._.first = i === 0; });
     // 下一个模板的开头（前一个模板据此收场）
     real.forEach(function (b) { var nx = b._.next; b._.nextT = nx ? startT(nx) : null; });
+    if (TAKE) real.forEach(function (b) { if (b._.takeT != null) b._.nextT = b._.nextT != null ? Math.min(b._.nextT, b._.takeT) : b._.takeT; });
     real.concat(images).forEach(function (b) { TPL[b.type].build.call(self, b); self.blocks.push(b); });
     c._real = real; c._images = images;
   };
@@ -948,6 +954,25 @@
     return this.shot([w.x, w.y, w.z], yaw + rot, pitch, fw, fh, { pk: o.pk, pc: pc ? [pc.x, pc.y, pc.z] : null, fov: o.fov });
   };
   function bt(b, k, d) { var v = b.t && b.t[k]; return typeof v === 'number' ? v : d; }
+  // 11-21 尝试版（TAKE）：这张配图要不要接手前一张截图卡。接手的条件：触发词前最后开讲的那一块（host）是原文截图卡、
+  // 不站在分岔路上、开讲已满 2 秒，还没有别的配图接手它；配图本来立在分岔路尽头的，这一章没有要压在它上面的要点卡（over_photo）才接手。
+  // 接手以后：配图放到 host 的位置（rel 相同），host 在 takeT 收起——takeT 是触发词，荧光笔还没扫完就等扫完再过 0.3 秒
+  // （扫的时长照 srcTl / sbxSweep：截图按行数 clamp(0.8+0.42×行数, 1.2, 2.4)，摘录不知道字数就按最长 2.4 秒算）。
+  function shotCard(b) { return b.type === 'source_shot' || b.type === 'source_excerpt' || ((b.type === 'quote_card' || b.type === 'post_card') && !!b.shot); }
+  function takeOver(b, real) {
+    var o = b._, tin = bt(b, 'in', null);
+    if (tin == null) return;
+    if (o.mode === 'fork' && real.some(function (x) { return x.over_photo; })) return;
+    var host = null;
+    real.forEach(function (rb) { var st0 = startT(rb); if (st0 != null && st0 <= tin + 0.01) host = rb; });
+    if (!host || !shotCard(host) || host._.fork || host._.attach || host._.takeBy || !host._.rel || tin < startT(host) + 2) return;
+    var mk = bt(host, 'mark', bt(host, 'shot_mark', startT(host) + 1.2)), ls = host.shot && host.shot.lines;   // 没写标记时刻：和 srcTl、sbxCardTl 一样按开讲后 1.2 秒
+    var sweep = ls && ls.length ? clamp(0.8 + 0.42 * ls.length, 1.2, 2.4) : 2.4;
+    host._.takeBy = b; host._.takeT = Math.max(tin, mk + sweep + 0.3);
+    o.mode = 'take'; o.host = host; o.rel = host._.rel.slice(); o.rot = 0;
+    var nx = host._.next; while (nx && nx._.attach) nx = nx._.next;
+    o.hideAt = nx ? startT(nx) - 0.3 : null;
+  }
   function firstT(b) { var m = Infinity, t = b.t || {}; for (var k in t) if (typeof t[k] === 'number') m = Math.min(m, t[k]); return m === Infinity ? null : m; }
   function startT(b) { var tp = TPL[b.type]; return tp.startT ? tp.startT(b) : firstT(b); }
   // 列表里的时刻：有触发词的用触发词，没有的在前后已知时刻之间均分（再没有就从 t0 起每 gap 秒一个）
@@ -1384,6 +1409,13 @@
   /* ---- 2.5D 配图（不能单独成章：挂在这一章背景里，或立在分岔路的尽头） ---- */
   TPL.image_card = {
     build: function (b) {
+      if (b._.mode === 'take') {        // 11-21 尝试版（TAKE）：立在截图卡原来的位置，取景和截图卡那一镜一样
+        var hs = b._.host._.shS, hc = b._.host._.g.worldToLocal(hs.c.clone());
+        var vw = Math.max(hs.fw, hs.fh * 16 / 9), dd = vw / 2 / (Math.tan(17 * DEG) * 16 / 9), kk = (dd - OVP_Z) / dd;
+        var tm = b._.o.m = this.photo(b.img || b.id, vw * FBP_KX * kk, vw * 9 / 16 * FBP_KY * kk, OVP_BLUR, [1, FBP_KY / FBP_KX]);
+        tm.position.set(hc.x, hc.y, OVP_Z - 0.05); b._.g.add(tm); this.photos.push(tm);
+        return;
+      }
       var fork = b._.mode === 'fork', w = fork ? 15 : 22, h = fork ? 8.44 : 12.4;
       var m = b._.o.m = this.photo(b.img || b.id, w, h, fork ? 1.3 : 2.0); m.position.set(0, fork ? 5.4 : 7.0, 0); b._.g.add(m); this.photos.push(m);
     },
@@ -3047,6 +3079,7 @@
   function Player(root, video, ctx) {
     this.root = root; this.v = video || {}; this.ctx = ctx || {};
     FX = !!this.v.fix1108;
+    TAKE = FX && !!this.v.imgtake;       // 11-21 尝试版：配图卡收起前一张截图卡（见文件头 TAKE）
     this.wb = wbIndex(this.v.zhwrap);     // 11-09 中文整词换行的对照表；数据里没有就是 null，什么都不做
     this.L = this.ctx.lang ? (this.ctx.lang() === 'en' ? 'en' : 'zh') : 'zh';
     this.T = I18N[this.L] || I18N.zh;
