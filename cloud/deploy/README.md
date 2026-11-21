@@ -44,6 +44,7 @@
 | `tests/test_deploy.py` | `assemble.py`、`archive.py`、`podcast_feed.py`、`listen_items.py` 的单元测试（存档用本机的假远端，不联网） |
 | `podcast_feed.py` | 私有播客订阅源（11-19 加）：开关开着时由 `assemble.py` 调用，在上线包里做 `frontier/_podcast/` |
 | `podcast/cover-3000.jpg`、`podcast/make_cover.py` | 节目封面（3000×3000，程序画的占位图，待定）和画它的小程序（要 Pillow） |
+| `../release/listen_export.py` | 耳听点选结果自动存回私有仓库（11-21 加）：取导出、只留六栏、存进私有仓库 main 的 `测试版/耳听结果.json`，见下面“耳听点选页” |
 | `listen_items.py` | 耳听点选页的条目（11-21 加）：开关开着时由 `assemble.py` 调用做 `frontier/_listen/`，由 `archive.py push` 调用把这一期原始的“请你耳听”存进往期存档 `listen/<日期>.json` |
 | `src/listen.js`、`migrations/0003_listen.sql` | 耳听点选页本身（列表、逐条页、存结果、导出）和存结果的表 `listen_votes`（11-21 加） |
 
@@ -258,7 +259,15 @@ python3 cloud/deploy/run_wrangler.py --assets $P --run-dir $R dev --local --ip 1
 
 **结果存在哪**：D1 数据库 `frontier-visits`（和访问统计、开放程度同一个）的 `listen_votes` 表：日期、条目编号、结果（`right` 念对了／`wrong` 念错了／`unsure` 没听出来）、备注、时间。一条一行，改了再点就覆盖，以最后一次为准。第一次点之前程序自己建表；想先建好（要你同意，会改线上数据库）：`python3 cloud/deploy/run_wrangler.py d1 migrations apply frontier-visits --remote`（执行 `migrations/0003_listen.sql`）。数据库出错时页面照样显示条目，只是没有已选的结果；点了回“没存上”。
 
-**周六维护怎么读**：列表页底部“导出全部结果（JSON）”，或者打开 `https://wenlongzhang.com/frontier/_listen?export=json`，下载一份 `listen-votes-<日期>.json`。每条带日期、编号、第几处、位置、原稿、转写成、说明、判断、关乎事实、依据、你点的结果、备注、时间（UTC）。现在发布用的 Cloudflare 令牌（Edit Cloudflare Workers 模板）不含 D1 权限，云端流程读不了这张表，所以还没做成每天自动提交回私有仓库；要自动，见交接记录里的几条路，都要你点头。
+**周六维护怎么读**：直接读私有仓库 main 的 `测试版/耳听结果.json`。每天发布以后，和每周六 06:23 UTC，都会自动存一次（11-21 用户定的做法）：
+- 私有仓库“放行发布”（`publish.yml`）在发布、存往期、发邮件之后多两步，私有仓库另有一个小流程“耳听点选结果”（`listen-export.yml`，每周六 06:23 UTC 定时，也能手动跑），跑的都是 `cloud/release/listen_export.py`，只写这一份。
+- 取：只给私有仓库的 Secret `STATS_KEY_HASH`（站长钥匙的指纹，也就是网站认的站长 Cookie 的值），用 curl 带 Cookie 取导出地址（下面那个）。存：只给流程自带的令牌，内容和上次一样就不提交，提交说明是“耳听点选结果：N 条”。
+- 存进去的文件每条只有日期、条目编号、位置、结果、备注、时间，不放任何钥匙；原稿、转写、判断按位置到那一期的 `审片结论.json` 里对。
+- 出任何错（钥匙不对、超时、被 Cloudflare 的防机器人设置拦了、推不上去）都只在运行摘要里写一行原因，不挡发布；测试运行、试跑不取。
+- GitHub 自己的定时不一定准点（出刊流程的定时 11-10 实测从没准点来过）。周六维护开始时看一眼文件的提交时间，旧了就手动跑一次：`gh workflow run listen-export.yml -R dylan-zhang-wl/frontier-daily`。
+- 换站长钥匙（`STATS_KEY_HASH`）以后不用另改：流程用的就是新的那个 Secret。只是在“访问统计设置”把新指纹写进 Worker 以前，取的那一步会回 404，摘要里写原因。
+
+页面上的“导出全部结果（JSON）”按钮（或者直接打开 `https://wenlongzhang.com/frontier/_listen?export=json`）作退路：下载一份 `listen-votes-<日期>.json`，每条带日期、编号、第几处、位置、原稿、转写成、说明、判断、关乎事实、依据、你点的结果、备注、时间（UTC）。
 
 **你怎么用**：
 1. 用你已经是站长的那台设备（手机或电脑）打开邮件里那条“逐条听、点对错”的链接，或者打开 https://wenlongzhang.com/frontier/_listen 选一期。新设备先在网址后面加一次 `?k=<钥匙>`（同统计页），比如 `https://wenlongzhang.com/frontier/_listen?k=<钥匙>`，会跳回不带钥匙的同一页。
