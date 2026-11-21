@@ -26,6 +26,11 @@
 FD_PODCAST_LIMIT 期（默认 60）。它出任何错都只是这次不出订阅源：不算检查的“问题”、退出码不变，清单里多一行原因。
 开关关着时，上线包和清单都和加这个功能以前逐字节一样。用环境变量当开关，是因为旧版本程序不认识新参数会报错退出，
 不认识的环境变量却会忽略（私有流程可能取到旧版本的公开程序）。
+
+耳听点选页（2026-11-21 加）：环境变量 FD_LISTEN_PAGE=on 时，在检查之前调用同目录 listen_items.py，做 frontier/_listen/
+（每期一份 <日期>.json 和目录 index.json），给站长页 /frontier/_listen 读；这一期的条目从 --issue 期目录的 审片结论.json 取，
+往期从往期存档的 listen/<日期>.json 取（archive.py push 在同一开关下存进去）。出任何错都只是这次没有点选页的条目，
+不算检查的“问题”、退出码不变，清单里多一行原因。开关关着时，上线包和清单都和加这个功能以前逐字节一样（存档里有 listen/ 也不读）。
 """
 import argparse
 import html
@@ -318,8 +323,32 @@ def make_podcast(out, limit):
         return "播客订阅源这次没做成：%s：%s（网站照常发布，这次不出订阅源）。" % (type(e).__name__, str(e)[:200]), []
 
 
-def assemble(repo, archive, issues, out, podcast=False, limit=60):
-    """podcast=True 时另做播客订阅源，结果写在返回的统计里（键“播客订阅源”“播客跳过”）；关着时什么都不多做。"""
+def listen_wanted():
+    """耳听点选页开关：环境变量 FD_LISTEN_PAGE 是 on／1／true／yes（不分大小写）。没有命令行参数（理由同播客订阅源）。"""
+    return os.environ.get("FD_LISTEN_PAGE", "").strip().lower() in ("on", "1", "true", "yes")
+
+
+def make_listen(out, archive, issues):
+    """做耳听点选页的条目（同目录 listen_items.py）。出任何错都只返回一行原因，不往外抛。返回 (一行说明, 跳过的期)。"""
+    try:
+        if str(HERE) not in sys.path:
+            sys.path.insert(0, str(HERE))
+        import listen_items                                  # 到这里才读（开关关着时根本不碰它）
+        dirs = {}
+        for p in issues or []:
+            day, _ = find_issue_dir(p)
+            root = listen_items.issue_root(p, day)
+            if root:
+                dirs.setdefault(day, []).append(root)
+        r = listen_items.build(out, dirs, archive)
+        return r["line"], r.get("notes") or []
+    except Exception as e:                                    # 点选页不能连累网站
+        return "耳听点选页这次没做成：%s：%s（网站照常发布，这次没有点选页的条目）。" % (type(e).__name__, str(e)[:200]), []
+
+
+def assemble(repo, archive, issues, out, podcast=False, limit=60, listen=False):
+    """podcast=True 时另做播客订阅源，结果写在返回的统计里（键“播客订阅源”“播客跳过”）；关着时什么都不多做。
+    listen=True 时另做耳听点选页的条目（键“耳听点选页”“耳听跳过”）；关着时什么都不多做。"""
     repo, out = Path(repo).resolve(), Path(out).resolve()
     if out.exists() and any(out.iterdir()):
         raise ValueError("上线包目录 %s 不是空的：换一个新目录（本程序不删文件）" % out)
@@ -362,9 +391,12 @@ def assemble(repo, archive, issues, out, podcast=False, limit=60):
     (root / "past" / "index.html").write_text(render_past(sitecfg, newest_first, summaries[latest].get("accent") or "blue"),
                                               encoding="utf-8")
     pod = make_podcast(out, limit) if podcast else None
+    lis = make_listen(out, archive, issues) if listen else None
     problems, stats = check_package(out)
     if pod:
         stats["播客订阅源"], stats["播客跳过"] = pod
+    if lis:
+        stats["耳听点选页"], stats["耳听跳过"] = lis
     return newest_first, problems, stats
 
 
@@ -378,7 +410,8 @@ def main(argv=None):
     ap.add_argument("--podcast", action="store_true", help="另做私有播客订阅源（同环境变量 FD_PODCAST_FEED=on）")
     a = ap.parse_args(argv)
     try:
-        rows, problems, stats = assemble(a.repo, a.archive, a.issue, a.out, podcast=podcast_wanted(a.podcast), limit=podcast_limit())
+        rows, problems, stats = assemble(a.repo, a.archive, a.issue, a.out, podcast=podcast_wanted(a.podcast), limit=podcast_limit(),
+                                         listen=listen_wanted())
     except (ValueError, OSError) as e:
         print("✗ " + str(e), file=sys.stderr)
         return 2
@@ -390,6 +423,8 @@ def main(argv=None):
     lines += [""] + (["**检查没过**："] + ["- " + p for p in problems] if problems else ["检查通过：文件数、单个文件大小、不引用外网、noindex 标签。"])
     if "播客订阅源" in stats:                                  # 开关关着时这里一行都不多
         lines += ["", stats["播客订阅源"]] + ["- " + x for x in stats["播客跳过"]]
+    if "耳听点选页" in stats:                                  # 同上
+        lines += ["", stats["耳听点选页"]] + ["- " + x for x in stats["耳听跳过"]]
     text = "\n".join(lines) + "\n"
     print(text)
     if a.summary:

@@ -41,6 +41,9 @@ chatgpt.com/codex/settings/usage”（11-14 定的说法），标题里写“Cod
     MiMo 审片只看了文字没听音频、备用写稿.json 里记的“要人看”。没放行时写清怎么手动放行（私有仓库的“放行发布”，
     运行编号留空，填日期和放行理由）；没出刊时“卡在哪”后面加一句“MiMo 备用写稿也停在第几步”。
     Claude不能用.json 读不到、字段缺失按最保守处理：自动放行当 false，连续天数当 1。三样都没有的日子，邮件和原来一字不差。
+11-21 加（耳听点选页）：环境变量 FD_LISTEN_PAGE=on（私有仓库“放行发布”发邮件那一步写死）、这一期发布了（--published yes），
+    审片结论.json 里又有“请你耳听”时，“放行”这封信在备注后面多一行“逐条听、点对错：https://wenlongzhang.com/frontier/_listen?date=<日期>
+    （只有站长能打开）”。只是多一行，不改“发不发”：正常放行不发信的日子照旧不发。开关关着、没发布、没有“请你耳听”时邮件一字不差。
 11-17 晚加：MiMo 审片有几项没查成（调用没成、或回答里没有可用结果；放行结论里“MiMo 没查成”那类备注，gate.py 读审片结论的“MiMo没查成”写的），
     不管放没放行，标题括号里写“MiMo 审片第 11 项没查成”，正文备注里逐项写是什么、为什么没查。没有这类备注的日子一字不差。
 """
@@ -219,6 +222,17 @@ def note_lines(day, notes, head):
     if quiet:
         lines += ["", "另有 %s，记在这一期的 审片.md（仓库 测试版/%s/审片.md）" % (gate.quiet_text(quiet), day)]
     return lines, tell, len(quiet)
+
+
+def listen_line(issue, day, published):
+    """耳听点选页（11-21 加）：FD_LISTEN_PAGE 开着、这一期发布了、审片结论里有“请你耳听”时返回那一行，否则返回 None。
+    没发布的期（--published no／failed、没给）网站上没有点选页，不加。"""
+    if os.environ.get("FD_LISTEN_PAGE", "").strip().lower() not in ("on", "1", "true", "yes") or published != "yes":
+        return None
+    j = read_json(Path(issue) / "审片结论.json")
+    if not isinstance(j, dict) or not j.get("请你耳听"):
+        return None
+    return "逐条听、点对错：%s_listen?date=%s（只有站长能打开）" % (SITE, day)
 
 
 def quota_info(issue):
@@ -518,6 +532,9 @@ def build(issue, kind="auto", published=None, claim=None, claim_tag=None, saturd
     if v.get("人工放行"):
         head += "（人工放行：%s）" % v["人工放行"]
     lines = [head] + nlines
+    lis = listen_line(issue, day, published)               # 11-21：耳听点选页的链接（开关关着时是 None，邮件一字不差）
+    if lis:
+        lines += ["", lis]
     if backup:          # 11-17：备用那天放行了也发信
         subject = {"failed": "发布出错", "no": "放行了但没发布"}.get(published, "已发布")
         other = "、".join(kinds_of(tell, codex, quota is not None))

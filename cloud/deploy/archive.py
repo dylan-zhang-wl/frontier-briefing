@@ -13,6 +13,10 @@
         推送被拒（别处刚推过）就重新取、重新提交，最多 3 次。
     参数 --branch（默认 site-archive）、--remote（默认 origin）、--repo（默认当前目录）。
 
+耳听点选页（2026-11-21 加）：环境变量 FD_LISTEN_PAGE=on 时，push 另把这一期 审片结论.json 里原样的“请你耳听”
+（只留五栏，见 listen_items.py）写成 <存档目录>/listen/<日期>.json，和 issues/<日期>/ 一起提交；以后 pull 取回来，
+assemble.py 从这里做往期的点选页条目。这一段出任何错只打印一行、照常推送 issues/<日期>/（不能因为它让网站少存一期）。
+开关关着时和以前一模一样（存档里已有的 listen/ 原样留着，不读不改）。
 做法只用 git 的底层命令（fetch、archive、read-tree、write-tree、commit-tree、push），不切换分支、不动主分支的文件和暂存区。
 本程序不删除任何文件：存档目录里同一天的旧文件只在“写进提交的那份清单”里被替换。
 以后换成 R2 时，这个文件整体换掉（见 cloud/deploy/README.md“以后换成 R2”）。
@@ -82,6 +86,32 @@ def issue_web_dir(issue, day=None):
     raise ValueError("在 %s 下找不到 issues/%s/issue.js" % (p, day))
 
 
+def listen_stage(dest, issue, day):
+    """耳听点选页（FD_LISTEN_PAGE=on）：把这一期的原始“请你耳听”写成 <存档目录>/listen/<日期>.json。
+    返回 None（开关关着，什么都不做）、'add'（写好了，要提交）、'drop'（这一期没有“请你耳听”，存档里同一天的旧文件从清单里去掉）、
+    'skip'（出错了：只打印一行，listen/ 这次不动，issues/<日期>/ 照常推送）。"""
+    try:
+        here = str(Path(__file__).resolve().parent)
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import listen_items                                # 开关关着时根本不碰它
+        if not listen_items.wanted():
+            return None
+        root = listen_items.issue_root(issue, day)
+        rec = listen_items.archive_record(root) if root else None
+        if not rec:
+            print("耳听点选页：这一期没有审片结论里的“请你耳听”，存档里不存 listen/%s.json" % day)
+            return "drop"
+        f = Path(dest) / listen_items.ARCHIVE_DIR / ("%s.json" % day)
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(listen_items.dumps(rec), encoding="utf-8")
+        print("耳听点选页：存 listen/%s.json（%d 条）" % (day, len(rec["请你耳听"])))
+        return "add"
+    except Exception as e:                                # 不能因为它让网站少存一期
+        print("耳听点选页：存原始条目没成（%s：%s），这次只存网页文件" % (type(e).__name__, str(e)[:200]))
+        return "skip"
+
+
 def push(repo, remote, branch, dest, issue, day=None, message=None, tries=3):
     day, src = issue_web_dir(issue, day)
     if not DATE_RE.match(day):
@@ -93,6 +123,7 @@ def push(repo, remote, branch, dest, issue, day=None, message=None, tries=3):
             keep = Path(tempfile.mkdtemp(prefix="old-%s-" % day, dir=dest))
             stage.rename(keep / day)
         shutil.copytree(src, stage)
+    lis = listen_stage(dest, issue, day)
     gitdir = git(repo, "rev-parse", "--absolute-git-dir").out
     for attempt in range(1, tries + 1):
         parent = fetch(repo, remote, branch)
@@ -105,6 +136,14 @@ def push(repo, remote, branch, dest, issue, day=None, message=None, tries=3):
                                  cwd=str(dest), capture_output=True, env=dict(os.environ, **env))
             if add.returncode != 0:
                 raise RuntimeError("git add 出错：" + add.stderr.decode("utf-8", "replace")[:300])
+            if lis in ("add", "drop"):                       # 耳听点选页的原始条目（开关关着时 lis 是 None，这里一行都不走）
+                lf = "listen/%s.json" % day
+                git(repo, "rm", "-q", "--cached", "--ignore-unmatch", lf, env=env, check=False)
+                if lis == "add":
+                    a2 = subprocess.run(["git", "--git-dir", gitdir, "--work-tree", str(dest.resolve()), "add", "-f", lf],
+                                        cwd=str(dest), capture_output=True, env=dict(os.environ, **env))
+                    if a2.returncode != 0:
+                        print("耳听点选页：git add %s 没成，这次只存网页文件" % lf)
             tree = git(repo, "write-tree", env=env).out
         if parent and tree == git(repo, "rev-parse", parent + "^{tree}").out:
             print("存档里 %s 已经是这一版，不用提交" % day)
