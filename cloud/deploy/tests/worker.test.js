@@ -1736,3 +1736,390 @@ test('播客订阅的小函数：别的地址 podcastRoute 一律 null（照旧�
   assert.ok(db.log.length - n <= 0, '一条查询都没多');
   fresh();
 });
+
+// ===================== 耳听点选页（11-21 加，src/listen.js、src/index.js 的 listenRoute）=====================
+// 条目文件是现编的假数据（假位置、假原稿），不是哪一期的真内容。静态文件同播客那一节，用“宽松”的假对象：
+// 它会把路径解码、改小写、并掉连续的 / 再找文件，所以 Worker 要是放过变体，这里就真会回出条目文件——测“拿不到”才不是白测。
+import { listenRoute } from '../src/index.js';
+import { RESULT, NOTE_MAX, ITEM_RE, loadVotes } from '../src/listen.js';
+
+const MIGRATION3 = readFileSync(new URL('../migrations/0003_listen.sql', import.meta.url), 'utf8');
+const LIS_MARK = 'FD-LISTEN-ONLY';
+const LIS_DAY = '2026-11-08';
+const LIS_ITEMS = [
+  { id: 'a1b2c3d4e5', n: 1, group: 'front', fact: true, pos: '播客 1:23', say: '测试原稿甲句', heard: '测试转写甲句', note: '原稿“测试原稿甲句”，转写成“测试转写甲句”',
+    judge: '多半真念错', basis: `测试依据 ${LIS_MARK}`, clips: [{ src: '播客', a: 81, b: 87, label: '播客 1:23', ok: true }], parsed: true },
+  { id: 'b2c3d4e5f6', n: 2, group: 'front', fact: false, pos: '视频 12 秒；播客 2:00', say: '测试原稿乙句', heard: '测试转写乙句', note: '原稿“测试原稿乙句”，转写成“测试转写乙句”',
+    judge: '拿不准', basis: '', clips: [{ src: '视频', a: 10, b: 16, label: '视频 12 秒', ok: true }, { src: '播客', a: 118, b: 124, label: '播客 2:00', ok: true }], parsed: true },
+  { id: 'c3d4e5f6a7', n: 3, group: 'mid', fact: null, pos: '播客 3:04', say: '', heard: '', note: '测试说明<b>不该是标签</b>', judge: '多半转写听错', basis: '',
+    clips: [{ src: '播客', a: 182, b: 188, label: '播客 3:04', ok: true }], parsed: true },
+  { id: 'd4e5f6a7b8', n: 4, group: 'batch', fact: false, pos: '播客多处', say: '', heard: '', note: '测试成批说明', judge: '多半转写听错', basis: '', clips: [], parsed: false },
+  { id: 'd4e5f6a7b8-2', n: 5, group: 'batch', fact: false, pos: '播客 4:00–5:00', say: '测试原稿丙', heard: '测试转写丙', note: '原稿“测试原稿丙”，转写成“测试转写丙”', judge: '多半转写听错',
+    basis: '', clips: [{ src: '播客', a: 238, b: 304, label: '播客 4:00–5:00', ok: true }], parsed: true },
+];
+const LIS_ISSUE = { v: 1, date: LIS_DAY, edition: '工作日版', audio: { 播客: true, 视频: true }, count: LIS_ITEMS.length, groups: { front: 2, mid: 1, batch: 2 }, items: LIS_ITEMS, mark: LIS_MARK };
+const LIS_INDEX = { v: 1, issues: [{ date: LIS_DAY, edition: '工作日版', count: 5, groups: { front: 2, mid: 1, batch: 2 } }, { date: '2026-11-07', edition: '周六版', count: 2, groups: { front: 2, mid: 0, batch: 0 } }], mark: LIS_MARK };
+const LIS_FILES = {
+  ...FILES,
+  '/frontier/issues/index.js': ['text/javascript', INDEX_JS],
+  '/frontier/_listen/index.json': ['application/json', JSON.stringify(LIS_INDEX)],
+  [`/frontier/_listen/${LIS_DAY}.json`]: ['application/json', JSON.stringify(LIS_ISSUE)],
+};
+const LIS_SEEN = [];
+const LIS_LOOSE = Object.fromEntries(Object.keys(LIS_FILES).map((k) => [looseKey(k), k]));
+function makeLisAssets({ files = LIS_FILES } = {}) {
+  const loose = Object.fromEntries(Object.keys(files).map((k) => [looseKey(k), k]));
+  return {
+    async fetch(req) {
+      const p = new URL(req.url).pathname;
+      LIS_SEEN.push(p);
+      const real = loose[looseKey(p)];
+      if (!real) return new Response('nope', { status: 404 });
+      const [type, data] = files[real];
+      const body = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+      return new Response(req.method === 'HEAD' ? null : body, { status: 200, headers: { 'Content-Type': type, 'Content-Length': String(body.length), ETag: '"v1"' } });
+    },
+  };
+}
+const LIS_ASSETS = makeLisAssets();
+function listenDb({ migrate = true } = {}) {
+  const db = settingsDb();
+  if (migrate) db.sql.exec(MIGRATION3);
+  return db;
+}
+const votes = (db) => { try { return db.sql.prepare('SELECT date, item, result, note, ts FROM listen_votes ORDER BY item').all().map((x) => ({ ...x })); } catch (_) { return null; } };
+async function lis(path, { db, method = 'GET', headers = {}, body, hash = KEY_HASH, assets = LIS_ASSETS } = {}) {
+  const ctx = makeCtx();
+  const init = { method, headers: { 'User-Agent': UA, ...headers } };
+  if (body != null) init.body = body;
+  const e = { ASSETS: assets, ...(db ? { VISITS: db } : {}), ...(hash ? { STATS_KEY_HASH: hash } : {}) };
+  const realLog = console.log;
+  console.log = (...a) => LOGS.push(a.join(' '));
+  try {
+    const res = await worker.fetch(new Request(ORIGIN + path, init), e, ctx);
+    await ctx.done();
+    return res;
+  } finally { console.log = realLog; }
+}
+const vote = (db, fields, { origin = ORIGIN, cookie = ownerCookie, json = true, type = FORM['Content-Type'], raw, hash = KEY_HASH } = {}) => lis('/frontier/_listen', {
+  db, method: 'POST', hash, body: raw != null ? raw : form(fields),
+  headers: { 'Content-Type': type, ...cookie, ...(origin ? { Origin: origin } : {}), ...(json ? { Accept: 'application/json' } : {}) },
+});
+const onlyListenSeen = () => LIS_SEEN.filter((p) => looseKey(p).includes('_listen'));
+
+test('耳听点选：不是站长（匿名、坏站长 Cookie、口令 Cookie、没设指纹）——GET、HEAD、POST、导出一律和普通“没有这个页面”一样 404，不取条目文件', async () => {
+  for (const mode of ['public', 'family', 'owner']) {
+    fresh();
+    const db = listenDb();
+    let fam = null;
+    if (mode === 'family') { await familySetup(db); fam = await login(db); } else if (mode === 'owner') await ownerPost(db, { op: 'mode', mode: 'owner' });
+    const who = [['匿名', {}, KEY_HASH], ['坏站长 Cookie', { Cookie: 'fd_pass=' + 'f'.repeat(64) }, KEY_HASH], ['站长 Cookie 但没设指纹', ownerCookie, ''],
+      ...(fam ? [['口令 Cookie', { Cookie: fam }, KEY_HASH]] : [])];
+    for (const [w, headers, hash] of who) {
+      for (const p of ['/frontier/_listen', `/frontier/_listen?date=${LIS_DAY}`, '/frontier/_listen?export=json']) {
+        for (const method of ['GET', 'HEAD']) {
+          LIS_SEEN.length = 0;
+          const res = await lis(p, { db, headers, method, hash });
+          assert.equal(res.status, 404, `${mode} ${w} ${method} ${p}`);
+          assert.equal(res.headers.get('Cache-Control'), 'no-store');
+          if (method === 'GET') assert.match(await res.text(), NOT_FOUND_TEXT);
+          assert.deepEqual(onlyListenSeen(), [], `${mode} ${w} ${p}：没取条目文件`);
+        }
+      }
+      LIS_SEEN.length = 0;
+      const r = await vote(db, { date: LIS_DAY, item: LIS_ITEMS[0].id, result: 'wrong' }, { cookie: headers, hash });
+      assert.equal(r.status, 404, `${mode} ${w} POST`);
+      assert.deepEqual(onlyListenSeen(), []);
+    }
+    assert.deepEqual(votes(db), [], `${mode}：一条都没存`);
+    assert.equal(visitRows(db).length, 0, `${mode}：不记访问`);
+  }
+  fresh();
+});
+
+test('耳听点选：条目文件 /frontier/_listen/… 和大小写、百分号编码、双斜杠、多一层目录等变体，谁来都 404（站长也一样），不取静态文件', async () => {
+  // 先证明假静态文件真的“宽松”：直接问它，变体能拿到条目
+  assert.match(await (await LIS_ASSETS.fetch(new Request(ORIGIN + '/frontier/%5Flisten/INDEX.json'))).text(), new RegExp(LIS_MARK));
+  assert.match(await (await LIS_ASSETS.fetch(new Request(ORIGIN + `/frontier//_Listen/${LIS_DAY}.json`))).text(), new RegExp(LIS_MARK));
+  const variants = [`/frontier/_listen/${LIS_DAY}.json`, '/frontier/_listen/index.json', '/frontier/_listen/', '/frontier/_listen.json', '/frontier/_listen.html',
+    '/frontier/_Listen', '/frontier/_LISTEN', '/frontier/_Listen/index.json', '/frontier/%5Flisten', '/frontier/%5flisten/index.json', '/frontier/%255Flisten/index.json',
+    '/frontier/_listen%2Findex.json', '/frontier/_listen%2findex.json', '/frontier//_listen', '/frontier///_listen//index.json', '/frontier/_listen//index.json',
+    '/frontier\\_listen\\index.json', '/frontier/issues/../_listen/index.json', '/frontier/x/%2e%2e/_listen/index.json', '/frontier/_l%69sten', '/frontier/%5F%6C%69%73%74%65%6E',
+    '/frontier/_listen%00', '/frontier/issues/_listen', `/frontier/issues/${LIS_DAY}/_listen.json`, '/frontier/_listen_x', '/frontier/past/_listen'];
+  for (const mode of ['public', 'owner']) {
+    fresh();
+    const db = listenDb();
+    if (mode === 'owner') await ownerPost(db, { op: 'mode', mode: 'owner' });
+    for (const v of variants) {
+      for (const [w, headers] of [['匿名', {}], ['站长', ownerCookie]]) {
+        for (const method of ['GET', 'HEAD']) {
+          LIS_SEEN.length = 0;
+          const res = await lis(v, { db, headers, method });
+          const text = await res.text();
+          assert.equal(res.status, 404, `${mode} ${w} ${method} ${v}`);
+          assert.ok(!text.includes(LIS_MARK), `${mode} ${w} ${v}：没拿到条目`);
+          assert.deepEqual(onlyListenSeen(), [], `${mode} ${w} ${v}：没去取条目文件`);
+        }
+        const p = await lis(v, { db, method: 'POST', headers: { ...headers, ...FORM, Origin: ORIGIN, Accept: 'application/json' }, body: form({ date: LIS_DAY, item: LIS_ITEMS[0].id, result: 'right' }) });
+        assert.equal(p.status, 404, `${mode} ${w} POST ${v}`);
+      }
+    }
+    assert.deepEqual(votes(db), []);
+  }
+  fresh();
+});
+
+test('耳听点选：站长打开列表——200、最近几期、点了几处、导出按钮；不缓存、noindex、不许嵌框、只许本站资源、不引外网；不记访问', async () => {
+  fresh();
+  const db = listenDb();
+  const res = await lis('/frontier/_listen', { db, headers: ownerCookie });
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('Cache-Control'), 'no-store');
+  assert.equal(res.headers.get('X-Robots-Tag'), 'noindex, nofollow');
+  assert.equal(res.headers.get('X-Frame-Options'), 'DENY');
+  assert.match(res.headers.get('Content-Security-Policy'), /default-src 'none'/);
+  assert.match(res.headers.get('Content-Security-Policy'), /frame-ancestors 'none'/);
+  const html = await res.text();
+  assert.ok(!NO_EXTERNAL.test(html), '不引外网资源');
+  assert.match(html, /noindex, nofollow/);
+  assert.match(html, /请你耳听 · 逐条点选/);
+  assert.match(html, new RegExp(`href="/frontier/_listen\\?date=${LIS_DAY}"`));
+  assert.match(html, /href="\/frontier\/_listen\?date=2026-11-07"/);
+  assert.match(html, /5 处（其中 2 条成批的多半是转写听错，可不听） · 还没点/);
+  assert.match(html, /导出全部结果（JSON）/);
+  assert.ok(html.indexOf(LIS_DAY.slice(5)) < html.indexOf('11-07'), '新的在前');
+  assert.equal(visitRows(db).length, 0);
+  // HEAD 不带正文
+  const head = await lis('/frontier/_listen', { db, headers: ownerCookie, method: 'HEAD' });
+  assert.equal(head.status, 200);
+  assert.equal(await head.text(), '');
+  // 还没有条目文件（开关没开过）：说明一句，照样 200
+  const empty = makeLisAssets({ files: FILES });
+  const r2 = await lis('/frontier/_listen', { db, headers: ownerCookie, assets: empty });
+  assert.equal(r2.status, 200);
+  assert.match(await r2.text(), /还没有点选页的条目/);
+  // 只显示最近 14 期
+  const many = { v: 1, issues: Array.from({ length: 20 }, (_, i) => ({ date: `2026-10-${String(i + 1).padStart(2, '0')}`, count: 1, groups: {} })) };
+  const r3 = await lis('/frontier/_listen', { db, headers: ownerCookie, assets: makeLisAssets({ files: { ...FILES, '/frontier/_listen/index.json': ['application/json', JSON.stringify(many)] } }) });
+  const h3 = await r3.text();
+  assert.equal((h3.match(/_listen\?date=/g) || []).length, 14);
+  assert.ok(h3.includes('2026-10-20') && !h3.includes('date=2026-10-06'), '留的是最近 14 期');
+  fresh();
+});
+
+test('耳听点选：站长打开一期——条目按顺序、【事实】在前、成批的折起来放最后；原稿、转写、判断、依据（折叠）；播放按钮指向网页上那份音频和起止秒；字都转义', async () => {
+  fresh();
+  const db = listenDb();
+  const res = await lis(`/frontier/_listen?date=${LIS_DAY}`, { db, headers: ownerCookie });
+  assert.equal(res.status, 200);
+  const html = await res.text();
+  assert.ok(!NO_EXTERNAL.test(html), '不引外网资源');
+  const pos = LIS_ITEMS.map((it) => html.indexOf(`id="i-${it.id}"`));
+  assert.ok(pos.every((p) => p > 0), '每条都在');
+  assert.deepEqual([...pos].sort((a, b) => a - b), pos, '按文件里的先后');
+  assert.ok(html.indexOf('<details class="batch">') < pos[3] && html.indexOf('<details class="batch">') > pos[2], '成批的在折叠里、放最后');
+  assert.match(html, /多半是转写听错的成批条目 · 2 条 · 可不听/);
+  const card1 = html.slice(pos[0], pos[1]);
+  assert.match(card1, /<span class="pill fact">【事实】<\/span>/, '第一条带【事实】');
+  assert.ok(!html.slice(pos[1], pos[2]).includes('【事实】'), '第二条不带');
+  assert.match(html, /【事实】1 处，排在最前/);
+  assert.match(html, /<dt>原稿<\/dt><dd>测试原稿甲句<\/dd><dt>转写成<\/dt><dd>测试转写甲句<\/dd><dt>判断<\/dt><dd>多半真念错<\/dd>/);
+  assert.match(html, /<details class="basis"><summary>审片的依据<\/summary>测试依据/);
+  assert.ok(html.includes('测试说明&lt;b&gt;不该是标签&lt;/b&gt;') && !html.includes('<b>不该是标签</b>'), '说明转义了');
+  assert.match(html, new RegExp(`data-url="/frontier/issues/${LIS_DAY}/audio/podcast.mp3" data-a="81" data-b="87"`));
+  assert.match(html, new RegExp(`data-url="/frontier/issues/${LIS_DAY}/audio/video3.mp3" data-a="10" data-b="16"`));
+  assert.match(html, /放 1:21–1:27/);
+  assert.match(html, /放 10–16 秒/);
+  assert.match(html, /这一条没写具体时刻（或者没认出来）/);
+  assert.match(html, new RegExp(`href="/frontier/\\?date=${LIS_DAY}"`));
+  assert.equal((html.match(/<button type="submit" name="result" value="(right|wrong|unsure)" aria-pressed="false">/g) || []).length, 15, '五条，每条三个按钮，都没选');
+  assert.match(html, /共 5 处/);
+  assert.match(html, /已点 0 处/);
+  // 没有这一期的条目：照样 200，说明一句
+  const r2 = await lis('/frontier/_listen?date=2026-01-01', { db, headers: ownerCookie });
+  assert.equal(r2.status, 200);
+  assert.match(await r2.text(), /这一期没有点选页的条目/);
+  // 日期写法不对：给列表
+  assert.match(await (await lis('/frontier/_listen?date=../index', { db, headers: ownerCookie })).text(), /请你耳听 · 逐条点选/);
+  // 这一期网站上没有视频旁白：视频那一段不给按钮
+  const noVideo = { ...LIS_ISSUE, audio: { 播客: true, 视频: false } };
+  const r3 = await lis(`/frontier/_listen?date=${LIS_DAY}`, { db, headers: ownerCookie, assets: makeLisAssets({ files: { ...LIS_FILES, [`/frontier/_listen/${LIS_DAY}.json`]: ['application/json', JSON.stringify(noVideo)] } }) });
+  const h3 = await r3.text();
+  assert.ok(!h3.includes('audio/video3.mp3'), '没有视频旁白的按钮');
+  assert.match(h3, /另有 1 处这一期网站上没有那段音频/);
+  assert.equal(visitRows(db).length, 0, '不记访问');
+  fresh();
+});
+
+test('耳听点选：POST 的 Origin——没有、不对都 403（站长也一样）；只收表单、不超过 2 KB；日期、条目编号、结果、备注长度不对 400；这一期没有这一条 400', async () => {
+  fresh();
+  const db = listenDb();
+  const ok = { date: LIS_DAY, item: LIS_ITEMS[0].id, result: 'wrong' };
+  for (const origin of [null, 'https://evil.example', 'http://wenlongzhang.com', 'https://wenlongzhang.com.evil.example']) {
+    const r = await vote(db, ok, { origin });
+    assert.equal(r.status, 403, String(origin));
+    assert.equal((await r.json()).ok, false);
+  }
+  assert.equal((await vote(db, ok, { type: 'application/json', raw: JSON.stringify(ok) })).status, 415);
+  assert.equal((await vote(db, { ...ok, note: 'x'.repeat(3000) })).status, 413);
+  for (const [name, f] of [['日期', { ...ok, date: '2026-11-8' }], ['条目编号', { ...ok, item: 'zzzz' }], ['条目编号太长', { ...ok, item: 'a1b2c3d4e5f' }],
+    ['结果', { ...ok, result: 'maybe' }], ['没有结果', { date: ok.date, item: ok.item }], ['备注太长', { ...ok, note: '字'.repeat(NOTE_MAX + 1) }]]) {
+    const r = await vote(db, f);
+    assert.equal(r.status, 400, name);
+    assert.equal((await r.json()).ok, false, name);
+  }
+  const r = await vote(db, { ...ok, item: 'ffffffffff' });
+  assert.equal(r.status, 400);
+  assert.equal((await r.json()).error, '这一期没有这一条');
+  assert.equal((await vote(db, { ...ok, date: '2026-01-01' })).status, 400, '没有这一期');
+  assert.deepEqual(votes(db), [], '一条都没存');
+  // 备注正好 200 个字可以
+  assert.equal((await vote(db, { ...ok, note: '字'.repeat(NOTE_MAX) })).status, 200);
+  fresh();
+});
+
+test('耳听点选：存、改、读——点了存一行，改了覆盖（以最后一次为准），页面和列表显示已选，导出带上条目的字；没有脚本时表单提交 303 回到那一条', async () => {
+  fresh();
+  const db = listenDb();
+  const [a, b] = LIS_ITEMS;
+  let r = await vote(db, { date: LIS_DAY, item: a.id, result: 'right' });
+  assert.equal(r.status, 200);
+  let j = await r.json();
+  assert.equal(j.ok, true);
+  assert.equal(j.result, 'right');
+  assert.equal(j.label, '念对了');
+  assert.equal(votes(db).length, 1);
+  // 改选（带备注）：还是一行
+  r = await vote(db, { date: LIS_DAY, item: a.id, result: 'wrong', note: '  后半句\u200B念错了\n  ' });
+  j = await r.json();
+  assert.equal(j.result, 'wrong');
+  const rows = votes(db);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].result, 'wrong');
+  assert.equal(rows[0].note, '后半句 念错了', '去掉看不见的字符、换行和首尾空格');
+  assert.equal(rows[0].date, LIS_DAY);
+  // 没有脚本：普通表单提交 → 303 回到那一条，带“存好了”
+  r = await vote(db, { date: LIS_DAY, item: b.id, result: 'unsure' }, { json: false });
+  assert.equal(r.status, 303);
+  assert.equal(r.headers.get('Location'), `/frontier/_listen?date=${LIS_DAY}&msg=saved#i-${b.id}`);
+  assert.equal(votes(db).length, 2);
+  // 页面显示已选
+  const html = await (await lis(`/frontier/_listen?date=${LIS_DAY}&msg=saved`, { db, headers: ownerCookie })).text();
+  const cardA = html.slice(html.indexOf(`id="i-${a.id}"`), html.indexOf(`id="i-${b.id}"`));
+  assert.match(cardA, /value="wrong" aria-pressed="true"/);
+  assert.match(cardA, /value="right" aria-pressed="false"/);
+  assert.match(cardA, /value="后半句 念错了"/);
+  assert.match(cardA, /已选：念错了 · \d\d-\d\d \d\d:\d\d（英国时间）/);
+  assert.match(html, /已点 2 处/);
+  assert.match(html, /class="flash ok" role="status">存好了/);
+  // 列表
+  assert.match(await (await lis('/frontier/_listen', { db, headers: ownerCookie })).text(), /5 处（其中 2 条成批的多半是转写听错，可不听） · 点了 2 处/);
+  // 导出
+  const ex = await lis('/frontier/_listen?export=json', { db, headers: ownerCookie });
+  assert.equal(ex.status, 200);
+  assert.match(ex.headers.get('Content-Type'), /application\/json/);
+  assert.match(ex.headers.get('Content-Disposition'), /attachment; filename="listen-votes-\d{4}-\d{2}-\d{2}\.json"/);
+  assert.equal(ex.headers.get('Cache-Control'), 'no-store');
+  const data = await ex.json();
+  assert.equal(data.条数, 2);
+  assert.deepEqual(data.结果.map((x) => [x.日期, x.条目, x.结果, x.结果码, x.备注, x.位置, x.判断, x.关乎事实, x.原稿, x.转写成, x.第几处]), [
+    [LIS_DAY, a.id, '念错了', 'wrong', '后半句 念错了', a.pos, a.judge, true, a.say, a.heard, 1],
+    [LIS_DAY, b.id, '没听出来', 'unsure', '', b.pos, b.judge, false, b.say, b.heard, 2],
+  ]);
+  assert.match(data.结果[0].点选时间, /^\d{4}-\d{2}-\d{2}T/);
+  // 条目文件里已经没有的编号：照样导出，写明找不到
+  db.sql.prepare('INSERT INTO listen_votes VALUES (?, ?, ?, ?, ?)').run('2026-10-01', '0123456789', 'right', '', 1);
+  const d2 = await (await lis('/frontier/_listen?export=json', { db, headers: ownerCookie })).json();
+  assert.equal(d2.条数, 3);
+  assert.match(d2.结果[2].找不到条目, /没有这个编号/);
+  // 带撞号后缀的编号也认
+  assert.ok(ITEM_RE.test('d4e5f6a7b8-2'));
+  assert.equal((await vote(db, { date: LIS_DAY, item: 'd4e5f6a7b8-2', result: 'right' })).status, 200);
+  assert.equal(visitRows(db).length, 0, '不记访问');
+  fresh();
+});
+
+test('耳听点选：线上还没建表时第一次点自己建表；数据库坏了页面照样显示条目（没有已选结果、顶上说一句），POST 回 503；没绑数据库也一样', async () => {
+  fresh();
+  // 没有 listen_votes 表：页面照常、没有已选；点了自己建表
+  const raw = listenDb({ migrate: false });
+  let html = await (await lis(`/frontier/_listen?date=${LIS_DAY}`, { db: raw, headers: ownerCookie })).text();
+  assert.match(html, /已点 0 处/);
+  assert.ok(!/class="flash"/.test(html));
+  assert.equal((await vote(raw, { date: LIS_DAY, item: LIS_ITEMS[0].id, result: 'right' })).status, 200);
+  assert.ok(raw.log.some((q) => /CREATE TABLE IF NOT EXISTS listen_votes/.test(q)));
+  assert.equal(votes(raw).length, 1);
+  assert.deepEqual([...(await loadVotes(raw, LIS_DAY)).keys()], [LIS_ITEMS[0].id]);
+  // 数据库坏了（站长本来就过门，档位读不到也不挡站长）
+  const bad = listenDb();
+  bad.fail = true;
+  const res = await lis(`/frontier/_listen?date=${LIS_DAY}`, { db: bad, headers: ownerCookie });
+  assert.equal(res.status, 200);
+  html = await res.text();
+  assert.match(html, /读数据库出错/);
+  assert.match(html, /读不到已点的结果/);
+  for (const it of LIS_ITEMS) assert.ok(html.includes(`id="i-${it.id}"`), '条目照样都在');
+  const p = await vote(bad, { date: LIS_DAY, item: LIS_ITEMS[0].id, result: 'wrong' });
+  assert.equal(p.status, 503);
+  assert.equal((await p.json()).ok, false);
+  const p2 = await vote(bad, { date: LIS_DAY, item: LIS_ITEMS[0].id, result: 'wrong' }, { json: false });
+  assert.equal(p2.status, 303);
+  assert.match(p2.headers.get('Location'), /msg=dberr#i-/);
+  assert.match(await (await lis('/frontier/_listen', { db: bad, headers: ownerCookie })).text(), /读数据库出错.*看不到点了几处/s);
+  assert.equal((await lis('/frontier/_listen?export=json', { db: bad, headers: ownerCookie })).status, 503);
+  assert.ok(!LOGS.some((l) => l.includes(LIS_ITEMS[0].id)), '日志不写条目编号');
+  // 没绑数据库
+  fresh();
+  html = await (await lis(`/frontier/_listen?date=${LIS_DAY}`, { headers: ownerCookie })).text();
+  assert.match(html, /没连上数据库/);
+  assert.ok(html.includes(`id="i-${LIS_ITEMS[0].id}"`));
+  const p3 = await vote(undefined, { date: LIS_DAY, item: LIS_ITEMS[0].id, result: 'wrong' });
+  assert.equal(p3.status, 503);
+  assert.match((await p3.json()).error, /没连上数据库/);
+  fresh();
+});
+
+test('耳听点选：站长在“只有我”档放音频——网页上那份 mp3 带 Range 回 206、内容对、不记“开始听”；站长钥匙 ?k= 在这一页也能登录', async () => {
+  fresh();
+  const db = listenDb();
+  await ownerPost(db, { op: 'mode', mode: 'owner' });
+  const res = await lis(AUDIO_PATH, { db, headers: { ...ownerCookie, Range: 'bytes=1000-1999' } });
+  assert.equal(res.status, 206);
+  assert.equal(res.headers.get('Content-Range'), `bytes 1000-1999/${AUDIO.length}`);
+  assert.deepEqual(new Uint8Array(await res.arrayBuffer()), AUDIO.slice(1000, 2000));
+  const r0 = await lis(AUDIO_PATH, { db, headers: { ...ownerCookie, Range: 'bytes=0-' } });
+  assert.equal(r0.status, 206);
+  await r0.arrayBuffer();
+  assert.equal(visitRows(db).length, 0, '站长听不记');
+  // 匿名在“只有我”档：音频是门页
+  assert.equal((await lis(AUDIO_PATH, { db, headers: { Range: 'bytes=0-1' } })).status, 403);
+  // ?k= 登录后跳回这一页（不带钥匙）
+  const login2 = await lis(`/frontier/_listen?date=${LIS_DAY}&k=${encodeURIComponent(KEY)}`, { db });
+  assert.equal(login2.status, 302);
+  assert.equal(login2.headers.get('Location'), `/frontier/_listen?date=${LIS_DAY}`);
+  assert.match(login2.headers.get('Set-Cookie'), /^fd_pass=/);
+  // 钥匙不对：照常 404（不暴露这一页）
+  assert.equal((await lis(`/frontier/_listen?date=${LIS_DAY}&k=wrong`, { db })).status, 404);
+  fresh();
+});
+
+test('耳听点选的小函数：别的地址 listenRoute 一律 null（照旧处理、不读数据库）；变体 deny；结果三种', async () => {
+  for (const p of ['/frontier', '/frontier/', '/frontier/?date=2026-11-08', '/frontier/past/', AUDIO_PATH, '/frontier/_visits', '/frontier/_access',
+    '/frontier/_enter', '/frontier/feedback', '/frontier/listen', '/frontier/issues/2026-11-08/issue.js', '/frontier/%E0%A4%A', '/frontier/_podcast/feed.xml']) {
+    assert.equal(listenRoute(p), null, p);
+  }
+  assert.equal(listenRoute('/frontier/_listen'), 'page');
+  for (const p of ['/frontier/_listen/', '/frontier/_LISTEN', '/frontier/%5Flisten', '/frontier//_listen', '/frontier/_listen/index.json']) assert.equal(listenRoute(p), 'deny', p);
+  assert.deepEqual(Object.keys(RESULT), ['right', 'wrong', 'unsure']);
+  assert.deepEqual(Object.values(RESULT), ['念对了', '念错了', '没听出来']);
+  // 普通请求一次数据库都不多查（同播客那一条）：档位缓存热着时，取网页、mp3，数据库日志不变
+  fresh();
+  const db = listenDb();
+  await send('/frontier/', { db });
+  const n = db.log.length;
+  await send('/frontier/', { db, method: 'HEAD' });
+  await send(AUDIO_PATH, { db, headers: { Range: 'bytes=5-9' } });
+  assert.equal(db.log.filter((q) => /listen_votes/.test(q)).length, 0);
+  assert.ok(db.log.length - n <= 0);
+  fresh();
+});

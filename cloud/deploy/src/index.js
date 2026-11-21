@@ -7,8 +7,9 @@
 //   /frontier 跳到 /frontier/（页面里的地址都是相对的，要以 / 结尾才对）；以 / 结尾的目录请求给该目录的 index.html。
 // · 每期的网址：网页本身是一页，按 ?date=YYYY-MM-DD 换期（site/v3/app.js 原有的做法）。
 //   好记的写法 /frontier/2026-11-09/ 跳到 /frontier/?date=2026-11-09（不能直接在那个目录里放网页：页面里的相对地址会错位）。
-// · 只许 GET、HEAD（只能看，不能改）。例外只有三个 POST：/frontier/feedback（读者反馈，11-10 加，见下面“读者反馈”一节）、
-//   /frontier/_enter（输访问口令）和 /frontier/_access（站长设置页），后两个是“开放程度”（11-10 加，见本文件开头最后一条和 src/access.js）。
+// · 只许 GET、HEAD（只能看，不能改）。例外只有四个 POST：/frontier/feedback（读者反馈，11-10 加，见下面“读者反馈”一节）、
+//   /frontier/_enter（输访问口令）和 /frontier/_access（站长设置页），这两个是“开放程度”（11-10 加，见本文件开头最后一条和 src/access.js），
+//   /frontier/_listen（耳听点选页存结果，11-21 加，只认站长，见本文件开头最后一条和 src/listen.js）。
 // · 所有响应都加：X-Robots-Tag: noindex, nofollow（不收录、不顺着链接爬；页面里另有同样的 meta 标签）、
 //   Referrer-Policy: same-origin（点外链时不把本站网址告诉对方）、X-Content-Type-Options: nosniff（浏览器严格按类型处理文件）。
 // · 浏览器缓存分两类：
@@ -32,11 +33,15 @@
 //   表不存在或没设过 → 公开，和加这个功能以前一模一样。
 // · 播客订阅（11-19 加，见下面“播客订阅”一节和 src/access.js）：/frontier/podcast/<钥匙>/… 在站长钥匙登录、开放程度的门之前处理，
 //   三档都不用 Cookie；/frontier/_podcast/…（上线包里的订阅源模板）谁直接来要都 404。路径里没有这两种写法的请求一行都不多走、不读数据库。
+// · 耳听点选页（11-21 加，src/listen.js）：只有 /frontier/_listen 这一个写法、只认站长 Cookie（同统计页、设置页），GET 看、POST 存；
+//   路径的宽松写法（反复解码、改小写、\ 换 /、并掉连续的 /，同播客订阅的 loosePath）里含 _listen 的别的写法——上线包里的
+//   frontier/_listen/<日期>.json、大小写、%5F、双斜杠、多一层目录——谁来都 404（站长也一样），不去取静态文件。
 
 import { shouldRecord, recordVisit, shouldRecordPlay, recordPlay, cleanupVisits } from './visits.js';
 import { statsResponse } from './stats.js';
 import { ACCESS_PATH, ENTER_PATH, decide, privatize, gatePage, nextOf, handleEnter, accessGet, accessPost, sha256hex, same, cookieValue } from './access.js';
 import { readFeed, feedKey, feedBase, FEED_PLACEHOLDER } from './access.js';
+import { LISTEN_PATH, listenGet, listenPost } from './listen.js';
 
 const PREFIX = '/frontier';
 const STATS_PATH = PREFIX + '/_visits';
@@ -399,6 +404,12 @@ async function podcastFile(req, url, env, route, key) {
 // 站长专用页（统计页、设置页）的写法：没有站长 Cookie 的、或者写法不是这一页本身（多了 /、.csv 之类）的，一律当作“没有这个页面”
 const ownerPage = (path, page) => path === page || path.startsWith(page + '/') || path.startsWith(page + '.');
 
+// 耳听点选页（11-21 加）：这个路径归不归它管。null＝不归（照常处理）；'page'＝就是 /frontier/_listen；'deny'＝别的含 _listen 的写法，一律 404
+export function listenRoute(path) {
+  if (!loosePath(path).includes('_listen')) return null;
+  return path === LISTEN_PATH ? 'page' : 'deny';
+}
+
 export default {
   async fetch(req, env, ctx) {
     const url = new URL(req.url);
@@ -415,6 +426,11 @@ export default {
     if (req.method === 'POST' && path === ACCESS_PATH) {                                                  // 站长设置页提交
       if (!isOwner(req, env)) return notFound('POST');
       return accessPost(req, env, Date.now(), wantHash(env));
+    }
+    const lis = listenRoute(path);                                                                        // 耳听点选页（11-21 加）
+    if (req.method === 'POST' && lis) {
+      if (lis !== 'page' || !isOwner(req, env)) return notFound('POST');
+      return listenPost(req, env, Date.now());
     }
     if (req.method !== 'GET' && req.method !== 'HEAD') return plain(405, '只能看，不能改', { Allow: 'GET, HEAD' });
     // 播客订阅：在站长钥匙登录、开放程度的门之前；不归它管的请求 podcastRoute 返回 null，照旧往下走
@@ -437,6 +453,11 @@ export default {
     if (ownerPage(path, ACCESS_PATH)) {
       if (!owner || path !== ACCESS_PATH) return notFound(req.method);
       return accessGet(req, env, Date.now(), wantHash(env));
+    }
+    // 耳听点选页：同上，只认站长；含 _listen 的别的写法（上线包里的条目文件、大小写、%5F、双斜杠……）谁来都 404
+    if (lis) {
+      if (lis !== 'page' || !owner) return notFound(req.method);
+      return listenGet(req, url, env, Date.now());
     }
 
     // 门：这一档不放行的，回门页（不去取静态文件、不记访问）
