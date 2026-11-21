@@ -58,6 +58,8 @@ class PrepareStages(unittest.TestCase):
                 mock.patch.object(V.IMG, "ensure", lambda *a, **k: {}), mock.patch.object(V.SB, "image_requests", lambda s: []),
                 mock.patch.object(V.SB, "structure", lambda s, i: ["结构提醒"]),
                 mock.patch.object(V.SB, "check_facts", mk("facts", facts_err, {"k": 1})),
+                # 11-21 合并加：网页／视频那一路在事实核对之后调 attach_datelines（记原文电头日期），这里的假 facts 不是真卡，换成什么都不做
+                mock.patch.object(V.SB, "attach_datelines", lambda f, i: 0),
                 mock.patch.object(V, "en_registry", lambda: []),
                 mock.patch.object(V.SB, "check_labels", mk("labels", labels_err, 3)),
                 mock.patch.object(V.SB, "check_posts", mk("posts", posts_err, ["帖子提醒"])),
