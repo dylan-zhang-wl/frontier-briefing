@@ -480,7 +480,8 @@ def to_display(al, shown, dur):
     units.sort(key=lambda u: (u["scene"], u["i"]))
     return dict(al, units=units, narrations=list(shown), scenes=video_align.scene_spans(units, shown),
                 sentences=video_align.spans(units, shown, video_align.SENT_END),
-                cues=video_align.subtitle_cues(units, shown, dur))
+                # 11-21：D:5、10:30 这类整体不拆到两条字幕里（FD_KEEP_TOKEN=off 退回原来的切法）
+                cues=video_align.subtitle_cues(units, shown, dur, keep_tokens=video_align.token_switch()))
 
 
 def align(issue, vmp3, marks, dur, sb):

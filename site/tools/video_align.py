@@ -320,8 +320,34 @@ def wlen(s):
     return sum(1.0 if CJK.match(c) else 1.1 if c.isdigit() else 0.35 if c.isascii() and c.isalpha() else 0.5 for c in s)
 
 
-def subtitle_cues(units, narrations, duration, maxw=18.0):
-    """字幕：按句切，长句再按逗号切成不超过约 18 字的小段；每段带每个字的起始秒（卡拉 OK 逐字变亮用）。"""
+def token_switch():
+    """字幕切段时 D:5、10:30、3:2 这类整体不拆（2026-11-21 加）：环境变量 FD_KEEP_TOKEN 写 off／0／关 就退回原来的切法，默认开。
+    同一个开关也管换行（zh_breaks.py 不在这类冒号后折行）。"""
+    return str(os.environ.get("FD_KEEP_TOKEN") or "").strip().lower() not in ("off", "0", "false", "no", "关")
+
+
+def _alnum(c):
+    return c.isascii() and c.isalnum()
+
+
+def inside_token(text, ci):
+    """text[ci] 这个冒号是不是一个整体的一部分、不是停顿：半角冒号前后紧挨 ASCII 字母或数字（D:5 国家组、10:30、1:1），
+    或者全角冒号前后都是数字（3：2、10：30）。前面是汉字的冒号（"他说："）、隔了空格的（"D: 5"）、全角冒号接英文的
+    （"千问 4：Max"、"MIT：GPT-6"，这是在列举、引出处）照旧算停顿。zh_breaks.py 的换行用同一条规矩。"""
+    if not 0 < ci < len(text) - 1:
+        return False
+    a, ch, b = text[ci - 1], text[ci], text[ci + 1]
+    if ch == ":":
+        return _alnum(a) and _alnum(b)
+    if ch == "：":
+        return a.isascii() and a.isdigit() and b.isascii() and b.isdigit()
+    return False
+
+
+def subtitle_cues(units, narrations, duration, maxw=18.0, keep_tokens=False):
+    """字幕：按句切，长句再按逗号切成不超过约 18 字的小段；每段带每个字的起始秒（卡拉 OK 逐字变亮用）。
+    keep_tokens（2026-11-21 加，视频 v3 组装按 token_switch() 传）：D:5、10:30 这类字母数字中间的冒号不当断点
+    （11-17 视频 81.75–88.4 秒字幕切成"向总部在 D:"｜"5 国家组……"）。不传就和原来一样（视频 v2、旧期网页走这条）。"""
     ct = char_times(units, narrations)
     ends = {(u["scene"], u["i"]): u["e"] for u in units}
     cues = []
@@ -331,6 +357,8 @@ def subtitle_cues(units, narrations, duration, maxw=18.0):
         for ci, ch in enumerate(text):
             # 数字里的千分位逗号（5,000）不是停顿，不在这里断开字幕
             if ch == "," and 0 < ci < len(text) - 1 and text[ci - 1].isdigit() and text[ci + 1].isdigit():
+                continue
+            if keep_tokens and inside_token(text, ci):
                 continue
             if ch in CLAUSE_END or ci == len(text) - 1:
                 clauses.append((a, ci + 1))

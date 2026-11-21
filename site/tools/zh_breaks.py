@@ -113,6 +113,19 @@ def _protected(seg):
     return no
 
 
+def _alnum(c):
+    return c.isascii() and c.isalnum()
+
+
+def _digit(c):
+    return c.isascii() and c.isdigit()
+
+
+def _keep_token():
+    """D:5 这类整体不拆（2026-11-21 加）：环境变量 FD_KEEP_TOKEN 写 off／0／关 就关，没设按开。"""
+    return str(os.environ.get("FD_KEEP_TOKEN") or "").strip().lower() not in ("off", "0", "false", "no", "关")
+
+
 def _ok(seg, i, no):
     a, b = seg[i - 1], seg[i]
     if i in no or a.isspace() or b.isspace() or a in OPEN or b in CLOSE:
@@ -122,6 +135,11 @@ def _ok(seg, i, no):
     if a == WJ or b == WJ:   # 连接符两边都不切
         return False
     if a == "," and b.isdigit() and i >= 2 and seg[i - 2].isdigit():   # v3.2：千分位 1,000 不在逗号后折行
+        return False
+    # 2026-11-21：字母数字中间的半角冒号（D:5 国家组、10:30、1:1 复刻）、数字中间的全角冒号（3：2）是一个整体，不在冒号后折行
+    # （11-17 网页、视频都切成"D:｜5"）。全角冒号接英文的（"千问 4：Max"、"MIT：GPT-6"）是在列举、引出处，照旧可以折。
+    # 环境变量 FD_KEEP_TOKEN 写 off 关掉，和以前逐字相同；字幕不切成两条那一半在 video_align.py，同一个开关
+    if i >= 2 and ((a == ":" and _alnum(seg[i - 2]) and _alnum(b)) or (a == "：" and _digit(seg[i - 2]) and _digit(b))) and _keep_token():
         return False
     if b in "后前时" and CJK.match(a):   # v3.2：“上市后”“发布前”这类不把“后/前/时”单独甩到下一行
         return False
