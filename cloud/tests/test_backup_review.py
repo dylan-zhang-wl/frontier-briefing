@@ -129,8 +129,8 @@ C_OK = {"人名头衔": [{"名字": "Andrew Feldman", "稿子里的头衔或身�
                     "卡里原文": "创始人 Andrew Feldman 说了话", "对得上": True}], "结果": "过", "证据": "一个名字", "材料里要人做事的话": []}
 
 
-def run_review(d, chat, deadline=None, clock=None):
-    iss = BR.Issue(DAY, d)
+def run_review(d, chat, deadline=None, clock=None, day=DAY):
+    iss = BR.Issue(day, d)
     mimo = BW.Mimo(iss.p(BR.MIMO_ROOT), chat=chat, max_calls=8, max_tokens=400000, deadline=deadline,
                    clock=(lambda: clock[0]) if clock else None)
     with mock.patch("builtins.print"):
@@ -696,6 +696,227 @@ class Cli(unittest.TestCase):
                 rc = BR.main(["run", "--date", DAY, "--issue-dir", str(d)])
             self.assertEqual(rc, 2)
             self.assertEqual(before, BR.snapshot(d))
+
+
+# ---------------------------------------------------------------- 11-21 加：周日对谈的配音记录、第 6 项、第 54 项
+SUN = "2026-11-22"          # 星期日：周日版（两人对谈）
+# 自造的两轮对谈（和真实哪一期都无关）：甲一轮里有同音字（会话→绘画）、数字变了（3→5）；乙一轮里有不同音（传奇→禅奇，逐字比是“传”→“禅”）
+SUN_T1 = "今天先说会话的事。这一期聊 3 件事。"
+SUN_H1 = "今天先说绘画的事这一期聊5件事"
+SUN_T2 = "我们接着说传奇故事。"
+SUN_H2 = "我们接着说禅奇故事"
+SUN_POD = "## 开场\n\n甲：%s\n\n## 深谈·来龙去脉\n\n乙：%s\n" % (SUN_T1, SUN_T2)
+SUN_HUMAN, SUN_MIX = "05_配音/周日深谈_人声", "05_配音/周日深谈_带音效"
+
+
+def dialog_qc():
+    """照 pipeline/dialog_tts.py 写的样子：逐条转写在“各轮”，“各块”是精简版；音高、音色把关按甲、乙分开，偏差按轮号（字符串）记。"""
+    import tts_qc as Q
+    turns = []
+    for n, (who, ch, ref, hyp) in enumerate([("甲（庚A）", "开场", SUN_T1, SUN_H1), ("乙（男声03）", "深谈·来龙去脉", SUN_T2, SUN_H2)], 1):
+        turns.append({"轮": n, "章": ch, "说话人": who, "原稿": ref, "选用第几条": 1, "共录几条": 1, "需人工复听": False,
+                      "秒数": 8.0, "章内开始秒": 0.02, "各条": [{"第几条": 1, "转写": hyp, "差异": Q.check(ref, hyp)["差异"]}]})
+    turns[1]["专名读音（请你耳听）"] = [{"名字": "示例", "转写成": "示意", "处数": 1}]
+    blocks = [{"块": 1, "章": "开场", "说话人": "甲（庚A）", "原稿": SUN_T1, "秒数": 8.0, "开始秒": 0.02},
+              {"块": 2, "章": "深谈·来龙去脉", "说话人": "乙（男声03）", "原稿": SUN_T2, "秒数": 8.0, "开始秒": 8.84}]
+    whole = {"需人工复听轮数": 0, "轮数": 2,
+             "音高把关": {"甲": {"仍超出的轮": [], "语速标出的轮": [1], "各轮偏差半音": {"1": 0.2}},
+                        "乙": {"仍超出的轮": [2], "语速标出的轮": [], "各轮偏差半音": {"2": -2.4}}, "允许偏差半音": 1.5, "最多再录": 2},
+             "音色把关": {"甲": {"音色需人工听的轮": []}, "乙": {"音色需人工听的轮": []}},
+             "时长把关": {"配完按实际": {"时长分钟": 15.5, "区间分钟": [15.0, 17.0], "通过": True}}}
+    return {"整集": whole, "各轮": turns, "各块": blocks}
+
+
+def make_sunday(root, qc=None, usage=None):
+    d = Path(root) / SUN
+    steps = {k: {"状态": "做完", "说明": "", "附加": {}} for k in STEP_KEYS}
+    steps["voice"]["附加"] = {"播客": "主声音", "视频旁白": "不出（视频：关）", "决定": {"用备用": False, "原因": ""}}
+    steps["web"]["附加"] = {"播客": SUN_MIX}
+    steps["video"] = {"状态": "跳过", "说明": "视频：关（MiMo 备用那天按规矩不出视频）", "附加": {"视频开关": "关"}}
+    steps["web2"] = {"状态": "跳过", "说明": "视频：关，第 13 步的网页就是成品", "附加": {"视频开关": "关"}}
+    wj(d / "logs/fd_state.json", {"步骤": steps, "运行记录": [{"开始": "2026-11-22 04:20:00 GMT", "命令": "fd run --date %s" % SUN,
+                                                          "结果": "跑完", "结束": "2026-11-22 06:00:00 GMT"}]})
+    wj(d / "logs/验收.json", {"没过": [], "提醒": []})
+    wt(d / "00_调度报告.md", "# %s · 周日版（Shirley、Dylan 双人深谈） · 调度报告\n\n- **这一期齐了**\n" % SUN)
+    wt(d / "04_文稿/claude_播客_周日深谈.md", SUN_POD)
+    wj(d / "04_文稿/claude_网页.json", {"sections": [], "notes": []})
+    wt(d / "审读意见.md", "必须改：0\n")
+    wt(d / "审读处理.md", "# 审读处理\n")
+    wt(d / "自检.md", "# 自检\n")
+    wt(d / "10_网页v3/index.html", "<html></html>")
+    wt(d / SUN_MIX / "episode.mp3", "x")
+    wt(d / SUN_HUMAN / "episode.mp3", "x")
+    wt(d / "每日运行日志_云端.md", "- %s 跑完\n" % SUN)
+    wj(d / "花费.json", {"合计美元": {"Gemini": 0.3}})
+    wj(d.parent / "月度账本/2026-11.json", {"条目": [{"服务": "Gemini", "美元": 1.0}], "上限美元（Gemini 配音）": 8.0})
+    wj(d / "03_事件卡/cards_写稿用.json", CARDS)
+    wj(d / SUN_HUMAN / "qc.json", dialog_qc() if qc is None else qc)
+    wj(d / SUN_HUMAN / "usage.json", {"各次调用": usage if usage is not None else [
+        {"轮": 2, "第几条": 1, "说话人": "乙", "配音写法": [{"写法": "传奇", "配音写法": "船奇", "处数": 1}]},
+        {"轮": 2, "第几条": 2, "说话人": "乙", "配音写法": [{"写法": "传奇", "配音写法": "船奇", "处数": 1}]}]})
+    wj(d / SUN_MIX / "qc.json", {"整集": {"整集秒数": 60.0, "响度LUFS": -16.0, "真峰值dBTP": -2.0},
+                                 "时间线": [{"段": "人声·开场", "开始秒": 6.0}, {"段": "人声·深谈·来龙去脉", "开始秒": 30.0}]})
+    return d
+
+
+def sunday_review(d, **kw):
+    chat = FakeChat(a={"请你耳听": [], "单列核对": [], "材料里要人做事的话": []}, b=b_all(), c=C_OK, **kw)
+    rc, v, md = run_review(d, chat, day=SUN)
+    return chat, rc, v, md
+
+
+class SundayDialog(unittest.TestCase):
+    """11-21：周日对谈的逐条转写在 qc.json“各轮”，原来只读“各块”，一块也读不到：“请你耳听”整栏是空的、第 25 项悄悄判过，
+    第 26 项读单人稿的键读出 None、误判不过。现在两种都认；读不到时第 25、26 项记“查不了”、进“MiMo没查成”、挡自动放行。"""
+
+    def test_material_reads_turns(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = make_sunday(t)
+            lm = BR.listen_material(BR.Issue(SUN, d))
+            self.assertEqual((len(lm["块"]), lm["共几块"], lm["读不到"]), (2, 2, []))
+            pairs = [(x["原稿"], x["转写"]) for x in lm["处"]]
+            for p in (("会话", "绘画"), ("3", "5"), ("传", "禅")):
+                self.assertIn(p, pairs)
+            self.assertTrue(all(b["对得上配音程序记的差异"] for b in lm["块"]))
+            self.assertEqual([b["开始"] for b in lm["块"]], ["0:06", "0:30"])     # 章名里带“·”的那章也按混音版时间线换算
+            self.assertGreaterEqual(next(x for x in lm["处"] if x["原稿"] == "传")["秒"], 30.0)
+            self.assertIn("专名读音（请你耳听）", lm["块"][1]["请你耳听栏"])        # 各轮里的“请你耳听”栏也接回来了
+            self.assertEqual(next(x for x in lm["处"] if x["原稿"] == "3")["程序分拣"], BR.LISTEN_REAL)
+
+    def test_metrics_per_speaker(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = make_sunday(t)
+            m = BR.listen_material(BR.Issue(SUN, d))["指标"]
+            self.assertEqual([x["位置"] for x in m], ["播客 0:06 起（第 1 轮，甲）", "播客 0:30 起（第 2 轮，乙）"])
+            self.assertEqual(m[0]["判断"], BR.LISTEN_UNSURE)
+            self.assertIn("语速指标", m[0]["说明"])
+            self.assertEqual(m[1]["说明"], "音高偏差 2.4 半音（允许 1.5）")         # 偏差按轮号（字符串键）取，取绝对值
+            self.assertEqual(m[1]["判断"], BR.LISTEN_REAL)
+
+    def test_item26_dialog_keys(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = make_sunday(t)
+            res = BR.program_items(BR.Issue(SUN, d), SUN_POD)
+            self.assertEqual(res[26], (BR.FAIL, "人声 qc.json（周日对谈）：需人工复听 0 轮；音高仍超出的轮 乙第 2 轮；音色需人工听的轮 无"))
+            self.assertEqual(res["_没查成"], [])
+            qc = dialog_qc()
+            qc["整集"]["音高把关"]["乙"]["仍超出的轮"] = []
+            wj(d / SUN_HUMAN / "qc.json", qc)
+            self.assertEqual(BR.program_items(BR.Issue(SUN, d), SUN_POD)[26][0], BR.PASS)
+
+    def test_full_run_judges_25_from_turns(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = make_sunday(t)
+            chat, rc, v, md = sunday_review(d)
+            self.assertEqual(rc, 0)
+            self.assertIn("A", chat.seen)
+            self.assertNotIn(gate.MIMO_MISSED, v)
+            self.assertIn("| 25 | 不过 | 请你耳听里多半真念错", md)                  # 原来周日拿到空列表，这里是“过”
+            self.assertGreaterEqual(len(v["请你耳听"]), 4)
+            self.assertEqual(v["版别"], "周日版（Shirley、Dylan 双人深谈）")
+
+    def test_unreadable_turns_count_as_missed_and_block(self):
+        with tempfile.TemporaryDirectory() as t:
+            qc = dialog_qc()
+            qc.pop("各轮")                                                # 格式又变了：各块里没有转写，各轮也没有
+            d = make_sunday(t, qc=qc)
+            BackupDayGate.backup_day(None, d, True)                        # 就算设了自动放行
+            chat, rc, v, md = sunday_review(d)
+            self.assertEqual(rc, 0)
+            self.assertNotIn("A", chat.seen)                               # 一块转写也没读到，不调 A
+            self.assertEqual([x["项"] for x in v[gate.MIMO_MISSED]], [25])
+            self.assertIn("2 块读不到配音时的转写", v[gate.MIMO_MISSED][0]["为什么"])
+            self.assertIn("| 25 | 查不了 |", md)
+            g = gate.Gate(d)
+            g.c9()
+            self.assertFalse(g.results[-1]["过"])
+            self.assertIn("第 25 项", g.results[-1]["说明"])
+            self.assertTrue(json.loads((d / BR.RECORD).read_text(encoding="utf-8"))["gate 读法自查"]["对得上"])
+
+    def test_unrecognized_relisten_counts_as_missed(self):
+        with tempfile.TemporaryDirectory() as t:
+            qc = dialog_qc()
+            qc["整集"].pop("需人工复听轮数")
+            d = make_sunday(t, qc=qc)
+            chat, rc, v, md = sunday_review(d)
+            self.assertEqual([x["项"] for x in v[gate.MIMO_MISSED]], [26])
+            self.assertIn("| 26 | 查不了 |", md)
+
+    def test_no_qc_counts_missed_weekday_too(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = make_issue(t)
+            (d / "05_配音/播客_v3/qc.json").rename(d / "qc_挪开.json")
+            rc, v, md = run_review(d, FakeChat(a=None, b=b_all(), c=C_OK))
+            self.assertEqual([x["项"] for x in v[gate.MIMO_MISSED]], [25, 26])  # 原来只写查不了、不挡
+            self.assertIn("| 25 | 查不了 | 播客 qc.json 读不了", md)
+
+    def test_weekday_item26_unchanged(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = make_issue(t)
+            self.assertEqual(BR.program_items(BR.Issue(DAY, d), POD)[26],
+                             (BR.PASS, "人声 qc.json：需人工复听 0 块；音高仍超出的块 无；音色需人工听的块 无"))
+
+
+class ItemFiftyFour(unittest.TestCase):
+    """第 54 项“配音写法换了几处”：周日对谈不往日志印那一行，改数人声 usage.json；单人稿同一块换了两个词也数得出（11-21）。"""
+
+    def test_dialog_counts_usage_first_take_only(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = make_sunday(t)
+            r, ev = BR.program_items(BR.Issue(SUN, d), SUN_POD)[54]
+            self.assertEqual(r, BR.PASS, ev)                                # 第 2 条是重录，不重复数
+            self.assertTrue(ev.startswith("传奇 → 船奇：稿子 1 处，配音时换了 1 处（05_配音/周日深谈_人声/usage.json"), ev)
+
+    def test_dialog_without_usage_record(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = make_sunday(t, usage=[])
+            r, ev = BR.program_items(BR.Issue(SUN, d), SUN_POD)[54]
+            self.assertEqual(r, BR.FAIL)
+            self.assertIn("配音时换了 0 处", ev)
+
+    def test_weekday_two_words_in_one_line(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = make_issue(t)
+            pod = POD.replace("先说会话", "先说微软和会话")
+            wt(d / "04_文稿/claude_播客_v3.md", pod)
+            wt(d / "logs/11_配音_20261118-050000.log", "  块1/2【开场】\n    配音写法（只换送去配音的字）：微软 → 威软（1 处）、传奇 → 船奇（1 处）\n")
+            r, ev = BR.program_items(BR.Issue(DAY, d), pod)[54]
+            self.assertEqual(r, BR.PASS, ev)
+            self.assertIn("传奇 → 船奇：稿子 1 处，第 11 步日志换了 1 处", ev)   # 原来的正则只认冒号后第一个词，这里是 0
+            self.assertIn("logs/11_配音_20261118-050000.log", ev)
+
+
+class ItemSix(unittest.TestCase):
+    """第 6 项“自检说的和实际一致”：MiMo 备用写稿那天没有 自检.md（11-17 云端试跑 MiMo 写“查不了：材料里没有 自检.md”）。
+    11-21：那天程序直接定“查不了”（设计内，不算没查成），不问 MiMo；Claude 写稿那天、或 自检.md 在，照旧交给调用 B。"""
+
+    def test_mimo_day_without_selfcheck(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = make_issue(t)
+            ItemOne.mimo_day(None, d)
+            iss = BR.Issue(DAY, d)
+            r = BR.Review(iss, None)
+            r.prepare()
+            self.assertNotIn(6, r.todo_b)
+            self.assertNotIn("| 6 |", r.sys_bc)
+            self.assertNotIn("、6、", r.user_b.splitlines()[0] + "、")
+            rc, v, md = run_review(d, FakeChat(a=Run.a_reply(None, d), b=b_all(), c=C_OK))
+            self.assertIn("| 6 | 查不了 | 查不了：MiMo 备用写稿那天没有 自检.md", md)
+            self.assertNotIn(gate.MIMO_MISSED, v)
+            g = gate.Gate(d)
+            g.c9()
+            self.assertTrue(g.results[-1]["过"], g.results[-1]["说明"])
+
+    def test_claude_day_or_selfcheck_present_still_asks_mimo(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = make_issue(t)
+            for mark in (None, "MiMo（备用）"):
+                if mark:
+                    wj(d / "备用写稿.json", {"写稿": mark})                 # MiMo 写的，但 自检.md 在
+                r = BR.Review(BR.Issue(DAY, d), None)
+                r.prepare()
+                self.assertIn(6, r.todo_b)
+                self.assertNotIn(6, BR.program_items(BR.Issue(DAY, d), POD))
 
 
 if __name__ == "__main__":

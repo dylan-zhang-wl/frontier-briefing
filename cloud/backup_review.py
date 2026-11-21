@@ -21,6 +21,11 @@
   视频      第 15、16、22、24、29–39、45–53、55–57 项记"不适用（视频：关）"，不算进过、不过、查不了。
   第 1 项   MiMo 备用写稿那天（期目录有 备用写稿.json，"写稿"是 MiMo（备用））不要 自检.md（备用写稿不写它），改核播客稿、
             网页稿、播客配音、播客 mp3、网页在不在（11-17 晚改：那天第 1 项因为缺 自检.md 误判不过）；Claude 写稿那天照旧。
+  第 6 项   "自检说的和实际一致"：MiMo 备用写稿那天没有 自检.md 时由程序记"查不了"（设计内，不算没查成），不交给调用 B
+            （11-21 加：11-17 云端试跑 MiMo 写"查不了：材料里没有 自检.md"）；Claude 写稿那天、或 自检.md 在，照旧问 MiMo。
+  周日对谈  （11-21 加）人声 qc.json 的逐条转写在"各轮"、"各块"是精简版（pipeline/dialog_tts.py），音高、音色把关按甲、乙分开，
+            需人工复听记"轮数"；配音写法不印进日志，记在人声 usage.json。listen_material、第 26 项、第 54 项两种都认。
+            原来只认单人稿：周日一块转写也读不到，"请你耳听"整栏是空的、第 25 项悄悄判过，第 26 项读出 None 误判不过。
 调用顺序 A → C → B（11-17 晚改，原来 A → B → C：那天 A、B 都慢，B 又重给了一次 JSON，过了时限，事实检查 C 就没跑）。
 B、C 两次的系统提示一字不差（规矩、清单、稿子、审读），MiMo 按前缀缓存，先跑的 C 留下缓存，B 第二个跑多半命中。
 
@@ -36,7 +41,8 @@ MiMo 调用用 cloud/backup_writer.py 的 Mimo 类（记用量、守上限、屏
 某次调用最后还是不成：那几项记"查不了"（调用 A 不成时，程序按 B2 的规矩自己分拣）；三次都不成，就算"审片没做完"，
 "立即"写一条、不放行（每日审片.md"出错怎么办"）。
 11-17 晚加：有调用最后没成（时间到了、上限到了、两次都不是合法 JSON……），或调用成了、回答里却没有某一项可用的
-结果（没有这一项、"结果"认不出；第 11 项还有：判过但摘的原文对不上卡、没交逐个人名的核对、MiMo 自己写查不了），审片结论.json 多一栏
+结果（没有这一项、"结果"认不出；第 11 项还有：判过但摘的原文对不上卡、没交逐个人名的核对、MiMo 自己写查不了），
+或程序该读的配音记录读不到（11-21 加：第 25 项人声 qc.json 读不了、有块读不到选用那条的转写；第 26 项认不出需人工复听的记录），审片结论.json 多一栏
 "MiMo没查成": [{"项": 11, "是什么": "人名、头衔在原文里", "为什么": "时间到了"}]（调用 A 没成记第 25 项），审片.md 的
 一句话结论和"要你留意的"都写哪几项没查。"放行"照旧只看"立即"；挡不挡自动放行由放行判定第 9 条按
 gate.MIMO_REVIEW_INCOMPLETE_BLOCKS 定（默认挡）。全查成了就没有这一栏，结论和以前一样。
@@ -363,24 +369,70 @@ def analyse(a, b, reminders=()):
     return parts, floor, guess
 
 
+def qc_rows(human):
+    """人声 qc.json 的"各块"，每块带上逐条转写（"各条"、"选用第几条"、"共录几条"、带"请你耳听"的几栏）。
+    单人稿（pipeline/tts.py）这些都在"各块"自己身上，原样返回；周日对谈（pipeline/dialog_tts.py）的"各块"是精简版，只有块号、章、
+    说话人、原稿、秒数、开始秒（在人声 episode.mp3 里的位置），逐条转写在同一轮的"各轮"里，块号就是轮号——照
+    site/tools/build_v3.py qc_blocks 的读法接回来（11-21 加：原来只读"各块"，周日一块也读不到，"请你耳听"整栏是空的）。"""
+    turns = {r.get("轮"): r for r in human.get("各轮") or [] if isinstance(r, dict)}
+    out = []
+    for b in human.get("各块") or []:
+        if not isinstance(b, dict):
+            continue
+        t = turns.get(b.get("块"))
+        if t and not b.get("各条"):
+            b = dict({k: v for k, v in t.items() if k in ("各条", "选用第几条", "共录几条") or "请你耳听" in k}, **b)
+        out.append(b)
+    return out
+
+
+def pitch_flags(he):
+    """人声 qc.json 整集.音高把关里语速标出的、音高仍超出的：(允许偏差半音, [(第几块或第几轮, 说话人, 偏差半音或 None, 是不是语速)])。
+    单人稿：{"仍超出的块": [3], "语速标出的块": [5], "各块偏差半音": [按块号排的列表], "允许偏差半音": 1.5}，说话人记 ""；
+    周日对谈（11-21 加）：{"甲": {"仍超出的轮": [], "语速标出的轮": [34], "各轮偏差半音": {"1": 0.18, …}}, "乙": {…}, "允许偏差半音": 1.5}，
+    各轮偏差半音是按轮号（JSON 里是字符串）取的字典，不是列表。"""
+    g = (he or {}).get("音高把关") or {}
+    tol = float(g.get("允许偏差半音") or 1.5)
+    flags = []
+    if any(isinstance(g.get(s), dict) for s in ("甲", "乙")):
+        for s in ("甲", "乙"):
+            x = g.get(s) if isinstance(g.get(s), dict) else {}
+            devs = x.get("各轮偏差半音") if isinstance(x.get("各轮偏差半音"), dict) else {}
+            flags += [(n, s, None, True) for n in x.get("语速标出的轮") or []]
+            for n in x.get("仍超出的轮") or []:
+                d = devs.get(str(n), devs.get(n))
+                flags.append((n, s, abs(float(d)) if isinstance(d, (int, float)) else None, False))
+        flags.sort(key=lambda f: (not f[3], f[0] if isinstance(f[0], int) else 0))
+        return tol, flags
+    flags += [(n, "", None, True) for n in g.get("语速标出的块") or []]
+    devs = g.get("各块偏差半音") or []
+    for n in g.get("仍超出的块") or []:
+        flags.append((n, "", abs(float(devs[n - 1])) if isinstance(n, int) and 0 < n <= len(devs) else None, False))
+    return tol, flags
+
+
 def listen_material(iss):
     """配音程序那次转写（选用的那一条）和原稿的差异，每处带编号、混音版位置、拼音判断。
-    返回 dict：{"处": [...], "块": [...], "只差空格": n, "时间": 说明, "指标": [...]}；qc.json 读不了返回 None。"""
+    返回 dict：{"处": [...], "块": [...], "只差空格": n, "时间": 说明, "指标": [...], "共几块": n, "读不到": [块号…]}；
+    qc.json 读不了返回 None。"读不到"：有原稿、却找不到选用那一条转写的块（11-21 加；不为空时第 25 项算没查成，见 merge_items）。"""
     human = read_json(iss.p(iss.ed["人声"] + "/qc.json"), None)
     if not isinstance(human, dict) or not isinstance(human.get("各块"), list):
         return None
+    rows = qc_rows(human)
     mix = read_json(iss.p(iss.ed["混音"] + "/qc.json"), {}) or {}
     tl = {str(x.get("段", "")).split("·", 1)[1]: float(x["开始秒"]) for x in mix.get("时间线") or []
           if str(x.get("段", "")).startswith("人声·") and "开始秒" in x}
     first = {}
-    for b in human["各块"]:
+    for b in rows:
         first.setdefault(b.get("章"), float(b.get("开始秒") or 0))
     reminders = [(f, m) for e in (yaml_load(NAMES).get("名字") or []) if e.get("只提醒")
                  for f in forms(e) for m in e.get("已知误读") or []]
-    out, blocks, spaces = [], [], 0
-    for b in human["各块"]:
-        takes = [x for x in b.get("各条") or [] if x.get("第几条") == b.get("选用第几条")]
-        if not takes:
+    out, blocks, spaces, unread = [], [], 0, []
+    for b in rows:
+        takes = [x for x in b.get("各条") or [] if isinstance(x, dict) and x.get("第几条") == b.get("选用第几条")]
+        if not takes or "转写" not in takes[0]:
+            if str(b.get("原稿") or "").strip():
+                unread.append(b.get("块"))
             continue
         t = takes[0]
         ref, hyp = Q.tokens(b.get("原稿") or ""), Q.tokens(t.get("转写") or "")
@@ -410,25 +462,24 @@ def listen_material(iss):
                         "位置": "播客 " + mmss(at(r["i"])), "原稿": r["原稿"], "转写": r["转写"],
                         "listen_pinyin": LP.judge(r["原稿"], r["转写"]) if (r["原稿"] or r["转写"]) else "",
                         "程序拆开看": parts, "最低判断": floor, "程序分拣": guess, "前后原稿": wa, "前后转写": wb})
-    gate_ = (human.get("整集") or {}).get("音高把关") or {}
+    tol, flags = pitch_flags(human.get("整集") or {})
     metrics = []
-    for n in gate_.get("语速标出的块") or []:
+    for n, who, dev, speed in flags:
         b = next((x for x in blocks if x["块"] == n), None)
-        metrics.append({"位置": "播客 %s 起（第 %s 块）" % (b["开始"] if b else "?", n),
-                        "说明": "语速指标：第 %s 块超出允许偏差（qc.json 整集.音高把关.语速标出的块）" % n,
-                        "判断": LISTEN_UNSURE, "依据": "语速一律写拿不准（B2 第 5 步）", "关乎事实": False})
-    tol = float(gate_.get("允许偏差半音") or 1.5)
-    devs = gate_.get("各块偏差半音") or []
-    for n in gate_.get("仍超出的块") or []:
-        dev = abs(float(devs[n - 1])) if isinstance(n, int) and 0 < n <= len(devs) else None
-        b = next((x for x in blocks if x["块"] == n), None)
+        where = "播客 %s 起（第 %s %s）" % (b["开始"] if b else "?", n, "轮，%s" % who if who else "块")
+        if speed:
+            metrics.append({"位置": where,
+                            "说明": ("语速指标：第 %s 轮（%s）超出允许偏差（qc.json 整集.音高把关.%s.语速标出的轮）" % (n, who, who) if who else
+                                   "语速指标：第 %s 块超出允许偏差（qc.json 整集.音高把关.语速标出的块）" % n),
+                            "判断": LISTEN_UNSURE, "依据": "语速一律写拿不准（B2 第 5 步）", "关乎事实": False})
+            continue
         small = dev is not None and dev - tol < tol / 10
-        metrics.append({"位置": "播客 %s 起（第 %s 块）" % (b["开始"] if b else "?", n),
+        metrics.append({"位置": where,
                         "说明": "音高偏差 %s 半音（允许 %s）" % (dev if dev is not None else "?", tol),
                         "判断": LISTEN_ASR if small else LISTEN_REAL,
                         "依据": "音高超出%s允许值的十分之一（B2 第 5 步）" % ("不到" if small else "超过"), "关乎事实": False})
     when = "混音版（网页上播的那一版）" if tl else "人声版（没有混音版的时间线）"
-    return {"处": out, "块": blocks, "只差空格": spaces, "时间": when, "指标": metrics}
+    return {"处": out, "块": blocks, "只差空格": spaces, "时间": when, "指标": metrics, "共几块": len(rows), "读不到": unread}
 
 
 def respellings(iss, lm, script):
@@ -475,19 +526,49 @@ def aligned_hyp(ops, ref_i, n):
     return Q._join(got)
 
 
+def log_respells(text):
+    """第 11 步日志里"配音写法（只换送去配音的字）：A → B（1 处）、C → D（2 处）"那几行 → [(写法, 处数)]。
+    pipeline/tts.py _Taker.one 一块只印一行，换了几个词就用"、"连着写在同一行（11-21 改：原来的正则只认得冒号后面第一个词，
+    同一块换了两个词时第二个数成 0，第 54 项误判不过）。"""
+    out = []
+    for line in text.splitlines():
+        m = re.search(r"配音写法[^：]*：(.*)$", line)
+        if m:
+            out += [(a.strip(), int(n)) for a, n in re.findall(r"(?:^|、)\s*(.+?) → [^（、]+（(\d+) 处）", m.group(1))]
+    return out
+
+
+def usage_respells(iss):
+    """周日对谈（dialog_tts.py）不把配音写法印进日志，送配音时换了什么记在人声目录 usage.json"各次调用"每条的"配音写法"里
+    （tts._synth 记的）。每一轮只数第 1 条（重录的几条是同一段字，再数就重了），→ [(写法, 处数)]；读不到返回 None。"""
+    u = read_json(iss.p(iss.ed["人声"] + "/usage.json"), None)
+    calls = u.get("各次调用") if isinstance(u, dict) else None
+    if not isinstance(calls, list):
+        return None
+    return [(str(x.get("写法")), int(x.get("处数") or 0)) for c in calls if isinstance(c, dict) and c.get("第几条") == 1
+            for x in c.get("配音写法") or [] if isinstance(x, dict)]
+
+
 def respell_count(iss, script):
-    """第 54 项：配音写法换了几处（第 11 步日志）和稿子里出现几处对不对得上。"""
+    """第 54 项：配音写法换了几处和稿子里出现几处对不对得上。返回 (各行, 数的是哪儿)。
+    单人稿数第 11 步日志；周日对谈（11-21 加）数人声 usage.json——日志里那一行只有视频旁白会印，周日 MiMo 备用那天不出视频，
+    照日志数播客就永远是 0 处，第 54 项会误判不过。"""
+    dialog = iss.ed.get("配音方式") == "对谈"
     log = iss.latest_log("11_配音_")
-    text = log.read_text(encoding="utf-8") if log else ""
+    subs = usage_respells(iss) if dialog else log_respells(log.read_text(encoding="utf-8") if log else "")
+    if dialog:
+        where = "%s/usage.json 每轮第 1 条的“配音写法”%s" % (iss.ed["人声"], "" if subs is not None else "（读不到）")
+    else:
+        where = "logs/" + log.name if log else "没有第 11 步日志"
     rows = []
     for _, e in lexicon_used(script):
         if not e.get("配音写法"):
             continue
-        n_script = sum(len(re.findall(re.escape(f), script, re.I)) for f in forms(e))
-        n_log = sum(int(m.group(1)) for f in forms(e) for m in re.finditer(
-            r"配音写法[^：]*：%s → [^（]+（(\d+) 处）" % re.escape(f), text))
-        rows.append((forms(e)[0], e.get("配音写法"), n_script, n_log))
-    return rows, log
+        fs = forms(e)
+        n_script = sum(len(re.findall(re.escape(f), script, re.I)) for f in fs)
+        n_done = sum(n for a, n in subs or [] if a in fs)
+        rows.append((fs[0], e.get("配音写法"), n_script, n_done))
+    return rows, where
 
 
 # ---------------------------------------------------------------- 程序判的几项
@@ -497,10 +578,30 @@ def mimo_wrote(iss):
     return isinstance(d, dict) and str(d.get("写稿") or "").strip() == BACKUP_WRITER
 
 
+def relisten(he):
+    """第 26 项要的三样：(需人工复听几块或几轮, 音高仍超出的, 音色需人工听的, "块"或"轮")；两种写法都认不出返回 None。
+    单人稿（tts.py）：整集.需人工复听块数、整集.音高把关.仍超出的块、整集.音色把关.音色需人工听的块；
+    周日对谈（dialog_tts.py，11-21 加）：整集.需人工复听轮数，音高把关、音色把关按甲、乙分开（"仍超出的轮""音色需人工听的轮"）。
+    原来只认单人稿的键，周日读出来是 None，第 26 项写"需人工复听 None 块"误判不过。"""
+    if isinstance(he.get("需人工复听块数"), int):
+        return (he["需人工复听块数"], (he.get("音高把关") or {}).get("仍超出的块") or [],
+                (he.get("音色把关") or {}).get("音色需人工听的块") or [], "块")
+    if isinstance(he.get("需人工复听轮数"), int):
+        def per(part, key):
+            g = he.get(part) or {}
+            return ["%s第 %s 轮" % (s, n) for s in ("甲", "乙") if isinstance(g.get(s), dict) for n in g[s].get(key) or []]
+        return he["需人工复听轮数"], per("音高把关", "仍超出的轮"), per("音色把关", "音色需人工听的轮"), "轮"
+    return None
+
+
 def program_items(iss, script):
+    """程序判的几项：{编号: (结果, 证据)}，另有 "_没做完"（17 步里没做完的）、"_没查成"（程序该读的配音记录读不到的项：
+    [(编号, 为什么)]，11-21 加，和 MiMo 没查成的项一起记进审片结论的“MiMo没查成”、挡自动放行）。
+    MiMo 备用写稿那天没有 自检.md 时，第 6 项（自检说的和实际一致）也由这里定"查不了"（设计内，不算没查成），不交给 MiMo。"""
     st = iss.state()
     steps = st.get("步骤") or {}
     res = {}
+    missed = []
     g = gate.Gate(iss.dir)
     g.c2(), g.c4(), g.c6(), g.c8()
     by = {r["编号"]: r for r in g.results}
@@ -585,17 +686,25 @@ def program_items(iss, script):
             float(dg.get("时长分钟") or 0), "–".join("%g" % x for x in dg.get("区间分钟") or []),
             (mq.get("整集") or {}).get("整集秒数", "?")))
 
-    # 26 音高、音色、需人工复听
+    # 26 音高、音色、需人工复听（11-21 加周日对谈的键；两种都认不出、或 qc.json 读不了，记“查不了”并算没查成，挡自动放行）
     he = hq.get("整集") or {}
+    rl = relisten(he)
     if not he:
         res[26] = (CANT, "人声 qc.json 读不了")
-    else:
-        need = he.get("需人工复听块数")
-        pitch = (he.get("音高把关") or {}).get("仍超出的块") or []
-        timbre = (he.get("音色把关") or {}).get("音色需人工听的块") or []
+        missed.append((26, "人声 %s/qc.json 读不了（没有这个文件、或没有“整集”），需人工复听、音高、音色都没查" % iss.ed["人声"]))
+    elif rl is None:
+        res[26] = (CANT, "人声 qc.json 的“整集”里认不出需人工复听几块（单人稿“需人工复听块数”、周日对谈“需人工复听轮数”都没有）")
+        missed.append((26, "人声 qc.json 里认不出需人工复听的记录（单人稿、周日对谈两种写法都不是），音高、音色也没查"))
+    elif rl[3] == "块":
+        need, pitch, timbre, _ = rl
         ok = need == 0 and not pitch and not timbre
         res[26] = (PASS if ok else FAIL, "人声 qc.json：需人工复听 %s 块；音高仍超出的块 %s；音色需人工听的块 %s" % (
             need, pitch or "无", timbre or "无"))
+    else:
+        need, pitch, timbre, _ = rl
+        ok = need == 0 and not pitch and not timbre
+        res[26] = (PASS if ok else FAIL, "人声 qc.json（周日对谈）：需人工复听 %s 轮；音高仍超出的轮 %s；音色需人工听的轮 %s" % (
+            need, "、".join(pitch) or "无", "、".join(timbre) or "无"))
 
     # 28 混音响度、真峰值
     me = mq.get("整集") or {}
@@ -607,14 +716,29 @@ def program_items(iss, script):
         res[28] = (PASS if ok else FAIL, "混音 qc.json：%.1f LUFS、真峰值 %.1f dBTP（要求 −16±0.7、不超过 −1）" % (lufs, peak))
 
     # 54 配音写法换了几处，和稿子对不对得上（念成几个音节要人耳听，不判）
-    rows54, log = respell_count(iss, script)
+    rows54, where = respell_count(iss, script)
+    said = "配音时换了" if iss.ed.get("配音方式") == "对谈" else "第 11 步日志换了"
     if not rows54:
         res[54] = (PASS, "这一期播客稿里没有读音表设了“配音写法”的词")
     else:
         bad = [r for r in rows54 if r[2] != r[3]]
-        res[54] = (FAIL if bad else PASS, "；".join("%s → %s：稿子 %d 处，第 11 步日志换了 %d 处" % r for r in rows54) +
-                   "（%s；念成几个音节要人耳听，见“要单列核对的读音”）" % ("logs/" + log.name if log else "没有第 11 步日志"))
+        res[54] = (FAIL if bad else PASS, "；".join(("%s → %s：稿子 %d 处，" + said + " %d 处") % r for r in rows54) +
+                   "（%s；念成几个音节要人耳听，见“要单列核对的读音”）" % where)
+
+    # 6 自检说的和实际一致：MiMo 备用写稿那天没有 自检.md（自检是 Claude 主会话第 9 步写的，备用写稿不写它；第 17 步程序只在它
+    # 在的时候往末尾补实际结果），没东西可比。11-21 加：原来交给 MiMo（调用 B），11-17 云端试跑它写"查不了：材料里没有 自检.md"。
+    if no_selfcheck(iss):
+        mark = read_json(iss.p(gate.BACKUP_MARK), {}) or {}
+        look = mark.get("要人看") if isinstance(mark.get("要人看"), list) else []
+        res[6] = (CANT, "查不了：MiMo 备用写稿那天没有 自检.md（自检是 Claude 第 9 步写的，备用写稿不写它），这一项没东西可比；"
+                        "备用写稿自己记的“要人看”在 %s（%d 条）" % (gate.BACKUP_MARK, len(look)))
+    res["_没查成"] = missed
     return res
+
+
+def no_selfcheck(iss):
+    """MiMo 备用写稿那天、期目录里又没有 自检.md：第 6 项由程序定"查不了"，不交给 MiMo（见 program_items）。"""
+    return mimo_wrote(iss) and not iss.p("自检.md").exists()
 
 
 # ---------------------------------------------------------------- 提示
@@ -894,12 +1018,16 @@ def order_listen(items):
     return sorted(items, key=lambda x: (rank.get(x["判断"], 0), x.get("_秒", 0)))
 
 
-def merge_items(iss, rows, prog, lm_items, b_reply, c_reply, c_cards_text, failed, missed=None):
+def merge_items(iss, rows, prog, lm_items, b_reply, c_reply, c_cards_text, failed, missed=None, unread=()):
     """58 项每项一个结果：(结果, 证据, 建议, 建议类)。
+    unread：人声 qc.json 里有原稿、却读不到选用那条转写的块（listen_material 的"读不到"）。lm_items 是 None（qc.json 读不了）
+      或 unread 不为空时，第 25 项记"查不了"、算没查成（11-21 加：原来 qc.json 读不了只写查不了、不挡；周日对谈的转写读不到时
+      拿到的是空列表，第 25 项还判了"过"）。
     missed（列表）：交给 MiMo、却没拿到可用结果的那几项，按 (项, 哪一次调用, 为什么) 加进去；为什么是 None 时用调用没成的原因。
       算：调用 B、C 没成（11-17 晚）；调用成了，可回答里没有这一项、或"结果"认不出（11-17 晚第二轮加，B、C 都算）；
           第 11 项 MiMo 判"过"、摘的卡里原文却有在卡里逐字找不到的，或没交逐个人名的核对（"人名头衔"不是列表）；
-          第 11 项 MiMo 自己写"查不了"（见 MIMO_CANT_COUNTS）。
+          第 11 项 MiMo 自己写"查不了"（见 MIMO_CANT_COUNTS）；
+          第 25 项程序读不到配音时的转写（见上 unread，11-21 加）。第 26 项读不到时由 program_items 的"_没查成"记，不在这里。
       不算（设计上就查不了、或本来不审）：程序先定下的那些——不看图的第 20、21、58 项（周末 42）、"不适用（视频：关）"、
           今天不审、第 27 项、周日第 24 项、程序判的项读不到文件；还有 B 那批里 MiMo 自己写的"查不了"。"""
     res = {}
@@ -915,12 +1043,20 @@ def merge_items(iss, rows, prog, lm_items, b_reply, c_reply, c_cards_text, faile
             res[n] = (CANT, "周日两人分不分得开：备用审片还没做这一项", "", "")
         elif n in NO_IMAGE_ITEMS:
             res[n] = (CANT, "查不了：" + NO_IMAGE, "", "")
-        elif n in PROGRAM_ITEMS and n in prog:
+        elif n in prog and (n in PROGRAM_ITEMS or n == 6):     # 第 6 项：MiMo 备用写稿那天没有 自检.md，程序定（11-21）
             r, ev = prog[n]
             res[n] = (r, ev + ("；" + PART_NOTE[n] if n in PART_NOTE else ""), "", "")
     # 25：看分拣结果
     if lm_items is None:
         res[25] = (CANT, "播客 qc.json 读不了，分拣不了", "", "")
+        if missed is not None:
+            missed.append((25, "程序", "人声 qc.json 读不了（没有这个文件、或没有“各块”），配音转写一处也没比"))
+    elif unread:
+        real = [x for x in lm_items if x["判断"] == LISTEN_REAL]
+        res[25] = (CANT, "查不了：人声 qc.json 有 %d 块读不到配音时选用那条的转写（第 %s 块），这几块没比；读到的块里多半真念错 %d 条；%s" % (
+            len(unread), "、".join(str(x) for x in unread[:10]) + ("……" if len(unread) > 10 else ""), len(real), VIDEO_NOTE), "", "")
+        if missed is not None:
+            missed.append((25, "程序", "人声 qc.json 有 %d 块读不到配音时的转写，这几块的请你耳听没比" % len(unread)))
     else:
         real = [x for x in lm_items if x["判断"] == LISTEN_REAL]
         res[25] = (FAIL if real else PASS, "请你耳听里多半真念错 %d 条（%s）；%s" % (
@@ -1172,6 +1308,8 @@ class Review:
         self.lm = listen_material(iss)
         self.resp = respellings(iss, self.lm, self.script) if self.lm else []
         todo_b = {n for n in CALL_B_ITEMS if n not in DAYS_ONLY or iss.edition in DAYS_ONLY[n]}
+        if no_selfcheck(iss):
+            todo_b.discard(6)          # 11-21：MiMo 备用写稿那天没有 自检.md，第 6 项程序定"查不了"，不问 MiMo
         self.todo_b = todo_b
         self.sys_bc = ab_common(iss, self.rules, self.rows, self.common, self.settled, todo_b | CALL_C_ITEMS)
         self.user_b = task_b(iss, self.rows, todo_b, self.lm)
@@ -1242,18 +1380,20 @@ class Review:
         # 过了时限，第 11 项（C，对着事件卡核人名、头衔，是事实检查）就没跑。C 只有一项、又是事实检查，排在 B 前面，
         # 只会被 A 挤；B 的“重给 JSON”照旧紧跟着 B（Caller.ask_json 不动）。B、C 系统提示还是同一份 sys_bc，
         # 先跑的 C 留下前缀缓存，B 第二个跑照样命中。
-        a = self.call("A", "审片A_请你耳听分拣", self.sys_a, self.user_a) if self.lm else None
+        # 一块转写也没读到（11-21 加）就不调 A：材料是空的，第 25 项由 merge_items 记没查成
+        a = self.call("A", "审片A_请你耳听分拣", self.sys_a, self.user_a) if self.lm and self.lm["块"] else None
         c = self.call("C", "审片C_人名头衔", self.sys_bc, self.user_c)
         b = self.call("B", "审片B_清单各项", self.sys_bc, self.user_b)
         listen, lnotes = (merge_listen(self.lm, a, "".join(x["原稿"] for x in self.lm["块"]), self.script) if self.lm else ([], []))
         if self.lm:
             listen += [dict(x, _秒=0, _编号=[], _谁判="程序") for x in self.lm["指标"]]
         listen = order_listen(listen)
-        pairs = []
-        items = merge_items(iss, self.rows, prog, listen if self.lm else None, b, c, self.cards_flat, self.failed, pairs)
+        pairs = [(n, "程序", why) for n, why in prog.get("_没查成") or []]     # 11-21：第 26 项读不到配音记录
+        items = merge_items(iss, self.rows, prog, listen if self.lm else None, b, c, self.cards_flat, self.failed, pairs,
+                            unread=(self.lm or {}).get("读不到") or [])
         missed = self.missed(pairs)
         now_list = [{"编号": str(n), "说明": items[n][1][:200]} for n in sorted(NOW_ITEMS) if items.get(n, (PASS,))[0] == FAIL]
-        tried = ["A", "B", "C"] if self.lm else ["B", "C"]
+        tried = ["A", "B", "C"] if self.lm and self.lm["块"] else ["B", "C"]
         if all(k in self.failed for k in tried):
             now_list.append({"编号": "审片", "说明": "审片没做完：MiMo 调用都没成（%s）" % "；".join("%s %s" % kv for kv in self.failed.items())[:200]})
         asks = []
