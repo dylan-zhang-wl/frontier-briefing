@@ -447,10 +447,13 @@ jobs:
       # 只听可疑的那几秒（fd_开关.json"对稿第二个听写模型"）。单独一个环境，免得 funasr 的依赖顶掉项目环境的版本。
       # 这三步出错都不挡出刊：没装好时对稿照旧，数字不符照常重录（pipeline/tts_qc.py 文件头"第二个听写模型复核"）。
       # 模型下成普通文件（local_dir）存缓存，理由同上面的转写替身。缓存键要换（换模型、换版本）就把 v1 改成 v2。
+      # 11-21 加时限：continue-on-error 只管出错，不管卡住；没有时限时按 GitHub 默认 360 分钟，卡在下载上会把整期耗到 job 上限、那期出不来。
+      # 超时就当没装上（第 11 步照"没装好"走：不复核，数字不符照常重录，配音不停）。三步合计最多 40 分钟。
       - name: 取缓存的第二个听写模型（SenseVoiceSmall、Paraformer-zh）
         id: asr2_model
         if: steps.day.outputs.produce == 'true'
         continue-on-error: true
+        timeout-minutes: 10     # 只解开约 1.8 GB 模型缓存，正常一两分钟；actions/cache 自己每段下载也只等 10 分钟
         uses: actions/cache/restore@v4
         with:
           path: ~/.cache/fd-asr2
@@ -460,8 +463,16 @@ jobs:
         id: asr2_install
         if: steps.day.outputs.produce == 'true'
         continue-on-error: true
+        timeout-minutes: 20     # 装包（torch CPU 版、funasr 一串）加缓存没命中时下两个模型（约 1.8 GB），正常几分钟，留四五倍余量
+        env:
+          ASR2_RESTORE: ${{ steps.asr2_model.outcome }}
         run: |
           t0=$(date +%s)
+          # 取缓存那一步没正常做完（超时、出错）时，模型目录里可能是解了一半的文件（model.pt 在、却不完整），下面按 model.pt 在不在
+          # 判断要不要下，就会跳过下载、当天载入失败。挪到一边重新下（不删，机器跑完就收回）；缓存没命中（outcome 仍是 success）不挪
+          if [ "$ASR2_RESTORE" != "success" ] && [ -d "$FD_ASR2_MODELS" ]; then
+            mv "$FD_ASR2_MODELS" "$FD_ASR2_MODELS.没取完-$(date +%s)"; echo "取缓存那一步没做完（$ASR2_RESTORE），模型目录挪开、重新下"
+          fi
           uv venv ~/.venvs/fd-asr2 --python "$(which python)"
           PY="$FD_ASR2_PYTHON"
           # torch 照项目环境：CPU 版、不带依赖，依赖在 cloud/asr2_requirements.txt 里钉死
@@ -479,8 +490,10 @@ jobs:
           echo "装第二个听写模型用了 $(( $(date +%s) - t0 )) 秒"
 
       - name: 存第二个听写模型缓存
+        # 11-21：装那一步超时或出错（outcome 不是 success）就不存，免得把下了一半的模型存进缓存、以后每天都取到坏的
         if: steps.day.outputs.produce == 'true' && steps.asr2_model.outputs.cache-hit != 'true' && steps.asr2_install.outcome == 'success'
         continue-on-error: true
+        timeout-minutes: 10     # 压缩、上传约 1.8 GB，正常一两分钟；超时这次就不存，下次运行再存
         uses: actions/cache/save@v4
         with:
           path: ~/.cache/fd-asr2
