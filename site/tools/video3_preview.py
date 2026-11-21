@@ -106,6 +106,7 @@ def main(argv=None):
     marks = [{"chapter": c["id"], "voice_start": pl["voice_starts"][i], "voice_end": pl["voice_ends"][i],
               "end": pl["bounds"][i] if i < len(pl["bounds"]) else round(dur, 3)} for i, c in enumerate(sb["chapters"])]
     al, T = fake_align(sb, shown, marks, dur)
+    sync = VB.post_align(issue, sb, T, marks, al)      # 11-21：两个默认关的开关（和正式组装同一套）；关着时什么都不做
     for w in VB.SB.check_gaps(sb, T, marks):
         print("  提醒：" + w)
     vdir = issue / "05_配音" / "视频旁白_v3_无声样片"
@@ -115,7 +116,7 @@ def main(argv=None):
                     "-b:a", "32k", str(mp3)], check=True)
     (vdir / "时间表.json").write_text(json.dumps({"说明": "无声样片：按字数估的章起止（秒）", "duration": dur, "chapters": marks},
                                                ensure_ascii=False, indent=1), encoding="utf-8")
-    VB.build(issue, mp3, marks, dur, al, T, titles, shown, sb, cards, facts, pl=None, meas=None)
+    VB.build(issue, mp3, marks, dur, al, T, titles, shown, sb, cards, facts, pl=None, meas=None, sync=sync)
     print("无声样片：%.1f 秒，%d 章（%s）→ %s" % (dur, len(marks), "、".join(m["chapter"] for m in marks), issue / VB.OUT_DIR))
     print("关键帧总览：node site/tools/video3_record.mjs %s --sheet" % issue)
     return 0

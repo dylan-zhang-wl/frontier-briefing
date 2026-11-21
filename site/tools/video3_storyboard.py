@@ -241,6 +241,43 @@ def excerpt_photo(issue, c, b, owner, warn, where):
     warn.append("%s 退回摘录，这一章找不到能垫在后面的配图，只有摘录" % where)
 
 
+# 11-21 维护加的两个开关（经验库第五部分第 94、95 件；默认关，用户看了新旧并排图再定；关着时视频和加开关以前逐像素一样）。
+# pipeline/orchestrator/common.py 的 bare_fix_switch、card_sync_switch 是同一套规则（fd 只用标准库，不 import 这里），两边要一起改。
+#   · 画面空档自动补图（FD_BARE_FIX）：第 14 步对齐以后按"画面上有没有图"量空档（bare_model），白卡期间垫上一张图、
+#     分岔路章把路尽头的图提到章首（fix_bare），补不了的照旧交给导演第二轮、写进第 14 步提醒。
+#   · 卡片数值跟着旁白出（FD_CARD_SYNC）：对比卡条尾的数跟着各自的条一起出，大数字、底注等旁白说到再出（card_cues）。
+BARE_FIX_KEY = "画面空档自动补图"
+CARD_SYNC_KEY = "卡片数值跟着旁白出"
+
+
+def _switch(env_name, key, default=False):
+    env = str(os.environ.get(env_name) or "").strip().lower()
+    if env in _OFF:
+        return False, "环境变量 %s=%s" % (env_name, env)
+    if env in _ON:
+        return True, "环境变量 %s=%s" % (env_name, env)
+    word = "开" if default else "关"
+    try:
+        v = str(json.loads(MOTION_SWITCH_FILE.read_text(encoding="utf-8")).get(key) or "").strip().lower()
+    except (OSError, ValueError, AttributeError):
+        return default, "没有 fd_开关.json（或读不出来），按“%s”" % word
+    if v in _ON:
+        return True, "fd_开关.json 的“%s”写着“开”" % key
+    if v in _OFF:
+        return False, "fd_开关.json 的“%s”写着“关”" % key
+    return default, "fd_开关.json 没写“%s”（或值认不出），按“%s”" % (key, word)
+
+
+def bare_fix_switch():
+    """返回 (开着没有, 从哪来的一句话)。默认关。"""
+    return _switch("FD_BARE_FIX", BARE_FIX_KEY)
+
+
+def card_sync_switch():
+    """返回 (开着没有, 从哪来的一句话)。默认关。"""
+    return _switch("FD_CARD_SYNC", CARD_SYNC_KEY)
+
+
 # 视频导演开关（2026-11-08 晚加；pipeline/orchestrator/common.py 的 director_switch 是同一套规则，两边要一起改）：
 # 先看环境变量 FD_DIRECTOR，再看 fd_开关.json 的"视频导演"；都没有或读不出来按"开"。
 # 组装这边只用它决定 11-08 的渲染修复（fix1108：封面图、对比卡长数值、卡片及时收起、柱子、时间轴小图与小字、对比卡压图不出画、
@@ -1731,6 +1768,8 @@ MOTION_CUES = {          # 关系模板：哪些触发词之后的那几秒算"�
     "phone_list": ["show", "rows*"], "split": ["left_items*", "right_items*"], "timeline": ["wait"],
     "num_chain": ["items*"], "source_excerpt": ["mark"],           # 动效尝试：数字递进一个个出、摘录上荧光笔扫过那几秒
 }
+# 11-21："画面上有没有图"（bare）这一量法里，动效还算"有画面"的只有这几种立体关系模板；白卡上的字、线条、传播链不算
+BARE_MOTION = ("bar_shrink", "twin_drop", "column_compare", "scale", "particle_counter", "phone_list", "split")
 
 
 def _block_times(c, b, T):
@@ -1840,6 +1879,18 @@ def screen_model(sb, T, marks):
         gaps = [(a, min(z, v1)) for a, z in gaps if min(z, v1) > a]
         heroes = [a for a, z, k, _b in pieces if k in HERO and z > v0]
         hero = max(v0, min(heroes)) if heroes else None
+        # 11-21（开关"画面空档自动补图"用）：按"画面上有没有图"量的空档。只算配图、标志、地图轮廓，再加立体的关系模板
+        #   （BARE_MOTION：柱子、价位块、刻度尺、点阵、手机、国内外对折）动起来的那几秒；白卡类上的动效（数字递进、摘录的荧光笔、
+        #   对比卡的条、分岔路的线和字牌、传播链）不算。11-18 评审章 86.0–107.5、补丁章 115.2–121.8，11-20 口译章 81.3–94.4
+        #   都是旧量法里"有动效"、审片判"没有图"的那几段。
+        cov, bare, cur = sorted((a, z) for a, z, k, b in pieces if k in HERO or (k == "motion" and b.get("type") in BARE_MOTION)), [], v0
+        for a, z in cov:
+            if a > cur:
+                bare.append((cur, a))
+            cur = max(cur, z)
+        if cur < v1:
+            bare.append((cur, v1))
+        bare = [(a, min(z, v1)) for a, z in bare if min(z, v1) > a]
         # 时间轨被别的模板从中间打断：它的日子有的说在别的模板开始之后（贴在尽头的手机也算，和播放器 tlSegments 一样）
         cuts = []
         for j, (b, ts) in enumerate(zip(blocks, tms)):
@@ -1872,7 +1923,7 @@ def screen_model(sb, T, marks):
                 if hi > cur:
                     lonely.append((cur, hi, b))
         out.append({"c": c, "i": i, "v0": v0, "v1": v1, "pieces": pieces, "gaps": gaps, "hero": hero, "cuts": cuts,
-                    "lonely": [(a, z, b) for a, z, b in lonely if z > a]})
+                    "lonely": [(a, z, b) for a, z, b in lonely if z > a], "bare": bare, "own": own, "blocks": blocks, "tms": tms})
     return out
 
 
@@ -1882,12 +1933,18 @@ def _tick_label(b, key):
     return "“%s”" % _tick_name(t) if isinstance(t, dict) and _tick_name(t) else key
 
 
-def screen_warnings(sb, T, marks, est=False, limit=SCREEN_GAP):
-    """空档、章首主角、时间轨被打断的提醒（都只提醒）。est：时间是按字数估的。"""
+def screen_warnings(sb, T, marks, est=False, limit=SCREEN_GAP, bare=False):
+    """空档、章首主角、时间轨被打断的提醒（都只提醒）。est：时间是按字数估的。
+    bare（11-21，开关"画面空档自动补图"开着时第 14 步用）：空档按"画面上有没有图"量（screen_model 的 bare），措辞跟着改；
+    不写 bare 时和原来一字不差。"""
     warn, tag = [], "（时间按字数估，误差一两秒）" if est else ""
     for ch in screen_model(sb, T, marks):
         c, v0 = ch["c"], ch["v0"]
-        for a, z in ch["gaps"]:
+        if bare:
+            for a, z in ch["bare"]:
+                if z - a > limit and not (a <= v0 + 0.05 and (ch["hero"] is None or ch["hero"] > v0 + OPENER_SEC)):   # 章首那段归下面"开口没主角"报
+                    warn.append(BARE_WARN % (c["id"], a, z, z - a, limit))
+        for a, z in ch["gaps"] if not bare else []:
             if z - a > limit:
                 warn.append("「%s」%.1f–%.1f 秒（%.1f 秒）画面上没有真东西（只剩线和点的时间轨、空玻璃柱、白卡上一两行字不算；"
                             "建议不超过 %g 秒）：给这一段挂配图或标志（时间轨日子可挂 logos、image，要点卡可带 image），"
@@ -1900,7 +1957,7 @@ def screen_warnings(sb, T, marks, est=False, limit=SCREEN_GAP):
         if ch["hero"] is None or ch["hero"] > v0 + OPENER_SEC:
             when = "整章都没有" if ch["hero"] is None else "第一个在 %.1f 秒（开口后 %.1f 秒）" % (ch["hero"], ch["hero"] - v0)
             warn.append("「%s」开口 %g 秒内没有主角（配图或标志）：%s。给第一个模板挂上主角的标志（时间轨日子、柱子、要点卡都能挂），"
-                        "或先放带题图的卡片、计数模板%s" % (c["id"], OPENER_SEC, when, tag))
+                        "或先放带题图的卡片、计数模板%s" % (c["id"], OPENER_SEC, when, tag) + ("（组装时自动补不了）" if bare else ""))
         for x in ch["cuts"]:
             warn.append("「%s」timeline/%s 被 %s/%s 从中间打断（%.1f 秒开始，之后还有 %s）：镜头要飞回时间轨、日子标签要重新出；"
                         "能挪就把 %s 挪到时间轨说完之后，或把后面的日子并进下一个模板%s" % (
@@ -1910,12 +1967,22 @@ def screen_warnings(sb, T, marks, est=False, limit=SCREEN_GAP):
 
 
 def check_gaps(sb, T, marks, limit=SCREEN_GAP):
-    """对齐以后（第 14 步、无声样片）：按实际时间再查一遍空档、章首主角、时间轨被打断（都只提醒）。"""
-    return screen_warnings(sb, T, marks, est=False, limit=limit)
+    """对齐以后（第 14 步、无声样片）：按实际时间再查一遍空档、章首主角、时间轨被打断（都只提醒）。
+    11-21：开关"画面空档自动补图"开着时空档按"画面上有没有图"量（这时 fix_bare 已经补过，剩下的是补不了的）。"""
+    return screen_warnings(sb, T, marks, est=False, limit=limit, bare=bare_fix_switch()[0])
+
+
+BARE_WARN = ("「%s」%.1f–%.1f 秒（%.1f 秒）画面上没有图（配图、标志、截图都没有；白卡、数字递进、摘录、分岔路的线和字牌、"
+             "传播链不算；建议不超过 %g 秒），组装时自动补不了：给这一段的卡片带题图 image、压在配图上（photo），"
+             "或把有图的那一块挪到这一句")
 
 
 def blank_spans(sb, T, marks, limit=SCREEN_GAP):
-    """给关键帧总览用：每章的空档（超过 limit 秒的）和章首迟迟没有主角的那一段 → {章 id: [[起, 止, 原因], …]}。"""
+    """给关键帧总览用：每章的空档（超过 limit 秒的）和章首迟迟没有主角的那一段 → {章 id: [[起, 止, 原因], …]}。
+    11-21：开关"画面空档自动补图"开着时，空档按"画面上有没有图"量，原因写 "bare"；章首没主角那一段照写 "opener"
+    （原来章首有一小段空档时会把它吞掉，11-20 口译章只报了 81.3–85.4，导演看不出图要到 94.4 秒才出来）。"""
+    if bare_fix_switch()[0]:
+        return bare_spans(sb, T, marks, limit)
     out = {}
     for ch in screen_model(sb, T, marks):
         lst = [[round(a, 2), round(z, 2), "gap"] for a, z in ch["gaps"] if z - a > limit]
@@ -1926,6 +1993,236 @@ def blank_spans(sb, T, marks, limit=SCREEN_GAP):
         if lst:
             out[ch["c"]["id"]] = lst
     return out
+
+
+# ---------------------------------------------------------------- 画面空档自动补图（11-21 加，开关"画面空档自动补图"，经验库第五部分第 94 件）
+# 11-18 评审章 86–107 秒只有数字递进白卡和原句摘录、补丁章 115–122 秒只有传播链；11-20 口译章 81.3–94.4 秒只有分岔路的线和
+# 两块字牌，配图到 94.4 秒才出来。原来的量法把这些白卡上的动效算"有画面"（数字递进每出一项算 4 秒、摘录算荧光笔那 4 秒、
+# 分岔路的字牌、传播链的包裹都算），第 14 步一条都没报（11-20 只报了 81.3–85.4 的 4.1 秒）；而且都只提醒，没有人去补。
+# 现在第 14 步对齐以后（video3_build.post_align）先按"画面上有没有图"量（screen_model 的 bare，章首按 OPENER_SEC 看主角），
+# 能补的自动补（只改这一次组装的数据，不改分镜文件）：
+#   · 白卡期间垫上一张图：这一段镜头所在的那一块，往前找这一章最近露过脸的配图（找不到就用这一章第一张配图，等于"提到章首"）；
+#     数字递进、传播链、摘录卡（含截图退回摘录的原话卡）垫在后面做圆角图板（_fb_photo → photo_img，播放器 fbpBuild）；
+#     对比卡、一排小卡压在配图上（photo，11-07 起就有的画法）；只有字的要点卡、帖子卡带上题图（image，左图右字）。
+#   · 分岔路章：路尽头那张配图（image_card）的出现时刻提到分岔路画出来的时候（镜头本来就对着路尽头）。
+# 补完再量一遍，剩下的（立体模板、整章没有配图）照旧写进 video3_media.json 的 blank（关键帧总览标红、导演第二轮必须改的那份清单）、
+# 第 14 步提醒。关着时什么都不做。
+BARE_FB_BLOCKS = ("num_chain", "chain")                  # 播放器在这两种模板后面垫图板（video3.js 的 fbpBuild，11-21 加）
+BARE_LEAD = 0.6                                          # 分岔路的图提前到画路之后几秒出现（配图从这一刻前 0.6 秒开始溶解）
+
+
+def bare_spans(sb, T, marks, limit=SCREEN_GAP):
+    """按"画面上有没有图"量：{章 id: [[起, 止, "opener"|"bare"], …]}。章首迟迟没有主角的那一段写 opener（从开口到第一个主角），
+    之外超过 limit 秒没有图的写 bare。"""
+    out = {}
+    for ch in screen_model(sb, T, marks):
+        v0, lst = ch["v0"], []
+        late = ch["hero"] is None or ch["hero"] > v0 + OPENER_SEC
+        if late:
+            lst.append([round(v0, 2), round(ch["hero"] if ch["hero"] is not None else ch["v1"], 2), "opener"])
+        for a, z in ch["bare"]:
+            if z - a > limit and not (late and a <= v0 + 0.05):
+                lst.append([round(a, 2), round(z, 2), "bare"])
+        if lst:
+            out[ch["c"]["id"]] = lst
+    return out
+
+
+def _piece_image(b):
+    """这一块画面上露脸的配图名（原文截图、标志不算，返回 None）。"""
+    t = b.get("type")
+    if t == "image_card":
+        return b.get("image")
+    if b.get("_fb_photo"):
+        return b["_fb_photo"]
+    if t in PHOTO_BLOCKS and b.get("photo"):
+        return b["photo"]
+    if t in CARD_SHOT and isinstance(b.get("shot"), dict):
+        return None
+    if t in ("quote_card", "post_card") and b.get("image"):
+        return b["image"]
+    for f in ("items", "ticks") + SPLIT_SIDES:
+        for it in b.get(f) or []:
+            if isinstance(it, dict) and it.get("image"):
+                return it["image"]
+    return None
+
+
+def _bare_slot(c, b):
+    """这一块能怎么垫图：'_fb_photo'（后面垫图板）、'photo'（压在配图上）、'image'（卡片带题图）；垫不了返回 None。"""
+    t = b.get("type")
+    if b.get("_fb_photo"):
+        return None
+    if t in BARE_FB_BLOCKS or t == "source_excerpt":
+        return "_fb_photo"
+    if t in CARD_SHOT and isinstance(b.get("shot"), dict):
+        return "_fb_photo" if b["shot"].get("_shot_fail") else None
+    if t in ("quote_card", "post_card"):
+        if b.get("image") or (t == "quote_card" and b.get("over_photo") and fork_photo(c)):
+            return None
+        return "image"
+    if t == "compare_panel" and not b.get("photo"):
+        return "photo"
+    if t == "tile_row" and not b.get("photo") and not any(isinstance(it, dict) and it.get("image") for it in b.get("items") or []):
+        return "photo"
+    return None
+
+
+def fix_bare(sb, T, marks, has_image, rounds=3):
+    """开关"画面空档自动补图"开着时，第 14 步对齐以后调（video3_build.post_align）：能补的空档自动补，改的是内存里的分镜（sb）
+    和触发词时刻（T），不改分镜文件。has_image(名字) → 这张配图在不在。返回一行一行的说明（写进第 14 步日志）。"""
+    notes = []
+    for _ in range(rounds):
+        changed = False
+        for ch in screen_model(sb, T, marks):
+            c, v0, blocks, own = ch["c"], ch["v0"], ch["blocks"], ch["own"]
+            spans = [(a, z) for a, z, _w in (bare_spans(sb, T, marks).get(c["id"]) or [])]
+            if not spans:
+                continue
+            imgs = [b for b in blocks if b.get("type") == "image_card" and b.get("image") and has_image(b["image"])]
+            forks = [j for j, b in enumerate(blocks) if b.get("type") == "fork"]
+            first_imgs = [n for n in chapter_images(c) if has_image(n)]
+            for a, z in spans:
+                # 分岔路：镜头在路上的这一段，把立在路尽头的那张配图提到画路的时候（播放器：有 fork 时第一张 image_card 立在路尽头）
+                if forks and imgs:
+                    fb, ib = blocks[forks[-1]], imgs[0]
+                    fpre, ipre = "%s.%s." % (c["id"], fb.get("id")), "%s.%s." % (c["id"], ib.get("id"))
+                    on_fork = any(oa < z - 0.5 and oz > a + 0.5 for oa, oz in own.get(forks[-1], []))
+                    tin = T.get(ipre + "in")
+                    f0 = T.get(fpre + "fork", min([v for k, v in T.items() if k.startswith(fpre) and not k.endswith(".end")] or [v0]))
+                    new = round(max(f0, a) + BARE_LEAD, 3)
+                    if on_fork and isinstance(tin, (int, float)) and tin > new + 0.5:
+                        T[ipre + "in"] = new
+                        T[ipre + "in.end"] = round(new + max(0.0, (T.get(ipre + "in.end") or tin) - tin), 3)
+                        ib["_bare_early"] = tin
+                        notes.append("「%s」%.1f–%.1f 秒没有图：分岔路尽头的配图 %s 从 %.1f 秒提到 %.1f 秒（画路的时候）" % (
+                            c["id"], a, z, ib.get("image"), tin, new))
+                        changed = True
+                        continue
+                # 白卡期间垫图：这一段镜头所在的块
+                for j, b in enumerate(blocks):
+                    if b.get("type") == "image_card" or not any(oa < z - 0.5 and oz > a + 0.5 for oa, oz in own.get(j, [])):
+                        continue
+                    slot = _bare_slot(c, b)
+                    if not slot:
+                        continue
+                    prev = [(pa, _piece_image(pb)) for pa, _pz, k, pb in ch["pieces"] if k == "img" and pa < a + 0.05 and pb is not b]
+                    prev = [(pa, n) for pa, n in prev if n and has_image(n)]
+                    name = max(prev)[1] if prev else (first_imgs[0] if first_imgs else None)
+                    if not name:
+                        continue
+                    b[slot] = name
+                    b["_bare_fix"] = slot
+                    how = {"_fb_photo": "后面垫图板", "photo": "压在配图上", "image": "带题图"}[slot]
+                    notes.append("「%s」%.1f–%.1f 秒没有图：%s/%s %s %s（%s）" % (
+                        c["id"], a, z, b.get("type"), b.get("id"), how, name, "这一章上一张露过脸的图" if prev else "这一章第一张配图"))
+                    changed = True
+        if not changed:
+            break
+    return notes
+
+
+# ---------------------------------------------------------------- 卡片数值跟着旁白出（11-21 加，开关"卡片数值跟着旁白出"，经验库第五部分第 95 件）
+# 11-20 Anthropic 股价对比卡：83、111.50、97.17 三个条尾的数随卡片一起出来，条还没长，旁白 22.5–27 秒才念到；
+# 11-19 募资卡底注"算上超额配售，SpaceX 总额更高"随卡片 26.7 秒出现，旁白 34.5 秒才说。播放器原来只让条按触发词长，
+# 条尾的数（bars[].val）、大数字（kpi）、底注（foot）都跟着卡片一起出来。现在（开关开着时）：
+#   · 播放器：条尾的数跟着各自的条一起出（video3.js 的 CS，数据里写 cardsync）；
+#   · 组装：没写触发词的条、大数字、底注，到旁白里找说到它的地方（这一块出现以后、下一块开始以前），找到就记成 <块>.bars<k>、
+#     <块>.kpi、<块>.foot 的时刻（只写进 T）；条找数（"750 亿"），大数字找数，底注找和旁白最长的一段相同的字（至少 4 个字，
+#     里面至少 2 个汉字）。大数字只在比卡片晚 1 秒以上时才改；底注没念到的，等最后一根条长完再出。
+#   分镜里直接写 cues.kpi、cues.foot 也认（写了就不另找）。
+SYNC_KPI_LATE = 1.0
+SYNC_FOOT_MIN = 4
+
+
+def _num_phrases(s):
+    """条尾的数、大数字里拿来找旁白的字："750 亿" → ["750亿", "750"]（只认有数字的；只有一位数的不单独找）。"""
+    s = str(s or "")
+    m = re.search(r"\d[\d,]*(?:\.\d+)?", s)
+    if not m:
+        return []
+    num, rest = m.group(0), s[m.end():].strip()
+    unit = re.match(r"[^\s\d·（）()，,。；;]{1,2}", rest)
+    out = [num + unit.group(0)] if unit else []
+    if len(re.sub(r"\D", "", num)) >= 2:
+        out.append(num)
+    return out
+
+
+def _common_phrases(text, narr, n_min=SYNC_FOOT_MIN):
+    """text 和旁白里相同的连续几段（只看字、字母、数字），长的在前；要至少 n_min 个字、其中至少 2 个汉字。"""
+    import video_align
+    a, b = video_align.norm(text), video_align.norm(narr)
+    out = []
+    for L in range(len(a), n_min - 1, -1):
+        for i in range(0, len(a) - L + 1):
+            sub = a[i:i + L]
+            if sub in b and sub not in out and len(re.findall(r"[一-鿿]", sub)) >= 2:
+                out.append(sub)
+        if out:
+            return out
+    return out
+
+
+def card_cues(sb, T, marks, find):
+    """开关"卡片数值跟着旁白出"开着时，第 14 步对齐以后调（video3_build.post_align）：给对比卡（compare_panel）没写触发词的条、
+    大数字、底注，和 quota_bars 的底注，按旁白补时刻，写进 T。find(字, after, 章序号) → (开始秒, 结束秒) 或 None。返回说明。"""
+    notes = []
+    chs = sb.get("chapters") or []
+    for i, c in enumerate(chs):
+        if c.get("kind") not in ("story", "contrast") or i >= len(marks or []):
+            continue
+        blocks = [b for b in c.get("blocks") or [] if isinstance(b, dict)]
+        starts = []
+        for b in blocks:
+            ts = _block_times(c, b, T)
+            starts.append(min(ts.values()) if ts else None)
+        for j, b in enumerate(blocks):
+            t = b.get("type")
+            if t not in ("compare_panel", "quota_bars"):
+                continue
+            pre = "%s.%s." % (c["id"], b.get("id"))
+            show = T.get(pre + "show", starts[j])
+            if show is None:
+                continue
+            nxt = min([x for jj, x in enumerate(starts) if x is not None and x > show + 0.05 and blocks[jj].get("type") != "image_card"]
+                      or [marks[i]["end"]])
+
+            def hit(phrases):
+                import video_align
+                for ph in phrases:
+                    if len(video_align.norm(ph)) < 2:      # 只剩一位数（"2%" 去掉 % 是"2"）：旁白里到处都是，不找
+                        continue
+                    f = find(ph, show - 0.3, i)
+                    if f and f[0] < nxt - 0.3:
+                        return f
+                return None
+
+            def put(key, f, what):
+                T[pre + key] = round(f[0], 3)
+                T[pre + key + ".end"] = round(f[1], 3)
+                notes.append("「%s」%s/%s 的%s跟着旁白在 %.1f 秒出（卡片 %.1f 秒出来）" % (c["id"], t, b.get("id"), what, f[0], show))
+            if t == "compare_panel":
+                for k, bar in enumerate((b.get("bars") or [])[:4]):
+                    if not isinstance(bar, dict) or (pre + "bars%d" % k) in T or bar.get("cue"):
+                        continue
+                    f = hit(_num_phrases((bar.get("val") or {}).get("zh") if isinstance(bar.get("val"), dict) else bar.get("val")))
+                    if f:
+                        put("bars%d" % k, f, "第 %d 根条和条尾的数" % (k + 1))
+                kpi = b.get("kpi") if isinstance(b.get("kpi"), dict) else {}
+                kv = kpi.get("value")
+                kv = kv.get("zh") if isinstance(kv, dict) else kv
+                if kv is not None and (pre + "kpi") not in T:
+                    f = hit(_num_phrases(kv))
+                    if f and f[0] > show + SYNC_KPI_LATE:
+                        put("kpi", f, "大数字")
+            foot = b.get("foot")
+            foot = foot.get("zh") if isinstance(foot, dict) else foot
+            if foot and (pre + "foot") not in T:
+                f = hit(_common_phrases(foot, c.get("narration") or ""))
+                if f:
+                    put("foot", f, "底注")
+    return notes
 
 
 def estimate_timing(sb, factor=None):
@@ -2327,6 +2624,10 @@ def compile_chapters(sb, T, marks, photos):
                 nb["photo_img"] = ensure_photo(sb, photos, "%s.photo" % b["id"], b["photo"], 1600)
             nb.pop("_fb_photo", None)
             if b.get("_fb_photo") and b["type"] in EXCERPT_PHOTO_BLOCKS:   # 11-15：退回摘录的卡压在章图上（开关开着才有）
+                nb["photo_img"] = ensure_photo(sb, photos, "%s.photo" % b["id"], b["_fb_photo"], 1600)
+            for k in ("_bare_fix", "_bare_early"):                            # 11-21：画面空档自动补图记的标记，不进播放器数据
+                nb.pop(k, None)
+            if b.get("_fb_photo") and b["type"] in BARE_FB_BLOCKS:            # 11-21：数字递进、传播链后面垫图板（开关"画面空档自动补图"）
                 nb["photo_img"] = ensure_photo(sb, photos, "%s.photo" % b["id"], b["_fb_photo"], 1600)
             for i2, tk in enumerate(nb.get("ticks") or [] if b["type"] == "timeline" else []):    # 11-06：时间轨日子上的小图
                 if isinstance(tk, dict) and tk.get("image"):

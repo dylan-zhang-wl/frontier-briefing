@@ -1455,7 +1455,7 @@
 
   /* ---- 等轴测传播链（SVG 画在一块大玻璃板上） ---- */
   TPL.chain = {
-    ext: [9, 9],
+    ext: [9, 9], extPhoto: [11, 11],                   // extPhoto：画面空档自动补图、后面垫图板时占得宽（11-21）
     build: function (b) {
       var g = b._.g, pal = this.pal, L = this.P.L, Z = b._.o;
       var PW = 17, PH = 9.56;
@@ -1463,6 +1463,7 @@
       Z.panel.position.set(0, 5.6, 0); Z.panel.material.uniforms.uFade.value = 0; g.add(Z.panel); this.glass.push(Z.panel);
       b._.shA = this.bshot(b, [0, 5.6, 0], 0, 4, 19.8, 11.6);
       b._.shA2 = this.bshot(b, [0.8, 5.5, 0], 5, 4, 18.8, 11);
+      if (ovpOn(this.P, b)) fbpBuild(this, b, [0, 5.6, 0], 19.8, 11.6);         // 11-21：画面空档自动补图（数据里有 photo_img 才有），图板在玻璃板后面
       Z.m = new Machine(L, b);
       var box = el('div', 'v3machine'); box.appendChild(Z.m.svg);
       Z.lMachine = this.label('<div class="v3machine-box"></div>', { obj: Z.panel, at: V3(0, 0, 0.05), shot: b._.shA, min: 0.3, max: 1.6, fitW: PW * 0.96, fitH: PH * 0.96 });
@@ -1492,6 +1493,7 @@
         if (Z.lHead) a.hide(Z.lHead, c.end - 0.3, 0.4); if (Z.lWin) a.hide(Z.lWin, c.end - 0.3, 0.4);
       }
       Z.st = st; Z.lastHop = hops[hops.length - 1];
+      if (Z.fbp) ovpTl(b, a, s0, nx ? c5 - 0.8 : (b._.nextT != null ? Math.max(st + 2, b._.nextT - 0.4) : c.end - 0.2));   // 11-21：画面空档自动补图，下一块开始前收起
     },
     cams: function (b) { var Z = b._.o; return [{ t: Z.st - 0.2, s: b._.shA, dur: 1.3, ease: 'io', arc: 3 }, { t: Z.lastHop, s: b._.shA2, dur: 4.5, ease: 'sine' }]; },
     settle: function (b) { return b._.o.lastHop + 1.4; },
@@ -1608,6 +1610,12 @@
    *   （不做视差、轻微柔化），卡片站在图前，镜头正对配图装下整张图；配图在 photo 触发词（没写就是这一块第一个触发词前 0.3 秒）溶解出现，
    *   这一块收场时溶解消失；这一块在一行里占得宽一些（extPhoto），左右的模板不进画面。分镜没写 photo 的不走这一段，画面和原来逐像素相同。 */
   var OVP_Z = -1.6, OVP_BLUR = 0.5;
+  /* ---- 卡片数值跟着旁白出（2026-11-21 加；fd_开关.json"卡片数值跟着旁白出"，组装数据写 cardsync 时才起作用）：
+   *   对比卡条尾的数（bars[].val）跟着各自的条一起出（原来随卡片一起出，条还没长，11-20 股价卡早 3–8 秒）；
+   *   大数字（kpi）、底注（foot，quota_bars 的也是）有时刻（b.t.kpi / b.t.foot，组装时按旁白补的或分镜写的）就等到那时再出，
+   *   底注没有时刻的等最后一根条长完。只改出现的时刻（autoAlpha：位置照留，版式不动）。数据里没有 cardsync 时和原来逐像素一样。 */
+  var CS = false;
+  function csShow(a, el, at) { if (!el || at == null) return; a.ST(el, { autoAlpha: 0 }); a.tl.fromTo(el, { autoAlpha: 0, y: 6 }, { autoAlpha: 1, y: 0, duration: 0.5, ease: 'power2.out' }, at); }
   function ovpOn(P, b) { return !!(b.photo_img && (P.v.images || {})[b.photo_img]); }
   function ovpBuild(self, b, cx, w, pk) {      // pk：竖屏时横向装下几成，同时改看这一块的中心（卡片在竖屏会放宽，偏在图的一边就出画）
     var h = w * 9 / 16, cy = h / 2 + 0.1, m = self.photo(b.photo_img, w, h, OVP_BLUR);
@@ -1664,6 +1672,15 @@
       a.ST(els, { scaleX: 0 });
       Array.prototype.forEach.call(els, function (e, i) { a.tl.fromTo(e, { scaleX: 0 }, { scaleX: clamp(+o.bars[i].value || 0, 0.02, 1), duration: 0.9, ease: 'power2.out' }, bt2[i] - 0.1); });
       o.show = show; o.last = bt2.length ? bt2[bt2.length - 1] : show + 1;
+      if (CS) {        // 11-21：条尾的数跟着条出；大数字、底注等旁白说到
+        var vEl = o.lb.el.querySelectorAll('.bars b.v'), lastBar = bt2.length ? Math.max.apply(null, bt2) : show + 1;
+        Array.prototype.forEach.call(vEl, function (e, i) { if (bt2[i] != null && bt2[i] > show + 0.2) csShow(a, e, bt2[i] + 0.15); });
+        var kT = bt(b, 'kpi', null);
+        if (kT != null && kT > show + 0.2) csShow(a, o.lb.el.querySelector('.kpi'), kT - 0.1);
+        var fT = bt(b, 'foot', null), ftEl = o.lb.el.querySelector('.ft');
+        if (ftEl) { fT = fT != null ? fT - 0.1 : lastBar + 0.9; if (fT > show + 0.2) csShow(a, ftEl, fT); }
+        o.last = Math.max(lastBar, kT || 0, ftEl ? fT : 0);
+      }
     },
     cams: function (b) { return [{ t: b._.o.show + 0.9, s: b._.shS, dur: 1.5, ease: 'io', arc: 6 }]; },
     settle: function (b) { return b._.o.last + 1.0; },
@@ -1689,6 +1706,7 @@
       if (k1) { a.ST(k1, { autoAlpha: 0, y: 12 }); a.tl.fromTo(k1, { autoAlpha: 0, y: 12 }, { autoAlpha: 1, y: 0, duration: 0.5, ease: 'power3.out' }, f - 0.1); }
       if (k2) { a.ST(k2, { autoAlpha: 0, y: 12 }); a.tl.fromTo(k2, { autoAlpha: 0, y: 12 }, { autoAlpha: 1, y: 0, duration: 0.5, ease: 'power3.out' }, to - 0.1); }
       o.chartK = { t0: f - 0.3, last: to - 0.15 }; o.show = show; o.to = to;
+      if (CS && bt(b, 'foot', null) != null && bt(b, 'foot', null) > show + 0.2) csShow(a, o.lb.el.querySelector('.ft'), bt(b, 'foot', null) - 0.1);   // 11-21：底注等旁白说到
     },
     cams: function (b) { return [{ t: b._.o.show + 0.5, s: b._.shS, dur: 1.4, ease: 'io', arc: 6 }]; },
     settle: function (b) { return b._.o.to + 1.6; },
@@ -2390,7 +2408,7 @@
     return { html: (m[1] ? '<span class="u">' + esc(m[1]) + '</span>' : '') + '<span class="n v3n">' + (c && c.v != null ? c.html : esc(m[2])) + '</span>' + (m[3] ? '<span class="u">' + esc(m[3].trim()) + '</span>' : ''), c: c && c.v != null ? c : null };
   }
   TPL.num_chain = {
-    ext: [7.5, 7.5],
+    ext: [7.5, 7.5], extPhoto: [9, 9],                 // extPhoto：画面空档自动补图、后面垫图板时占得宽（11-21）
     startT: function (b) { return bt(b, 'head', firstT(b)); },
     build: function (b) {
       var L = this.P.L, items = (b.items || []).slice(0, 4), n = items.length, cnt = b.count === true;
@@ -2406,11 +2424,13 @@
       b._.shS = this.bshot(b, [0, 3.9, 0], 0, 3, w * 1.19, h * 1.18, { pk: 1 });     // 竖屏也装下整张卡（不裁两边）
       b._.o.lb.shot = b._.shS;
       b._.o.n = n; b._.o.cs = cs;
+      if (ovpOn(this.P, b)) fbpBuild(this, b, [0, 3.9, 0], w * 1.19, h * 1.18);    // 11-21：画面空档自动补图（数据里有 photo_img 才有）
     },
     tl: function (b, a) {
       var o = b._.o, c = b._.c, self = this, el = o.lb.el, ts = listT(b, 'items', o.n, bt(b, 'head', c.vs + 0.6) + 0.6, 1.4);
       var show = Math.min(bt(b, 'head', ts[0] - 0.5), ts[0] - 0.5);
       panelTl(b, a, show);
+      if (o.fbp) ovpTl(b, a, show, panelEnd(b, show));       // 11-21：画面空档自动补图
       var hd = el.querySelector('.hd');
       if (hd) { a.ST(hd, { autoAlpha: 0, y: 8 }); a.tl.fromTo(hd, { autoAlpha: 0, y: 8 }, { autoAlpha: 1, y: 0, duration: 0.5, ease: 'power2.out' }, show + 0.1); }
       for (var i = 0; i < o.n; i++) {
@@ -3053,6 +3073,7 @@
     this.chapters = (this.v.chapters || []).map(function (c) { return c; });
     this.scenes = this.chapters.map(function (c) { return { start: c.start, end: c.end }; }); // app.js 的“看这一段”按它跳
     this.cues = this.v.cues || [];
+    CS = !!this.v.cardsync;              // 11-21：卡片数值跟着旁白出（见 OVP_Z 上面 CS 的说明）
     this.duration = +this.v.duration || 1;
     this.t = 0; this.base = 0; this.at = 0; this.playing = false; this.started = false; this.ended = false;
     this.cc = this.store('fd.video.cc', '1') !== '0';

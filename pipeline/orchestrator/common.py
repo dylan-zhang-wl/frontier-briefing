@@ -262,6 +262,41 @@ def excerpt_photo_switch():
                    else "fd_开关.json 没写“%s”（或值认不出），按“关”" % EXCERPT_PHOTO_KEY)
 
 
+# ---------------------------------------------------------------- 画面空档自动补图、卡片数值跟着旁白出（2026-11-21 加，经验库第五部分第 94、95 件）
+# 两个都默认关（画面拿不准，用户看了新旧并排图再定）；关着时视频和加开关以前逐像素一样。做什么见 fd_开关.json 的"_是什么"、
+# site/tools/video3_storyboard.py 的 fix_bare、card_cues。先看环境变量 FD_BARE_FIX / FD_CARD_SYNC（只管这一次），再看 fd_开关.json。
+# site/tools/video3_storyboard.py 的 bare_fix_switch、card_sync_switch 是同一套规则，两边要一起改。
+BARE_FIX_KEY = "画面空档自动补图"
+CARD_SYNC_KEY = "卡片数值跟着旁白出"
+
+
+def _switch_off_default(env_name, key):
+    env = str(os.environ.get(env_name) or "").strip().lower()
+    if env in _OFF:
+        return False, "环境变量 %s=%s" % (env_name, env)
+    if env in _ON:
+        return True, "环境变量 %s=%s" % (env_name, env)
+    try:
+        v = str(json.loads(SWITCH_FILE.read_text(encoding="utf-8")).get(key) or "").strip().lower()
+    except (OSError, ValueError, AttributeError):
+        return False, "没有 fd_开关.json（或读不出来），按“关”"
+    if v in _ON:
+        return True, "fd_开关.json 的“%s”写着“开”" % key
+    if v in _OFF:
+        return False, "fd_开关.json 的“%s”写着“关”" % key
+    return False, "fd_开关.json 没写“%s”（或值认不出），按“关”" % key
+
+
+def bare_fix_switch():
+    """返回 (开着没有, 从哪来的一句话)。默认关。"""
+    return _switch_off_default("FD_BARE_FIX", BARE_FIX_KEY)
+
+
+def card_sync_switch():
+    """返回 (开着没有, 从哪来的一句话)。默认关。"""
+    return _switch_off_default("FD_CARD_SYNC", CARD_SYNC_KEY)
+
+
 # ---------------------------------------------------------------- 视频开关（2026-11-17 加，feat/mimo-fallback 分支；第 10–17 步 feat/mimo-release 分支）
 # 开（默认）：和加开关以前一样，第 6 步要三份稿子（播客、网页、视频分镜），第 7、9 步查分镜，第 10–17 步照旧。
 # 关：这一期不出视频——第 6 步只要播客和网页两份；第 7 步（和第 9 步改后复查）不跑分镜检查（helpers.py storyboard），
