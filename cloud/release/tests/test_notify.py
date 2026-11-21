@@ -62,6 +62,37 @@ class NotifyTest(unittest.TestCase):
         edit_json(self.issue / "审片结论.json", lambda d: d.update({"请你耳听": items}))
 
     # ---------------- 11-14：拿不准、语速、按时间排、【事实】记号（经验库第 67 件） ----------------
+    def test_耳听点选页_开关开着且发布了才加一行链接_不改发不发(self):
+        """11-21：FD_LISTEN_PAGE=on、--published yes、审片结论里有请你耳听 → 多一行链接；别的情况邮件一字不差。"""
+        edit_json(self.issue / "审片结论.json", lambda d: d.update({"请你耳听": [self.REAL, self.ASR1]}))
+        write_verdict(self.issue, self.root)
+        link = "逐条听、点对错：https://wenlongzhang.com/frontier/_listen?date=%s（只有站长能打开）" % GOOD_DAY
+        with mock.patch.dict(os.environ, {"FD_LISTEN_PAGE": ""}):
+            need0, subj0, body0 = notify.build(self.issue, published="yes")
+        self.assertTrue(need0)
+        self.assertNotIn("_listen", body0)
+        with mock.patch.dict(os.environ, {"FD_LISTEN_PAGE": "on"}):
+            need1, subj1, body1 = notify.build(self.issue, published="yes")
+            self.assertEqual(subj1, subj0)
+            self.assertIn(link, body1)
+            self.assertEqual(body1.replace("\n\n" + link, ""), body0, "只多这一行")
+            self.assertTrue(body1.index(link) > body1.index("另有 1 处"), "放在请你耳听那一段后面")
+            for pub in ("no", "failed", None):                   # 没发布：网站上没有点选页
+                self.assertNotIn("_listen", notify.build(self.issue, published=pub)[2], str(pub))
+        # 只有多半转写听错、正常放行：照旧不发信
+        edit_json(self.issue / "审片结论.json", lambda d: d.update({"请你耳听": [self.ASR1]}))
+        write_verdict(self.issue, self.root)
+        with mock.patch.dict(os.environ, {"FD_LISTEN_PAGE": "on"}):
+            self.assertFalse(notify.build(self.issue, published="yes")[0])
+        # 有别的事要发信、但没有请你耳听：不加
+        edit_json(self.issue / "审片结论.json", lambda d: d.update({"请你耳听": []}))
+        edit_json(self.issue / "logs" / "fd_state.json", lambda d: d["步骤"]["images"].update({"状态": "跳过", "附加": {"缺网页配图": ["card"]}}))
+        write_verdict(self.issue, self.root)
+        with mock.patch.dict(os.environ, {"FD_LISTEN_PAGE": "on"}):
+            need3, _, body3 = notify.build(self.issue, published="yes")
+        self.assertTrue(need3)
+        self.assertNotIn("_listen", body3)
+
     def test_拿不准和语速_不发信_只报个数(self):
         self.listen([{"位置": "播客 7:04", "说明": "原稿“Cerebras”，两次转写都是 Cerebra", "判断": "拿不准", "依据": "英文名"},
                      {"位置": "视频 4–17 秒（开场）", "说明": "（语速指标）3.87 字／秒，参考 4.48，慢约 14%", "判断": "多半真念错", "依据": "超过允许值"},
