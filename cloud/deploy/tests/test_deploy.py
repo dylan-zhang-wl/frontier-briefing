@@ -2,6 +2,7 @@
 不联网、不用令牌：存档用临时目录里的假“远端”（git 裸仓库）代替 GitHub。"""
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -243,6 +244,8 @@ class WranglerConfigTest(unittest.TestCase):
             self.assertTrue((run_dir / "src" / "visits.js").is_file())
             self.assertTrue((run_dir / "src" / "stats.js").is_file())
             self.assertTrue((run_dir / "migrations" / "0001_visits.sql").is_file())
+            self.assertTrue((run_dir / "src" / "listen.js").is_file())                 # 耳听点选页（11-21 加）
+            self.assertTrue((run_dir / "migrations" / "0003_listen.sql").is_file())
             self.assertFalse((run_dir / "migrations" / "旧的.sql").exists())    # 运行目录里的旧文件换成仓库里现在的
             toml = (run_dir / "wrangler.toml").read_text(encoding="utf-8")
             self.assertIn('directory = "%s"' % assets, toml)
@@ -609,6 +612,323 @@ class PodcastFeedTest(unittest.TestCase):
                        and any(getattr(t, "id", "") == "CREDITS" for t in n.targets))
         got = {v["曲名"]: v["url"] for v in credits.values()}
         self.assertEqual(got, podcast_feed.MUSIC_LINKS)
+
+
+
+# ===================== 耳听点选页（2026-11-21 加，listen_items.py、assemble.py、archive.py 的 FD_LISTEN_PAGE）=====================
+# 夹具全是现编的：位置的写法照审片结论里出现过的那几种形状（单个时刻、区间、另外几处、“3:5x”、“起”、“一带”、分号接着用前一段的来源、
+# 单位只写在最后、小数、来源和数字中间夹着字、括号里不是时刻的数……），但标签和原稿都是编的，不用哪一期的真内容。
+import listen_items  # noqa: E402
+
+LISTEN_RAW = [
+    {"位置": "播客 1:23", "说明": "原稿“测试甲”，转写成“测试乙（两次都是）”", "判断": "多半真念错", "依据": "测试依据一", "关乎事实": True},
+    {"位置": "视频 12 秒", "说明": "原稿“测试丙”，转写成：测试丁", "判断": "拿不准", "依据": "测试依据二", "关乎事实": False},
+    {"位置": "播客 2:05（另 2:40、3:01）", "说明": "原稿“测试戊”，程序那次“戊→午”", "判断": "多半真念错", "依据": "", "关乎事实": True},
+    {"位置": "视频 7 秒；播客 4:00", "说明": "原稿“测试己”，转写成“测试庚”", "判断": "拿不准", "依据": "", "关乎事实": True},
+    {"位置": "播客 0:30", "说明": "原稿“测试辛”，转写成“测试壬”", "判断": "多半转写听错", "依据": "同音", "关乎事实": False},
+    {"位置": "播客 5:00–6:40（第乙段）", "说明": "原稿“甲；乙”，转写成“甲'；乙'”", "判断": "多半转写听错", "依据": "同音字", "关乎事实": False},
+    {"位置": "播客多处", "说明": "原稿“测试”多处转写成同音字", "判断": "多半转写听错", "依据": "", "关乎事实": False},
+    {"位置": "其余", "说明": "其余都是同音字", "判断": "多半转写听错", "依据": ""},
+    {"位置": "播客 7:00", "说明": "原稿“测试癸”，转写成“测试子”", "判断": "多半真念错", "依据": "", "关乎事实": False},
+    {"位置": "播客 7:00", "说明": "原稿“测试癸”，转写成“测试子”", "判断": "多半真念错", "依据": "写重了的一条", "关乎事实": False},
+    "旧格式：一句话的条目",
+]
+
+
+def listen_issue(base, day, raw=LISTEN_RAW, video=True, edition="工作日版", **kw):
+    d = make_issue(base, day, "导语" + day, **kw)
+    if video:
+        (d / "10_网页v3" / "issues" / day / "audio" / "video3.mp3").write_bytes(b"ID3video")
+    if raw is not None:
+        (d / "审片结论.json").write_text(json.dumps({"日期": day, "版别": edition, "放行": True, "请你耳听": raw}, ensure_ascii=False), encoding="utf-8")
+    return d
+
+
+def minus_listen(t):
+    return {k: v for k, v in t.items() if not k.startswith("frontier/_listen/")}
+
+
+class ListenParseTest(unittest.TestCase):
+    def clips(self, pos):
+        return [(c["src"], c["a"], c["b"], c["kind"]) for c in listen_items.parse_position(pos)[0]]
+
+    def test_各种位置写法(self):
+        P, W = listen_items.PRE, listen_items.POST
+        self.assertEqual(self.clips("播客 3:38"), [("播客", 218 - P, 218 + W, "点")])
+        self.assertEqual(self.clips("播客 0:01"), [("播客", 0.0, 1 + W, "点")], "起点不小于 0")
+        self.assertEqual(self.clips("视频 51–53 秒"), [("视频", 51 - P, 53 + W, "段")])
+        self.assertEqual(self.clips("视频 37-79 秒"), [("视频", 37 - P, 79 + W, "段")], "半角连字符也认")
+        self.assertEqual(self.clips("播客 3:18–5:46（第乙段）"), [("播客", 198 - P, 346 + W, "段")])
+        self.assertEqual(self.clips("播客 11:29（另 11:55、12:00）"), [("播客", 689 - P, 689 + W, "点"), ("播客", 715 - P, 715 + W, "点"), ("播客", 720 - P, 720 + W, "点")])
+        self.assertEqual(self.clips("播客 8:37–9:25（共 6 处）"), [("播客", 517 - P, 565 + W, "段")], "括号里的“共 6 处”不是时刻")
+        self.assertEqual(self.clips("播客 12:10–12:19（某某 第 41 轮）"), [("播客", 730 - P, 739 + W, "段")], "括号里的“第 41 轮”不是时刻")
+        self.assertEqual(self.clips("视频 97、108、122 秒"), [("视频", 97 - P, 97 + W, "点"), ("视频", 108 - P, 108 + W, "点"), ("视频", 122 - P, 122 + W, "点")],
+                         "单位只写在最后")
+        self.assertEqual(self.clips("视频 9 秒、19 秒"), [("视频", 9 - P, 9 + W, "点"), ("视频", 19 - P, 19 + W, "点")])
+        self.assertEqual(self.clips("视频 140.5 秒"), [("视频", 140.5 - P, 140.5 + W, "点")], "小数")
+        self.assertEqual(self.clips("视频甲章 4–19 秒、乙章 81–107 秒"), [("视频", 4 - P, 19 + W, "段"), ("视频", 81 - P, 107 + W, "段")],
+                         "来源和数字中间夹着字；后一段接着用视频")
+        self.assertEqual(self.clips("视频 47 秒；播客 7:07"), [("视频", 47 - P, 47 + W, "点"), ("播客", 427 - P, 427 + W, "点")], "两种来源混着")
+        self.assertEqual(self.clips("视频 106 秒、播客 8:27"), [("视频", 106 - P, 106 + W, "点"), ("播客", 507 - P, 507 + W, "点")])
+        self.assertEqual(self.clips("播客 3:56、6:09（甲 第 11、19 轮）；10:11（乙 第 34 轮）"),
+                         [("播客", 236 - P, 236 + W, "点"), ("播客", 369 - P, 369 + W, "点"), ("播客", 611 - P, 611 + W, "点")], "分号后不写来源，接着用前一段的")
+        self.assertEqual(self.clips("播客 3:5x 前后（第乙块末）"), [("播客", 230 - listen_items.WIDE_PRE, 239 + listen_items.WIDE_POST, "约")], "3:5x 当 3:50–3:59")
+        self.assertEqual(self.clips("播客 5:4x–6:2x（第丙块）"), [("播客", 340 - P, 389 + W, "段")])
+        self.assertEqual(self.clips("播客 11:3x–12:59（结尾）"), [("播客", 690 - P, 779 + W, "段")])
+        self.assertEqual(self.clips("播客 1:08 起（第甲段）"), [("播客", 68 - P, 68 + listen_items.FROM_POST, "起")])
+        self.assertEqual(self.clips("播客 0:39、9:00 一带"), [("播客", 39 - P, 39 + W, "点"), ("播客", 540 - listen_items.WIDE_PRE, 540 + listen_items.WIDE_POST, "约")])
+        self.assertEqual(self.clips("播客多处（4:17、5:07）"), [("播客", 257 - P, 257 + W, "点"), ("播客", 307 - P, 307 + W, "点")], "“多处”后面括号里列的时刻")
+        self.assertEqual(self.clips("播客 0:00–1:00"), [("播客", 0.0, 60 + W, "段")])
+        self.assertEqual(self.clips("视频 101–126 秒、130–138 秒"), [("视频", 101 - P, 126 + W, "段"), ("视频", 130 - P, 138 + W, "段")])
+        self.assertEqual(self.clips("播客 3:39、视频 22 秒"), [("播客", 219 - P, 219 + W, "点"), ("视频", 22 - P, 22 + W, "点")])
+        for pos in ("其余", "播客多处", "播客、视频多处同音字", "", None, "视频开场", "播客 第 3 块"):
+            self.assertEqual(self.clips(pos), [], repr(pos))
+        self.assertTrue(listen_items.parse_position("播客 0:48 起多处")[1])
+        self.assertTrue(listen_items.parse_position("视频 103 秒、播客 6:22 等")[1])
+        self.assertFalse(listen_items.parse_position("播客 0:41、0:49")[1])
+
+    def test_说明拆成原稿和转写(self):
+        f = listen_items.split_note
+        self.assertEqual(f("原稿“甲乙”，转写成“丙丁（两次都是）”"), ("甲乙", "丙丁（两次都是）"))
+        self.assertEqual(f("原稿“甲乙”，转写成：两次都是\"丙\""), ("甲乙", "两次都是\"丙\""))
+        self.assertEqual(f("原稿“甲（配音写法\"乙\"）”，转写成“丙”"), ("甲（配音写法\"乙\"）", "丙"))
+        self.assertEqual(f("原稿“甲”，程序那次“甲→乙”，另跑一次“丙”"), ("甲", "程序那次“甲→乙”，另跑一次“丙”"))
+        self.assertEqual(f("原稿“甲”四处，两次转写都是“乙”"), ("", ""), "说法不一样的整句当说明")
+        self.assertEqual(f("片尾音乐里另跑一次多出“X”"), ("", ""))
+        self.assertEqual(f(None), ("", ""))
+
+    def test_一期的条目_分组排序编号(self):
+        a = listen_items.build_issue("2026-11-30", LISTEN_RAW)
+        b = listen_items.build_issue("2026-11-30", list(reversed(LISTEN_RAW)))
+        self.assertEqual(a["count"], len(LISTEN_RAW))
+        items = a["items"]
+        self.assertEqual([it["n"] for it in items], list(range(1, len(items) + 1)))
+        groups = [it["group"] for it in items]
+        self.assertEqual(groups, sorted(groups, key=listen_items.GROUP_RANK.get), "front → mid → batch")
+        front = [it for it in items if it["group"] == "front"]
+        self.assertTrue(all(it["fact"] for it in front[:3]) and not any(it["fact"] for it in front[3:]), "【事实】的排最前")
+        self.assertEqual([it["pos"] for it in front[:3]], ["播客 1:23", "播客 2:05（另 2:40、3:01）", "视频 7 秒；播客 4:00"], "事实里：先多半真念错、后拿不准，同一判断里先视频后播客、按时刻")
+        self.assertEqual([it["pos"] for it in front[3:5]], ["播客 7:00", "播客 7:00"], "不关乎事实的多半真念错")
+        by = {it["pos"]: it for it in items}
+        self.assertEqual(by["播客 0:30"]["group"], "mid", "单个时刻的转写听错不折叠")
+        self.assertEqual(by["播客 5:00–6:40（第乙段）"]["group"], "batch", "长区间的转写听错折叠")
+        self.assertEqual(by["播客多处"]["group"], "batch")
+        self.assertEqual(by["其余"]["group"], "batch")
+        self.assertFalse(by["其余"]["parsed"])
+        self.assertEqual(by["其余"]["clips"], [])
+        old = [it for it in items if it["note"] == "旧格式：一句话的条目"][0]
+        self.assertEqual((old["pos"], old["judge"], old["group"], old["parsed"]), ("", "", "front", False), "认不出的照样列出，只显示文字")
+        self.assertEqual(by["视频 12 秒"]["fact"], False)
+        self.assertIsNone(by["其余"]["fact"], "旧格式没写关乎事实")
+        self.assertEqual(by["播客 1:23"]["say"], "测试甲")
+        self.assertEqual(by["播客 1:23"]["heard"], "测试乙（两次都是）")
+        self.assertEqual(by["播客 1:23"]["clips"], [{"src": "播客", "a": 81.0, "b": 87.0, "label": "播客 1:23", "ok": True}])
+        self.assertEqual([c["label"] for c in by["播客 2:05（另 2:40、3:01）"]["clips"]], ["播客 2:05", "播客 2:40", "播客 3:01"])
+        # 编号：只看日期、位置、说明；顺序变了编号不变；写重了的加 -2
+        ids = {(it["pos"], it["basis"]): it["id"] for it in items}
+        self.assertEqual(ids, {(it["pos"], it["basis"]): it["id"] for it in b["items"]} | {("播客 7:00", ""): ids[("播客 7:00", "")],
+                                                                                           ("播客 7:00", "写重了的一条"): ids[("播客 7:00", "写重了的一条")]})
+        dup = sorted(it["id"] for it in items if it["pos"] == "播客 7:00")
+        self.assertEqual(dup[1], dup[0] + "-2")
+        self.assertRegex(dup[0], r"^[0-9a-f]{10}$")
+        self.assertEqual(dup[0], hashlib.sha256("2026-11-30\n播客 7:00\n原稿“测试癸”，转写成“测试子”".encode("utf-8")).hexdigest()[:10])
+        self.assertNotEqual(listen_items.build_issue("2026-12-01", LISTEN_RAW)["items"][0]["id"], items[0]["id"], "换一天编号就不同")
+        # 这一期网站上没有视频旁白：视频那几段标成放不了
+        nv = listen_items.build_issue("2026-11-30", LISTEN_RAW, audio=("播客",))
+        self.assertEqual(nv["audio"], {"播客": True, "视频": False})
+        self.assertEqual([c["ok"] for c in [it for it in nv["items"] if it["pos"] == "视频 7 秒；播客 4:00"][0]["clips"]], [False, True])
+
+
+class ListenPackageTest(unittest.TestCase):
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory()
+        self.t = Path(self.td.name)
+        make_repo(self.t / "repo")
+        self.issues = self.t / "测试版"
+        self.n = 0
+
+    def tearDown(self):
+        self.td.cleanup()
+
+    def pkg(self, issues, listen=True, archive=None):
+        self.n += 1
+        out = self.t / ("pkg%d" % self.n)
+        rows, problems, stats = assemble.assemble(self.t / "repo", archive, issues, out, listen=listen)
+        return out, problems, stats
+
+    def archive_dir(self, days):
+        """假的往期存档：issues/<日期>/（照 make_issue）＋ listen/<日期>.json（照 archive.py push 存的样子）。"""
+        a = self.t / "archive"
+        for day in days:
+            d = listen_issue(self.t / "存档源", day)
+            shutil.copytree(d / "10_网页v3" / "issues" / day, a / "issues" / day)
+            (a / "listen").mkdir(parents=True, exist_ok=True)
+            (a / "listen" / ("%s.json" % day)).write_text(listen_items.dumps(listen_items.archive_record(d)), encoding="utf-8")
+        return a
+
+    def test_开关关着_没有_listen_开着只多_listen(self):
+        arch = self.archive_dir(["2026-11-28", "2026-11-29"])
+        issues = [listen_issue(self.issues, "2026-11-30")]
+        off, p_off, s_off = self.pkg(issues, listen=False, archive=arch)
+        on, p_on, s_on = self.pkg(issues, listen=True, archive=arch)
+        self.assertFalse((off / "frontier/_listen").exists())
+        self.assertNotIn("耳听点选页", s_off)
+        self.assertEqual(p_off, p_on)
+        self.assertEqual(p_on, [])
+        self.assertEqual(minus_listen(tree(on)), tree(off), "开着时除了 _listen/ 别的文件一个字节都不变")
+        self.assertEqual(sorted(p.name for p in (on / "frontier/_listen").iterdir()), ["2026-11-28.json", "2026-11-29.json", "2026-11-30.json", "index.json"])
+        idx = json.loads((on / "frontier/_listen/index.json").read_text(encoding="utf-8"))
+        self.assertEqual([x["date"] for x in idx["issues"]], ["2026-11-30", "2026-11-29", "2026-11-28"], "新的在前")
+        self.assertEqual(idx["issues"][0]["count"], len(LISTEN_RAW))
+        self.assertIn("耳听点选页：3 期、%d 条" % (3 * len(LISTEN_RAW)), s_on["耳听点选页"])
+        self.assertIn("其中 9 条认不出时刻", s_on["耳听点选页"], "每期 3 条（其余、播客多处、旧格式）")
+        one = json.loads((on / "frontier/_listen/2026-11-30.json").read_text(encoding="utf-8"))
+        self.assertEqual(one["date"], "2026-11-30")
+        self.assertEqual(one["edition"], "工作日版")
+        self.assertEqual(one["audio"], {"播客": True, "视频": True})
+
+    def test_两次做出来逐字节一样(self):
+        arch = self.archive_dir(["2026-11-29"])
+        issues = [listen_issue(self.issues, "2026-11-30")]
+        a, _, _ = self.pkg(issues, archive=arch)
+        b, _, _ = self.pkg(issues, archive=arch)
+        self.assertEqual(tree(a), tree(b))
+
+    def test_这一期以审片结论为准_往期从存档来_没有的期不出(self):
+        arch = self.archive_dir(["2026-11-29", "2026-11-30"])
+        mine = [{"位置": "播客 9:09", "说明": "原稿“新的”，转写成“新的'”", "判断": "多半真念错", "依据": "", "关乎事实": False}]
+        issues = [listen_issue(self.issues, "2026-11-30", raw=mine), listen_issue(self.issues, "2026-12-01", raw=None),
+                  listen_issue(self.issues, "2026-12-02", raw=[], video=False)]
+        out, problems, stats = self.pkg(issues, archive=arch)
+        self.assertEqual(problems, [])
+        got = sorted(p.name for p in (out / "frontier/_listen").iterdir())
+        self.assertEqual(got, ["2026-11-29.json", "2026-11-30.json", "index.json"], "没有审片结论、没有请你耳听的期不出")
+        d30 = json.loads((out / "frontier/_listen/2026-11-30.json").read_text(encoding="utf-8"))
+        self.assertEqual([it["pos"] for it in d30["items"]], ["播客 9:09"], "同一天以这一期的审片结论为准，不用存档里的旧条目")
+        # --issue 给的是 10_网页v3 或 issues/<日期> 也找得到期目录
+        self.assertEqual(listen_items.issue_root(issues[0] / "10_网页v3" / "issues" / "2026-11-30", "2026-11-30"), issues[0].resolve())
+        self.assertIsNone(listen_items.issue_root(issues[1], "2026-12-01"))
+        # 只有存档、没给这一期：照样从存档出
+        out2, _, _ = self.pkg([listen_issue(self.t / "另一份", "2026-12-03", raw=None)], archive=arch)
+        self.assertEqual(sorted(p.name for p in (out2 / "frontier/_listen").iterdir()), ["2026-11-29.json", "2026-11-30.json", "index.json"])
+
+    def test_出错不连累网站(self):
+        issues = [listen_issue(self.issues, "2026-11-30")]
+        good, _, _ = self.pkg(issues, listen=False)
+        with mock.patch.object(listen_items, "build", side_effect=RuntimeError("测试里故意的")):
+            out, problems, stats = self.pkg(issues)
+        self.assertEqual(problems, [])
+        self.assertIn("耳听点选页这次没做成：RuntimeError：测试里故意的", stats["耳听点选页"])
+        self.assertFalse((out / "frontier/_listen").exists())
+        self.assertEqual(tree(out), tree(good))
+        # 审片结论坏了（不是 JSON）：这一期没有条目，网站照常
+        bad = make_issue(self.t / "坏", "2026-11-30", "坏")
+        (bad / "审片结论.json").write_text("{不是 JSON", encoding="utf-8")
+        out3, p3, s3 = self.pkg([bad])
+        self.assertEqual(p3, [])
+        self.assertIn("这次没有哪一期有", s3["耳听点选页"])
+        self.assertEqual(json.loads((out3 / "frontier/_listen/index.json").read_text(encoding="utf-8")), {"v": 1, "issues": []})
+
+    def test_main_环境变量(self):
+        issue = listen_issue(self.issues, "2026-11-30")
+        args = ["--repo", str(self.t / "repo"), "--issue", str(issue)]
+        summ = self.t / "summary.md"
+        with mock.patch.dict(os.environ, {"FD_LISTEN_PAGE": ""}):
+            self.assertEqual(assemble.main(args + ["--out", str(self.t / "m0"), "--summary", str(summ)]), 0)
+        self.assertFalse((self.t / "m0/frontier/_listen").exists())
+        self.assertNotIn("耳听", summ.read_text(encoding="utf-8"), "关着时清单一个字都不多")
+        for v, name in (("on", "m1"), ("ON ", "m2"), ("1", "m3"), ("yes", "m4")):
+            with mock.patch.dict(os.environ, {"FD_LISTEN_PAGE": v}):
+                self.assertEqual(assemble.main(args + ["--out", str(self.t / name), "--summary", str(summ)]), 0, name)
+            self.assertTrue((self.t / name / "frontier/_listen/2026-11-30.json").is_file(), name)
+        self.assertIn("耳听点选页：1 期", summ.read_text(encoding="utf-8"))
+        with mock.patch.dict(os.environ, {"FD_LISTEN_PAGE": "off"}):
+            assemble.main(args + ["--out", str(self.t / "m5")])
+        self.assertFalse((self.t / "m5/frontier/_listen").exists())
+
+    def test_和加这个功能以前的程序比(self):
+        """开关关着时，新程序做的上线包和加功能以前的 assemble.py 逐字节一样（存档里有 listen/ 也不读）；
+        以前的程序碰上 FD_LISTEN_PAGE=on 也照常出包、一样。以前的程序从 git 历史里取（加 listen_items.py 那次提交的上一版）。"""
+        repo = HERE.parent.parent.parent
+        try:
+            added = subprocess.run(["git", "-C", str(repo), "log", "--diff-filter=A", "--format=%H", "--", "cloud/deploy/listen_items.py"],
+                                   capture_output=True, text=True, check=True).stdout.split()
+            rev = (added[-1] + "^") if added else "HEAD"
+            old = subprocess.run(["git", "-C", str(repo), "show", rev + ":cloud/deploy/assemble.py"], capture_output=True, text=True, check=True).stdout
+        except (OSError, subprocess.CalledProcessError) as e:
+            self.skipTest("取不到加功能以前的 assemble.py（%s）" % type(e).__name__)
+        if "FD_LISTEN_PAGE" in old:
+            self.skipTest("git 历史里找到的那一版已经有耳听点选页开关，比不了")
+        (self.t / "old").mkdir()
+        (self.t / "old" / "assemble.py").write_text(old, encoding="utf-8")
+        shutil.copy2(HERE.parent / "podcast_feed.py", self.t / "old" / "podcast_feed.py")
+        arch = self.archive_dir(["2026-11-28", "2026-11-29"])
+        issues = [listen_issue(self.issues, "2026-11-30"), listen_issue(self.issues, "2026-12-01", raw=None)]
+        common = ["--repo", str(self.t / "repo"), "--archive", str(arch)] + sum((["--issue", str(i)] for i in issues), [])
+        env0 = {k: v for k, v in os.environ.items() if not k.startswith(("FD_LISTEN", "FD_PODCAST"))}
+        env0["PYTHONDONTWRITEBYTECODE"] = "1"
+        outs = {}
+        for name, script, env in (("旧", self.t / "old" / "assemble.py", env0), ("旧+开关", self.t / "old" / "assemble.py", dict(env0, FD_LISTEN_PAGE="on")),
+                                  ("新", HERE.parent / "assemble.py", env0)):
+            r = subprocess.run([sys.executable, str(script)] + common + ["--out", str(self.t / name)], capture_output=True, text=True, env=env)
+            self.assertEqual(r.returncode, 0, name + r.stderr)
+            outs[name] = (tree(self.t / name), re.sub(r"（\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC）", "", r.stdout))
+        self.assertEqual(outs["旧+开关"], outs["旧"], "旧程序不认识这个环境变量，照常出包、一个字节不差")
+        self.assertEqual(outs["新"], outs["旧"], "新程序开关关着：上线包和清单都和以前一样")
+        self.assertFalse(any(k.startswith("frontier/_listen/") for k in outs["新"][0]))
+
+
+class ListenArchiveTest(unittest.TestCase):
+    """archive.py push 在 FD_LISTEN_PAGE=on 时另存 listen/<日期>.json；关着时和以前一样；这一段出错不让推送失败。
+    假远端的搭法同 ArchiveTest。"""
+    setUp, tearDown = ArchiveTest.setUp, ArchiveTest.tearDown
+
+    def ls(self):
+        return subprocess.run(["git", "--git-dir", str(self.t / "origin.git"), "ls-tree", "-r", "--name-only", "site-archive"],
+                              capture_output=True, text=True).stdout.split()
+
+    def test_开着存原始条目_关着不存_已有的原样留着(self):
+        repo, t = self.t / "repo", self.t
+        archive.pull(repo, "origin", "site-archive", t / "a1")
+        with mock.patch.dict(os.environ, {"FD_LISTEN_PAGE": ""}):
+            archive.push(repo, "origin", "site-archive", t / "a1", listen_issue(self.issues, "2026-11-28"))
+        self.assertFalse(any(x.startswith("listen/") for x in self.ls()), "关着时不存")
+        with mock.patch.dict(os.environ, {"FD_LISTEN_PAGE": "on"}):
+            archive.push(repo, "origin", "site-archive", t / "a1", listen_issue(self.issues, "2026-11-29"))
+        self.assertIn("listen/2026-11-29.json", self.ls())
+        self.assertNotIn("listen/2026-11-28.json", self.ls())
+        archive.pull(repo, "origin", "site-archive", t / "a2")
+        rec = json.loads((t / "a2/listen/2026-11-29.json").read_text(encoding="utf-8"))
+        self.assertEqual(rec["日期"], "2026-11-29")
+        self.assertEqual(rec["版别"], "工作日版")
+        self.assertEqual(len(rec["请你耳听"]), len(LISTEN_RAW))
+        self.assertEqual(set().union(*(x.keys() for x in rec["请你耳听"])), set(listen_items.FIELDS), "只留五栏")
+        # 关着再推一期：已有的 listen/ 原样留着
+        with mock.patch.dict(os.environ, {"FD_LISTEN_PAGE": "off"}):
+            archive.push(repo, "origin", "site-archive", t / "a2", listen_issue(self.issues, "2026-11-30"))
+        self.assertIn("listen/2026-11-29.json", self.ls())
+        self.assertNotIn("listen/2026-11-30.json", self.ls())
+        # 开着重推同一天、这次没有请你耳听：存档里那一天的旧条目去掉；别的期不动
+        with mock.patch.dict(os.environ, {"FD_LISTEN_PAGE": "on"}):
+            archive.push(repo, "origin", "site-archive", t / "a2", listen_issue(t / "重发", "2026-11-29", raw=[]))
+        self.assertNotIn("listen/2026-11-29.json", self.ls())
+        self.assertIn("issues/2026-11-29/issue.js", self.ls())
+
+    def test_出错照常推送网页文件(self):
+        repo, t = self.t / "repo", self.t
+        archive.pull(repo, "origin", "site-archive", t / "a1")
+        bad = make_issue(self.issues, "2026-11-28", "坏")
+        (bad / "审片结论.json").write_text("{不是 JSON", encoding="utf-8")
+        with mock.patch.dict(os.environ, {"FD_LISTEN_PAGE": "on"}):
+            c = archive.push(repo, "origin", "site-archive", t / "a1", bad)
+        self.assertTrue(c)
+        self.assertIn("issues/2026-11-28/issue.js", self.ls())
+        self.assertFalse(any(x.startswith("listen/") for x in self.ls()))
+        with mock.patch.dict(os.environ, {"FD_LISTEN_PAGE": "on"}), mock.patch.object(listen_items, "archive_record", side_effect=OSError("测试里故意的")):
+            c2 = archive.push(repo, "origin", "site-archive", t / "a1", listen_issue(self.issues, "2026-11-29"))
+        self.assertTrue(c2)
+        self.assertIn("issues/2026-11-29/issue.js", self.ls())
+        self.assertNotIn("listen/2026-11-29.json", self.ls())
 
 
 if __name__ == "__main__":
