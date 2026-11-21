@@ -121,9 +121,32 @@ def build(issue, steps, costs, month, image_lines, now):
         mline = "；本月 Gemini 已记 $%.2f / 上限 $%.2f" % (float(month.get("Gemini已记美元") or 0), float(month["上限美元"]))
     L.append("- 花费：这一期 %s（花费.json）%s" % (tot, mline))
     a = st("accept")
-    L.append("- 验收：%s%s%s" % (a.get("状态") or "没跑", "，" + _cut(a.get("说明"), 120) if a.get("说明") else "",
+    L.append("- 验收：%s%s%s" % (a.get("状态") or "没跑", "，" + _cut(a.get("说明"), 220) if a.get("说明") else "",
                               "；提醒 %d 条（见 00_调度报告.md 第 16 步）" % len(a.get("提醒") or []) if a.get("提醒") else ""))
+    lw = listen_line(steps)
+    if lw:
+        L.append("- " + lw)
     return "\n".join(L) + "\n"
+
+
+LISTEN_ID = re.compile(r"“听这一段”\s*(\S+?)\s")
+
+
+def listen_line(steps):
+    """网页组装报的"听这一段"请核对（2026-11-21 加）：11-16 三条头条跳串，第 13 步报了"请核对"，这一节却只抄了验收的"正常"。
+    看最后组出网页的那一步（第 15 步带视频再组装；没有记录就看第 13 步）的提醒里提到"听这一段"、写着"请核对"的几条；
+    第 16 步转写核对的跳早、跳晚写在验收那句话里（steps.listen_said），这里不重复。一条都没有返回空字符串。"""
+    for key, no in (("web2", 15), ("web", 13)):
+        r = steps.get(key) or {}
+        if not r.get("状态"):
+            continue
+        ws = [str(w) for w in r.get("提醒") or [] if "听这一段" in str(w) and "请核对" in str(w)]
+        if not ws:
+            return ""
+        ids = list(dict.fromkeys(m.group(1) for m in (LISTEN_ID.search(w) for w in ws) if m))
+        return "'听这一段'：第 %d 步组装网页时报了 %d 条请核对%s，验收没逐条核，见 00_调度报告.md 第 %d 步" % (
+            no, len(ws), "（%s）" % "、".join(ids[:8]) if ids else "", no)
+    return ""
 
 
 def write(path, section):

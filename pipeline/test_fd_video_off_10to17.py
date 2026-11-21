@@ -376,7 +376,8 @@ class Step16(unittest.TestCase):
         self.assertTrue(r.msg.endswith("（视频：关，这一期没有视频）"))
         self.assertEqual(res["视频开关"], "关")
         r, res = self.run_accept(None)
-        self.assertEqual(r.msg, "三种视图无报错、不横滚、不缺字；上标不掉行；'听这一段'正常")
+        # 11-21："听这一段"那半句按实际查了什么写（这里没有播客），不再一律写"正常"
+        self.assertEqual(r.msg, "三种视图无报错、不横滚、不缺字；上标不掉行；'听这一段'：没有播客，不查")
         self.assertNotIn("视频开关", res)
 
 

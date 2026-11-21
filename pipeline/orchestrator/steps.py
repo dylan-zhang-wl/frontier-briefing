@@ -1718,6 +1718,7 @@ class Accept(Step):
                 probs.append("%s 像素宽：%d 个上标单独掉行（%s）" % (w, len(l), "、".join(x.get("before", "")[-6:] for x in l[:3])))
         res["上标单独掉行"] = lonely
         rc, out = c.run(self, ["node", TOOLS / "check_listen.js", url], "听这一段", env=env)
+        lout = out
         has_pod = (c.state.step("web") or {}).get("附加", {}).get("播客", "无") != "无"
         if "按钮数：0" in out:
             if has_pod:
@@ -1737,7 +1738,7 @@ class Accept(Step):
         write_json(c.p("logs/验收.json"), res)
         if probs:
             return R(FAILED, "验收没过 %d 项，不要发布" % len(probs), probs + warns, go_on=True)
-        return R(DONE, "三种视图无报错、不横滚、不缺字；上标不掉行；'听这一段'正常" + ("" if von else "（视频：关，这一期没有视频）"), warns)
+        return R(DONE, "三种视图无报错、不横滚、不缺字；上标不掉行；" + listen_said(res, lout) + ("" if von else "（视频：关，这一期没有视频）"), warns)
 
     def listen_text(self, c, env, res):
         """11-15 加：每个'听这一段'从跳点截 20 秒播客转写一遍，和这一条、别的条目的网页文字比
@@ -1755,6 +1756,9 @@ class Accept(Step):
             return []
         each = jt.get("各条") or {}
         res["听这一段转写核对"] = {k: r.get("判断") for k, r in each.items()}
+        # 11-21：可能跳早、跳晚的是哪几条也记下（验收那句话、自检.md 按它写，不再一律写"正常"）
+        res["听这一段可能跳早"] = [k for k, r in each.items() if r.get("判断") == "跳早了"]
+        res["听这一段可能跳晚"] = [k for k, r in each.items() if r.get("跳晚")]
         warns = []
         for k, r in each.items():
             if r.get("判断") != "跳早了":
@@ -1772,6 +1776,30 @@ class Accept(Step):
                              "转写核对，请耳听；logs/听这一段_转写核对.json）"
                              % (k, t, float(r.get("跳点前在讲这一条（秒）") or 0), t - float(r.get("这一条约从（跳点前几秒）") or 0)))
         return warns
+
+
+def listen_said(res, out):
+    """验收那句话里"听这一段"的半句，按这一次实际查了什么写（2026-11-21 加）。原来一律写"'听这一段'正常"，
+    可 check_listen.js 只点前两个按钮（"听全集"和第一条），11-16、11-17 有几条跳串、跳晚，验收和 自检.md 照样写"正常"。
+    res：这一步写进 logs/验收.json 的那份；out：check_listen.js 的输出（里面有"听这一段按钮数： N"）。"""
+    if res.get("听这一段") == "没有播客，跳过":
+        return "'听这一段'：没有播客，不查"
+    clicked = res.get("听这一段") if isinstance(res.get("听这一段"), list) else []
+    m = re.search(r"听这一段按钮数：\s*(\d+)", out or "")
+    s = "'听这一段'点了前 %d 个能从对的时间放%s" % (len(clicked), "（共 %s 个）" % m.group(1) if m else "")
+    t = res.get("听这一段转写核对")
+    if isinstance(t, dict):
+        early, late = res.get("听这一段可能跳早") or [], res.get("听这一段可能跳晚") or []
+        if early or late:
+            parts = ["可能跳%s %d 条（%s）" % (w, len(x), "、".join(map(str, x[:6])) + ("等" if len(x) > 6 else "")) for w, x in (("晚", late), ("早", early)) if x]
+            s += "；转写核对 %d 条：%s，请耳听" % (len(t), "，".join(parts))
+        else:
+            s += "；转写核对 %d 条没听出跳早、跳晚" % len(t)
+    elif t == "没跑成":
+        s += "；转写核对没跑成"
+    elif isinstance(t, str) and t:
+        s += "；转写核对跳过（%s）" % t[:40]
+    return s
 
 
 def _json_list(out):
