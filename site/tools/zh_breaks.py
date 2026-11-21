@@ -9,6 +9,13 @@
 3. 几条排版规矩：书名号《》里不切；10 个字以内的引号“…”里不切；括号开头后、标点前不切；英文单词和数字内部不切；
    空格旁不加（空格本来就能换行）；数字和后面的单位、日期的“月”和日子之间不断（那个空格换成不换行空格）。
 4. 上标记号 [^s07] 和粗体记号 ** 原样保留，不往里面插。
+5. 两个工具在同一处切错时的补漏（2026-11-21 加，环境变量 FD_ZH_WRAP_GLUE=off 关掉，和加以前逐字相同）：
+   第 2 条只能拦住"一个切错、一个没切"的；两个工具都不认识的词，往往切在同一处，取交集也拦不住。11-16 视频
+   "担任下｜一任 CEO"（BudouX 切 下｜一任，jieba 切 下/一任）、11-20 视频摘录卡"平头｜哥国产芯片"（两个都切 平头｜哥）、
+   同期"下｜一｜财年"就是这样。只拿掉换行点、不加新的，也不往 jieba 里加词（加词会挪动旁边的词边界）：
+   · 数量短语不断开：上、下、这、那、每、同、另、前、后紧跟"一"、再跟一个汉字时，这三个字中间不换行（下一任、下一财年、同一家）；
+   · 名词后面跟一个单字名词不断开：jieba 词性标注（jieba.posseg）里前一个是两字以上的名词、后一个是单字名词（n、ng）时，
+     两者之间不换行（平头哥、网页版、调用量）。这类单字多半是词尾，甩到下一行就是拆词。
 
 依赖（只在组装时用，网页运行时不需要）：budoux、jieba，装在 ~/.venvs/frontier-daily：
     uv pip install --python ~/.venvs/frontier-daily/bin/python budoux jieba
@@ -62,7 +69,40 @@ def _load_names():
     names = {n.strip("《》") for n in names if CJK.search(n) and len(n.strip("《》")) >= 2 and not re.search(r"[，。；：！？]", n)}
     _NAMES = sorted(names, key=len, reverse=True)
     return _NAMES
-STATS = {"strings": 0, "budoux": 0, "kept": 0, "extra": 0}
+STATS = {"strings": 0, "budoux": 0, "kept": 0, "extra": 0, "glued": 0}
+GLUE_ENV = "FD_ZH_WRAP_GLUE"   # 2026-11-21：两个工具同错时的补漏（文件头第 5 条）；写 off 关掉
+_OFF = ("off", "0", "false", "no", "关", "关闭", "关掉")
+DEM_ONE = re.compile(r"[上下这那每同另前后]一(?=[\u4e00-\u9fff])")   # 数量短语：下一任、同一家、前一天
+NOUN_L = ("vn", "j")          # 前一个词：词性以 n 开头（n、nr、ns、nt、nrt……）或 vn、j 的算名词；
+NOT_L = ("nz",)               #   nz 不算（jieba 词典把"转载自"标成 nz，"转载自｜科创板日报"这类会被误粘）
+NOUN_1 = ("n", "ng")          # 单字名词
+
+
+def glue_on():
+    """补漏开着没有：环境变量 FD_ZH_WRAP_GLUE 写 off／0／关…… 就关，其余（包括没设）都开。"""
+    return str(os.environ.get(GLUE_ENV) or "").strip().lower() not in _OFF
+
+
+def _glue_positions(seg):
+    """补漏（文件头第 5 条）：返回这一段里不许换行的位置（位置 i 指 seg[i-1] 和 seg[i] 之间）。只会拿掉换行点。"""
+    no = set()
+    for m in DEM_ONE.finditer(seg):
+        no.update((m.start() + 1, m.start() + 2))
+    try:
+        import jieba.posseg as pseg
+        toks = [(w, f) for w, f in pseg.cut(seg)]
+    except Exception:  # noqa: BLE001  词性标注出错就只用上面那条，不挡组装
+        return no
+    if "".join(w for w, _ in toks) != seg:
+        return no
+    pos, prev = 0, None
+    for w, f in toks:
+        if prev and len(w) == 1 and CJK.match(w) and f in NOUN_1 and len(prev[0]) >= 2 and CJK.match(prev[0][-1]) \
+                and ((prev[1][:1] == "n" and prev[1] not in NOT_L) or prev[1] in NOUN_L):
+            no.add(pos)
+        pos += len(w)
+        prev = (w, f)
+    return no
 
 
 def load(extra_words=()):
@@ -155,6 +195,11 @@ def _segment(seg):
     STATS["budoux"] += len(bud)
     STATS["kept"] += kept0
     STATS["extra"] += len(keep) - kept0
+    if glue_on():   # 2026-11-21：两个工具同错时的补漏（文件头第 5 条）。算完以后才拿掉，所以结果只比原来少换行点、不会多
+        g = _glue_positions(seg)
+        n0 = len(keep)
+        keep = [i for i in keep if i not in g]
+        STATS["glued"] += n0 - len(keep)
     out, last = [], 0
     for i in keep:
         out.append(seg[last:i])

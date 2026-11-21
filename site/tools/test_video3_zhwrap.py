@@ -229,6 +229,73 @@ class Build(unittest.TestCase):
         self.assertTrue(all(c["text"] in tbl or ZW.display(c["text"]) is None for c in data["cues"]))
 
 
+@unittest.skipUnless(have_breaker(), "没装断行工具 budoux / jieba")
+class Glue(unittest.TestCase):
+    """2026-11-21 加（zh_breaks.py 文件头第 5 条，环境变量 FD_ZH_WRAP_GLUE）：BudouX 和 jieba 在同一处切错时补漏，只拿掉换行点。
+    例子都是成片里真出现过的：11-16 视频 115–119 秒 Bessent 卡"担任下｜一任 CEO"、旁白字幕"外部选下｜一任"；
+    11-20 视频 66.5、68.3 秒原句摘录卡"平头｜哥国产芯片"、字幕"平头｜哥为主""看平头｜哥供"、下一财年卡"下｜一｜财年"。"""
+    CASES = [
+        ("敦促英伟达从公司外部选人担任下一任 CEO", ["下一任"], "担任" + ZW.ZW + "下"),
+        ("美国财政部长 Bessent 却要英伟达从外部选下一任 CEO。", ["下一任"], None),
+        ("吴泳铭在电话会上明确，出口管制新规会影响明年的产品供给，阿里2030年的AI基础设施规划，底层完全建立在平头哥国产芯片的供应链之上。",
+         ["平头哥"], "在" + ZW.ZW + "平头哥"),
+        ("新增 AI 芯片以自家的平头哥为主。", ["平头哥"], None),
+        ("要看平头哥供得上多少。", ["平头哥"], None),
+        ("本季 53% · 下一财年目标 30% 至 45%", ["下一财年"], "财年" + ZW.ZW + "目标"),
+    ]
+
+    def run_with(self, value, s):
+        import zh_breaks
+        with mock.patch.dict(os.environ, {"FD_ZH_WRAP_GLUE": value}):
+            return zh_breaks.phrase_breaks(s)
+
+    @staticmethod
+    def marks(d):
+        pos, out = 0, set()
+        for ch in d:
+            if ch == ZW.ZW:
+                out.add(pos)
+            else:
+                pos += 1
+        return out
+
+    def test_cases(self):
+        for s, words, keep in self.CASES:
+            new, old = self.run_with("", s), self.run_with("off", s)
+            self.assertTrue(ZW.same_text(s, new), s)
+            for w in words:
+                self.assertIn(w, new, s)                          # 开着：这个词里没有换行点
+            self.assertTrue(any(w not in old for w in words), s)  # 关着：原来确实拆开了（证明测得到）
+            self.assertLessEqual(self.marks(new), self.marks(old), s)   # 只拿掉，不多加
+            if keep:
+                self.assertIn(keep, new, s)                       # 词和词之间照样能断
+
+    def test_only_removes(self):
+        """几句普通的：开着时换行点是关着时的子集；"稀缺设备"照旧能在词间断。"""
+        for s in (CARD, "黄仁勋已和亲密伙伴讨论重返 CEO 职位的可能，盟友正组建“作战室”", "据《金融时报》和《华尔街日报》，美国财政部长 Bessent 却要英伟达从外部选下一任 CEO。",
+                  "转载自科创板日报，", "这一周辞职的人比上一代产品发布时还多"):
+            new, old = self.run_with("on", s), self.run_with("off", s)
+            self.assertLessEqual(self.marks(new), self.marks(old), s)
+            self.assertTrue(ZW.same_text(s, new), s)
+        self.assertIn("稀缺" + ZW.ZW + "设备", self.run_with("on", CARD))
+        self.assertIn("转载自" + ZW.ZW + "科创板日报", self.run_with("on", "转载自科创板日报，"))   # 词性 nz 的不粘（"转载自"在 jieba 里是 nz）
+
+    def test_switch_off_same_as_before(self):
+        """关掉（off、0、关……）和加这一条以前逐字一样：拿 11-09 那张卡和上面几句比没有 _glue_positions 时的结果。"""
+        import zh_breaks
+        for v in ("off", "0", "关", "FALSE"):
+            with mock.patch.dict(os.environ, {"FD_ZH_WRAP_GLUE": v}):
+                self.assertFalse(zh_breaks.glue_on())
+        with mock.patch.dict(os.environ, {"FD_ZH_WRAP_GLUE": ""}):
+            self.assertTrue(zh_breaks.glue_on())                  # 没设按开
+        for s, _, _ in self.CASES:
+            with mock.patch.object(zh_breaks, "_glue_positions", side_effect=AssertionError("关着不该调")):
+                off = self.run_with("off", s)
+            with mock.patch.object(zh_breaks, "_glue_positions", return_value=set()):
+                none = self.run_with("on", s)
+            self.assertEqual(off, none, s)
+
+
 def node_json(src):
     node = shutil.which("node")
     if not node:
