@@ -1586,7 +1586,8 @@ class Video(Step):
         dur = float(media.get("duration") or 0)
         warns += dwarns
         ms = self.media_shots(media)
-        if ms and (sextra.get("视频导演") or {}).get("结果") == "用导演版":      # 11-15：导演版另截的原文截图也数进去
+        # 11-15：导演版另截的原文截图也数进去。11-21：导演不做时 director() 记的是一句话"不做（…）"（字符串），做了才是 dict
+        if ms and isinstance(sextra.get("视频导演"), dict) and sextra["视频导演"].get("结果") == "用导演版":
             before = (sextra.get("原文截图") or {}) if isinstance(sextra.get("原文截图"), dict) else {}
             if (before.get("处数"), before.get("成功")) != (ms[0], ms[1]):
                 smsg = "原文截图 %d 处（按成片数，含导演那一段截的）：用截图 %d、退回摘录 %d" % (ms[0], ms[1], len(ms[2]))

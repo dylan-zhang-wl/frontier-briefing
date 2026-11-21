@@ -78,6 +78,16 @@ class Build(unittest.TestCase):
         st = {k: v for k, v in STEPS_1109.items() if k != "video"}
         self.assertIn("- 视频：第 14 步没跑", SC.build(Path("/无"), st, {}, {}, [], "t"))
 
+    def test_director_not_done_string(self):
+        """11-21：导演没做时第 14 步记的"视频导演"是一句话（字符串），以前这里当 dict 用、这一节写不出来。"""
+        st = dict(STEPS_1109, video={"状态": "做完", "说明": "60.0 秒，3 章", "附加": {
+            "视频导演": "不做（视频导演开关关着（环境变量 FD_DIRECTOR=off））"}})
+        sec = SC.build(Path("/无"), st, {}, {}, [], "t")
+        self.assertIn("- 视频：老路那一版（导演环节没做：视频导演开关关着（环境变量 FD_DIRECTOR=off））", sec)
+        self.assertIn("- 声音：播客 主声音，视频旁白 主声音（第 11 步引擎 gemini）\n", sec)     # 没有"旁白最后用的是"
+        st = dict(STEPS_1109, video={"状态": "做完", "说明": "60.0 秒，3 章", "附加": {}})       # 没记"视频导演"：照旧
+        self.assertIn("- 视频：老路那一版（导演环节没做）\n", SC.build(Path("/无"), st, {}, {}, [], "t"))
+
 
 class Write(unittest.TestCase):
     def test_append_then_replace(self):
@@ -112,6 +122,17 @@ class ReportStep(unittest.TestCase):
         s = (d / "自检.md").read_text(encoding="utf-8")
         self.assertIn("| 17 | 写本期报告 | 做完 | 报告 00_调度报告.md（这一次） |", s)
         self.assertIn("本月 Gemini 已记 $1.00 / 上限 $8.00", s)
+
+    def test_report_director_not_done(self):
+        """11-21：导演"不做"（字符串）时第 17 步照常补这一节，不是只记一条"没补上"的提醒。"""
+        d = issue_dir()
+        (d / "自检.md").write_text(TOP, encoding="utf-8")
+        c = self.fake_c(d)
+        c.state.data["步骤"]["video"] = {"状态": "做完", "说明": "60.0 秒，3 章", "附加": {
+            "视频导演": "不做（新动效开关关着（环境变量 FD_MOTION=off），导演环节不做）"}}
+        self.assertEqual(steps.Report().selfcheck(c), [])
+        s = (d / "自检.md").read_text(encoding="utf-8")
+        self.assertIn("- 视频：老路那一版（导演环节没做：新动效开关关着（环境变量 FD_MOTION=off），导演环节不做）", s)
 
     def test_report_never_raises(self):
         d = issue_dir()

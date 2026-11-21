@@ -93,7 +93,10 @@ def build(issue, steps, costs, month, image_lines, now):
     L.append("")
     v = st("voice").get("附加") or {}
     vid = st("video").get("附加") or {}
-    dr = vid.get("视频导演") or {}
+    dr = vid.get("视频导演")
+    # 11-21：导演没做时第 14 步记的是一句话"不做（…）"（字符串，steps.Video.director），做了才是 dict；字符串当"没做"
+    dr_skip = dr.strip() if isinstance(dr, str) else ""
+    dr = dr if isinstance(dr, dict) else {}
     voice = "声音：播客 %s，视频旁白 %s" % (v.get("播客") or "（没记）", v.get("视频旁白") or "（没记）")
     if v.get("视频引擎"):
         voice += "（第 11 步引擎 %s）" % v["视频引擎"]
@@ -113,6 +116,9 @@ def build(issue, steps, costs, month, image_lines, now):
             dr.get("用时分钟"), len(dr.get("新画的图") or []), "、".join(dr.get("新画的图") or []) or "无"))
     elif dr.get("结果") == "退回":
         L.append("- 视频：老路那一版（导演环节退回：%s）" % (dr.get("原因") or "没写原因"))
+    elif dr_skip:
+        m = re.fullmatch(r"不做（(.*)）", dr_skip)
+        L.append("- 视频：老路那一版（导演环节没做：%s）" % (m.group(1) if m else dr_skip))
     else:
         L.append("- 视频：老路那一版（%s）" % ("导演环节没做" if st("video").get("状态") else "第 14 步没跑"))
     tot = "、".join("%s $%.4f" % (k, x) for k, x in costs.items() if x) or "没有花钱"

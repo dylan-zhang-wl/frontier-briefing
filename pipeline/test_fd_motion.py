@@ -443,6 +443,77 @@ class DirectorStep(unittest.TestCase):
             c, r, v, have, keep, inputs = self.run_step()
         self.assertIn("=导演旁白=关", inputs)
 
+
+class DirectorNotDoneWithShots(unittest.TestCase):
+    """11-21 加：导演"不做"时第 14 步记的"视频导演"是一句话（字符串，Video.director 的记法不改），做了才是 dict。
+    11-21 云端测试运行（review=false，导演关）成片里有原文截图，第 14 步"按成片数截图"那一行把这句话当 dict 用，
+    AttributeError: 'str' object has no attribute 'get'。这里老路成片带截图：导演不做（两条来路）不出错、记录照旧；
+    用导演版、退回（dict）和修之前一样。"""
+
+    MEDIA = {"duration": 60, "chapters": [{"id": "vote", "blocks": [
+        {"type": "source_shot", "id": "a"}, {"type": "source_excerpt", "id": "b"}]}]}
+
+    def run_step(self, director=None, env=None, motion=None):
+        with tempfile.TemporaryDirectory() as d:
+            issue = make_issue(d, storyboard([timeline(shot=False), post(shot=False)]))
+            c = FakeCtx(issue)
+            fake_run = c.run
+
+            def run(step, cmd, label="", timeout=None, env=None):
+                rc, out = fake_run(step, cmd, label, timeout, env)
+                if label == "组装视频":          # 老路成片里有原文截图：用截图 1、退回摘录 1
+                    (issue / "11_视频v3/video3_media.json").write_text(json.dumps(self.MEDIA), encoding="utf-8")
+                return rc, out
+            c.run = run
+            if director:
+                c.director = lambda cc: director(cc, Path(d))
+            envs = {} if env is None else {"FD_DIRECTOR": env}
+            with Env(motion, None), mock.patch.dict(os.environ, envs):
+                if env is None:
+                    os.environ.pop("FD_DIRECTOR", None)
+                r = steps.Video().run(c, "run")
+            return c, r
+
+    def test_switch_off_no_crash(self):
+        c, r = self.run_step(env="off")
+        self.assertEqual(c.calls, ["组装视频"])
+        self.assertEqual(r.status, common.DONE)
+        self.assertEqual(r.extra["视频导演"], "不做（视频导演开关关着（环境变量 FD_DIRECTOR=off））")   # 记法不变
+        self.assertNotIn("原文截图", r.extra)                 # 不是导演版：不按成片重数
+        self.assertNotIn("按成片数", r.msg)
+
+    def test_motion_off_no_crash(self):
+        c, r = self.run_step(motion="off")
+        self.assertNotIn("视频导演", c.calls)
+        self.assertEqual(r.status, common.DONE)
+        self.assertTrue(r.extra["视频导演"].startswith("不做（新动效开关关着"), r.extra)
+        self.assertTrue(str(r.extra.get("原文截图")).startswith("开关关着"), r.extra)   # 截图那一步记的原样留着
+        self.assertNotIn("按成片数", r.msg)
+
+    def test_director_version_still_recounts(self):
+        def director(c, d):
+            new = d / "渲染/11_视频v3"
+            new.mkdir(parents=True)
+            (new / "index.html").write_text("<html></html>", encoding="utf-8")
+            (new / "video3_media.json").write_text(json.dumps(self.MEDIA), encoding="utf-8")
+            DirectorStep.write_result(c, {"状态": "用导演版", "成片目录": str(new)})
+            return 0, ""
+        c, r = self.run_step(director)
+        self.assertEqual(c.calls, ["组装视频", "视频导演"])
+        self.assertEqual(r.extra["视频导演"]["结果"], "用导演版")
+        self.assertIn("原文截图 2 处（按成片数，含导演那一段截的）：用截图 1、退回摘录 1", r.msg)
+        self.assertEqual(r.extra["原文截图"], {"处数": 2, "成功": 1, "退回摘录": 1, "按": "成片 11_视频v3/video3_media.json"})
+        self.assertTrue(any("原文截图没用上：「vote」source_excerpt/b" in w for w in r.warns), r.warns)
+
+    def test_fallback_still_no_recount(self):
+        def director(c, d):
+            DirectorStep.write_result(c, {"状态": "退回", "原因": "导演 第一轮 超时（1200 秒）"})
+            return 3, ""
+        c, r = self.run_step(director)
+        self.assertEqual(r.extra["视频导演"]["结果"], "退回")
+        self.assertNotIn("原文截图", r.extra)
+        self.assertNotIn("按成片数", r.msg)
+
 class CheckMotion(unittest.TestCase):
     def test_warnings(self):
         sb = storyboard([timeline(), post(),
