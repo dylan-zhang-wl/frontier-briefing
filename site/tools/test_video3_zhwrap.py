@@ -180,6 +180,27 @@ class Build(unittest.TestCase):
         data2[ZW.KEY] = tbl
         json.dumps(data2, ensure_ascii=False)
 
+    def test_post_card_quoted(self):
+        """11-15 加：原话卡播放器加了中文引号（“……”），加好引号的那一版也进表；"从容程序"不从中间断。"""
+        q = "这位创始人和长期领导者赢得了一个从容程序的权利，不应在所有事实查明前匆忙换掉他"
+        data = sample_data()
+        data["chapters"][0]["blocks"].append({"type": "post_card", "id": "letter", "text": {"zh": q, "en": "x"}})
+        with mock.patch.dict(os.environ, {"FD_VIDEO_ZH_WRAP_QUOTE": ""}):
+            tbl, _ = ZW.table(data)
+        shown = "“" + q + "”"
+        self.assertIn(shown, tbl)
+        self.assertEqual(tbl[shown], "“" + tbl[q] + "”")
+        self.assertTrue(ZW.same_text(shown, tbl[shown]))
+        self.assertNotIn("从容程" + ZW.ZW, tbl[shown])
+        self.assertIn("从容程序", tbl[shown])
+        self.assertNotIn("“" + CARD + "”", tbl)          # 要点卡（quote_card）播放器不加引号，不多放
+        with mock.patch.dict(os.environ, {"FD_VIDEO_ZH_WRAP_QUOTE": "off"}):
+            tbl2, _ = ZW.table(data)
+        self.assertNotIn(shown, tbl2)
+        self.assertEqual({k: v for k, v in tbl.items() if k != shown}, tbl2)
+        js = JS.read_text(encoding="utf-8")                      # 播放器还是这样排原话（改了这里要一起改 quoted）
+        self.assertIn("'“' + esc(q) + '”'", js)
+
     def test_table_without_breaker(self):
         import zh_breaks
         with mock.patch.object(zh_breaks, "load", side_effect=SystemExit("缺少断行工具")):

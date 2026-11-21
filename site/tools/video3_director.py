@@ -866,6 +866,34 @@ def assemble(R, sb, rnd, D, no_new, log, seed, sheet=True):
     return out
 
 
+# ---------------------------------------------------------------- 空档（11-15 加）
+# 程序量出来的空档（video3_storyboard.blank_spans：章首 3 秒内没主角、有人声时画面空着超过 4 秒）写在 video3_media.json 每章的 blank，
+# 关键帧总览上标红。11-15"要他回来"章首 100.5–105.4 秒标了"空档：章首没主角"，第二轮导演只把荧光笔提前、空档还在。
+# 现在第二轮的开场提示把第一轮的空档逐条列出来、说明是必须改的；成片组装完还在的写进提醒（第 14 步报告里看得到）。
+GAP_WHY = {"opener": "章首没主角（开口 3 秒内画面上没有配图、标志或截图）", "gap": "有人声时画面空着超过 4 秒"}
+
+
+def blank_list(media):
+    """video3_media.json → [(章 id, 章名, 起, 止, 原因)]。"""
+    out = []
+    for c in media.get("chapters") or []:
+        for z in c.get("blank") or []:
+            if isinstance(z, (list, tuple)) and len(z) >= 3:
+                out.append((c.get("id"), (c.get("label") or {}).get("zh") or c.get("id"), float(z[0]), float(z[1]), str(z[2])))
+    return out
+
+
+def blank_note(media):
+    """第二轮开场提示里补的一段：第一轮组装量出来的空档，必须改。没有空档返回空字符串。"""
+    rows = blank_list(media)
+    if not rows:
+        return ""
+    return ("（第一轮组装出来，程序量到这几处空档，关键帧总览上标红了；这是必须改的，不是可改可不改："
+            + "；".join("「%s」%.1f–%.1f 秒 %s" % (n, a, z, GAP_WHY.get(w, w)) for _i, n, a, z, w in rows)
+            + "。改法按 导演说明.md 第二轮第 2 条：章首那一块换成带图的、给卡片配图（quote_card 的 image、tile_row / compare_panel 的 photo），"
+              "或把有图的那一块挪到开口那一句；原文截图截不成会退回白色摘录，不能指望它当章首主角。改不掉的在 改动说明.md 里写明为什么。）")
+
+
 # ---------------------------------------------------------------- 主流程
 def read_log(D):
     try:
@@ -983,7 +1011,11 @@ def direct(issue, no_new=False, budget=BUDGET, work_root=None, resume=False, nar
         if deadline - time.time() < MIN_LEFT_FOR_ROUND2:
             raise Fallback("第二轮开始前时间预算只剩 %d 秒" % (deadline - time.time()))
         # 第二轮
-        log["导演"]["第二轮"] = run_claude(D, P2 + (NARR_NOTE2 if narr else "") + note, min(ROUND_MAX, int(deadline - time.time())), "第二轮")
+        gaps1 = blank_note(json.loads((R / MEDIA).read_text(encoding="utf-8")))      # 11-15：第一轮的空档，第二轮必须改
+        if gaps1:
+            log["第一轮空档"] = [list(x) for x in blank_list(json.loads((R / MEDIA).read_text(encoding="utf-8")))]
+        log["导演"]["第二轮"] = run_claude(D, P2 + (NARR_NOTE2 if narr else "") + gaps1 + note,
+                                       min(ROUND_MAX, int(deadline - time.time())), "第二轮")
         if not narr:
             sb = check_or_fix(D, R, orig, "第二轮", log, deadline)
         else:
@@ -1013,6 +1045,11 @@ def direct(issue, no_new=False, budget=BUDGET, work_root=None, resume=False, nar
         media = json.loads((R / MEDIA).read_text(encoding="utf-8"))
         log.update({"状态": "用导演版", "成片目录": str(R / "11_视频v3"), "时长秒": media.get("duration"),
                     "渲染配图目录": str(R / "06_配图/视频")})
+        left = blank_list(media)          # 11-15：第二轮以后还在的空档，写进提醒（第 14 步报告、审片看得到）
+        if left:
+            log["成片空档"] = [list(x) for x in left]
+            log.setdefault("提醒", []).append("导演第二轮以后成片里还有空档：%s" % "；".join(
+                "「%s」%.1f–%.1f 秒 %s" % (n, a, z, GAP_WHY.get(w, w)) for _i, n, a, z, w in left))
         save()
         say("导演环节完成：%s（%d 秒）" % (R / "11_视频v3", time.time() - t0))
         return 0, log

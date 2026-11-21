@@ -532,7 +532,12 @@ def qc_blocks(folder):
         return []
     q = json.load(open(p, encoding="utf-8"))
     if q.get("各块"):            # _人声开始秒、_人声目录：这一块在人声版 episode.mp3 里的位置（“听这一段”找停顿用，11-06 加）
-        return [dict(b, _人声开始秒=b["开始秒"], _人声目录=folder) for b in q["各块"]]
+        # _句子级找平：配音时按停顿切出的各句起止秒（块内时间），“听这一段”从半中间那一句开始时用（11-15 加，见 mid_start）。
+        # 单人稿在“各块”自己身上；对谈稿的“各块”是精简版，要到同一轮的“各轮”里取。
+        turns = {r.get("轮"): r for r in q.get("各轮") or []}
+        return [dict(b, _人声开始秒=b["开始秒"], _人声目录=folder, _对谈轮=bool(turns),
+                     _句子级找平=b.get("句子级找平") or (turns.get(b.get("块")) or {}).get("句子级找平"))
+                for b in q["各块"]]
     src = q.get("人声来源")
     tl = {x.get("段", "")[3:]: x["开始秒"] for x in q.get("时间线", []) if x.get("段", "").startswith("人声·")}
     if not src or not tl:
@@ -716,11 +721,14 @@ def _para_times(b, ps, estimate_only=False):
     return out
 
 
+PARA_SRC = {}               # id(段) → (这一块, 这一段在块里排第几, 各段块内开始秒)：mid_start 用（11-15 加）
 for b in (qc_blocks(pdir) if HAS_POD else []):
     ps = [SPEAKER.sub("", p) for p in (b.get("原稿") or "").split("\n") if p.strip()]
     ps = [p for p in ps if p.strip()]
-    for p, (off, lead, how) in zip(ps, para_times(b, ps)):
+    _pt = para_times(b, ps)
+    for _i, (p, (off, lead, how)) in enumerate(zip(ps, _pt)):
         PARAS.append({"ch": b.get("章", ""), "t": round(b["开始秒"] + off, 1), "text": p, "lead": lead, "how": how})
+        PARA_SRC[id(PARAS[-1])] = (b, _i, [x[0] for x in _pt])
         LISTEN_STAT[how] = LISTEN_STAT.get(how, 0) + 1
 
 
@@ -741,6 +749,112 @@ def with_lead_in(p, text):
                 and bigr(q["text"]) & bigr(text)):
             return q
     return p
+
+
+# 11-15 加：一条新闻从某一轮（某一段）的半中间才开始讲。11-15 周日对谈第 6 轮前两句还是 E005（ChatGPT Wallet）的尾巴，
+# "国内这边"（E006）从第三句才开口，按这一轮开头跳早了约 16 秒。listen_at 找到那一段以后先按句看：开头几句明显在接着讲
+# 上一段那一条（和那一条比和这一条更像），后面某一句起才像这一条，就从这一句听（前面紧挨着、和哪条都不沾的过渡短句一起听）。
+# 这一句从块内第几秒开始：
+#   ① 配音时按停顿切出的各句起止秒（qc.json 的“句子级找平”，句界在停顿正中；对谈稿在“各轮”里），取离按字数估的位置最近的
+#      句界，差得不多（不超过 max(1.5 秒, 这一段的 8%)）才用。切句时短句会并进邻句、最长的停顿有时落在逗号上，对不上就不用；
+#   ② 有人声版 episode.mp3 的，再像 para_times 一样吸到附近的停顿上，跳开口前 0.3 秒（停顿不到 0.6 秒跳停顿正中）；
+#   ③ ① 用不上、也没吸到停顿的，按字数比例估、往前留 0.5 秒，组装时提醒“请核对”。
+# 只看对谈稿的一轮（周日）：两人轮流说，一条讲完常在同一轮里接着讲下一条。单人稿按段写，一条从新的一段开始（写作指南
+# "每段首句站得住"），段首那句回头提上一条的（11-06 E142"不过，美国第一这个限定词本身就值得多想一步。"）是这一条的引子，
+# 照旧从段首听。对谈里这种回头提上一条的引子分不清是引子还是尾巴，宁可从后面那句听（晚一句不碍事，早了就听到上一条）。
+# 判不出（这一段只有一句、开头就在讲这一条、前面几句不像上一段那一条、整期只有一条）就照旧跳这一段开头。
+# 环境变量 FD_LISTEN_SENTENCE=off 关掉，和改之前逐字相同。
+LISTEN_SENTENCE = (os.environ.get("FD_LISTEN_SENTENCE") or "on").strip().lower() not in ("off", "0", "false", "no", "关")
+SENT_RE = re.compile(r"[^。！？!?]*[。！？!?]+[”’」』）)]*|[^。！？!?]+$")
+ITEM_TEXT = {}              # 每条打分用的文字（标题＋摘要，和 listen_at 收到的一样）→ 这一条更全的中文；故事循环前填
+LISTEN_MID = []             # 这一期按半中间那一句跳的：[(打分用的文字, 原来跳几秒, 现在跳几秒, 怎么定的)]
+MID_TOL, MID_TOL_RATE, MID_MIN = 1.5, 0.08, 3
+
+
+def sentences(text):
+    return [s for s in SENT_RE.findall(text or "") if s.strip()]
+
+
+def n_tokens(s):
+    """一句有多少个“字”（和配音对稿同一种数法：英文一个词算一个，数字一位算一个），按字数估时间用。"""
+    s = _GEM_TAG.sub("", _MIMO_TAG.sub("", s))
+    return len(_TQ.tokens(s)) if _TQ is not None else len(re.findall(r"[㐀-鿿]|[A-Za-z]+|\d", s))
+
+
+def owner_of(s, skip=None):
+    """一句（一段）和哪一条最像：[(字对字相同几处, 条目的打分文字)]，从像到不像排；skip 那一条不算。"""
+    B = bigr(s)
+    return sorted(((len(B & bigr(v)), k) for k, v in ITEM_TEXT.items() if k != skip), key=lambda x: -x[0])
+
+
+def mid_start(p, text):
+    """p 是 listen_at 找到的那一段。这一条从这一段半中间某一句才开始讲时，返回跳转秒数；判不出返回 None（照旧跳段首）。"""
+    if not LISTEN_SENTENCE or text not in ITEM_TEXT or len(ITEM_TEXT) < 2 or id(p) not in PARA_SRC:
+        return None
+    b, pi, offs = PARA_SRC[id(p)]
+    if not b.get("_对谈轮"):
+        return None
+    ss = sentences(p["text"])
+    if len(ss) < 2:
+        return None
+    mine = bigr(ITEM_TEXT[text])
+    sc = []
+    for s in ss:
+        o = len(bigr(s) & mine)
+        x, w = (owner_of(s, skip=text) or [(0, None)])[0]
+        sc.append((o, x, w))
+    k = next((i for i, (o, x, _) in enumerate(sc) if o >= MID_MIN and o > x), None)
+    if not k:                                               # 找不到，或第一句就在讲这一条
+        return None
+    before = [(i, w) for i, (o, x, w) in enumerate(sc[:k]) if x >= MID_MIN and x > o]
+    if not before:                                          # 前面几句和哪条都不太沾（开场白、过渡）：照旧从段首听
+        return None
+    i_p = next(i for i, x in enumerate(PARAS) if x is p)
+    prev = None
+    for q in reversed(PARAS[:i_p]):                         # 上一段（跳过“对。”这类和哪条都不沾的短回应）
+        top = owner_of(q["text"])
+        if top and top[0][0] >= MID_MIN:
+            prev = top[0][1]
+            break
+    if prev is None or prev == text or any(w != prev for _, w in before):
+        return None                                         # 前面几句不是在接着讲上一段那一条（比如段首拿别的条目作对照）
+    k0 = k
+    while k0 - 1 > before[-1][0] and max(sc[k0 - 1][:2]) < MID_MIN:
+        k0 -= 1                                             # 紧挨着的过渡短句（“再看国内。”）一起听
+    p0 = offs[pi]
+    p1 = offs[pi + 1] if pi + 1 < len(offs) else float(b["秒数"])
+    tk = [n_tokens(s) for s in ss]
+    est = p0 + (p1 - p0) * sum(tk[:k0]) / (sum(tk) or 1)
+    how, t, lead = None, est, 0.5
+    starts = [float(sp[0]) for sp in ((b.get("_句子级找平") or {}).get("各句起止秒") or [])[1:]]
+    if starts:
+        c = min(starts, key=lambda a: abs(a - est))
+        if abs(c - est) <= max(MID_TOL, MID_TOL_RATE * (p1 - p0)) and p0 + 0.5 < c < p1:
+            how, t, lead = "分句", c, 0.0
+    db, v0 = voice_db(b.get("_人声目录")), b.get("_人声开始秒")
+    if db is not None and v0 is not None:
+        pz = pause_near(db, v0 + t, v0 + p0 + 0.3, v0 + p1)
+        if pz is not None and p0 + 0.5 < pz[1] - v0 < p1:
+            how, t, lead = (how or "估算") + "＋停顿", pz[1] - v0, min(0.3, (pz[1] - pz[0]) / 2)
+    how = how or "估算"
+    j = max(0, round(b["开始秒"] + t - lead, 1))
+    if j <= jump_of(p):
+        return None
+    LISTEN_MID.append((text, jump_of(p), j, how, k0 + 1, ss[k0]))
+    return j
+
+
+def jump_in(p, text):
+    """listen_at 找到的那一段 p → 跳转秒数：本章第一段是沾边的短引子就从引子听（with_lead_in），
+    不然看这一条是不是从这一段半中间才开始讲（mid_start）。"""
+    q = with_lead_in(p, text)
+    if q is p:
+        m = mid_start(p, text)
+        if m is not None:
+            return m
+    return jump_of(q)
+
+
 KIND_CH = {"headline": ("热点", "头条"), "brief": ("要闻",), "cn_intl": ("对照",), "flash": ("快讯",),
            "deep": ("深度·", "深谈·"),                     # 周末那一题（11-01 定）：跳到它的第一章，不按文字找
            "term": ("一词",), "teaser": ("预告",)}
@@ -750,9 +864,58 @@ def has_key(title, keys):
     return any(k in title for k in keys)
 
 
+# 11-16 加（经验库第 68 件）："听这一段"在单人稿里跳晚。11-16 E040（门罗风投 89%）、E028（AI 垃圾论文）晚约 14 秒，
+# 11-11 E047、E005 和 11-13 E055 也是晚 14–16 秒：都跳到了这一条的第二段。原来取"本章第一段分数够本章最高分六成的"，
+# 可开讲那一段常是过渡句加背景（"账算到海外，还有一组数字值得放在一起读……"），和网页标题＋摘要重合得少，不到六成；
+# 分数又有两处偏：① 数字写法不统一，网页写"89%"，播客念"百分之八十九"，对不上；② 英文专名按字母两两计分，
+# "Times Higher Education"一个名字就有约 19 处，念到它的那一段分数虚高，六成的门槛跟着抬高。现在：
+#   ① 打分改用配音对稿同一种写法（pipeline/tts_qc.py 的 tokens()：中文数字统一成阿拉伯数字，英文一个词算一个），
+#      相邻两个算一处（grams）；
+#   ② 按分数找到那一段以后，往前看同一章里紧挨着的段：和这一条至少 WALK_MIN 处相同、又比和别的任何一条都像，
+#      就也是在讲这一条，从那一段听（run_start）；碰到讲别的条目的段、和哪条都不沾的段、章首就停。
+# 11-16 在有播客的 10 期缓存副本上比过：只用①不用②，数字多的细节段分数被抬高，11-16 E005、E003、E057，11-12 E002，
+# 11-01 E033 五条反而跳晚；只用②（仍按 bigr 打分）在这几期上和①②一起用结果相同，①是把诊断出的两处偏差改正，
+# 让"比别的条目都像"少受英文名字母对的干扰（这一点在样期上没有单独显出差别）。
+# 环境变量 FD_LISTEN_SCORE=off 关掉（两处都回到原来的做法），和改之前逐字相同。
+# 没改：对谈一轮里按句找（mid_start、owner_of）、找引子（with_lead_in）仍用 bigr，门槛是按 bigr 定的。
+LISTEN_SCORE = (os.environ.get("FD_LISTEN_SCORE") or "on").strip().lower() not in ("off", "0", "false", "no", "关")
+WALK_MIN = 3
+LISTEN_WALK = []            # 这一期往前找到开讲段的：[(打分用的文字, 按分数找到的那一段, 往前找到的那一段)]
+_TOK_GRAMS = {}
+
+
+def grams(s):
+    """打分用的"字对"：FD_LISTEN_SCORE 开着时按配音对稿的写法分词（数字统一、英文一词一个）再两两相邻成对，关着时就是 bigr。"""
+    if not LISTEN_SCORE or _TQ is None:
+        return bigr(s)
+    s = s or ""
+    if s not in _TOK_GRAMS:
+        t = _TQ.tokens(s)
+        _TOK_GRAMS[s] = set(zip(t, t[1:]))
+    return _TOK_GRAMS[s]
+
+
 def para_scores(text, cand):
-    B = bigr(text)
-    return [len(B & bigr(p["text"])) for p in cand]
+    B = grams(text)
+    return [len(B & grams(p["text"])) for p in cand]
+
+
+def run_start(p, text):
+    """p 是按分数找到的那一段。往前看同一章里紧挨着的段，还在讲这一条的（至少 WALK_MIN 处相同、比别的条目都像）
+    一并算上，返回最前面那一段。FD_LISTEN_SCORE=off 时原样返回 p。"""
+    if not LISTEN_SCORE:
+        return p
+    i = next(i for i, x in enumerate(PARAS) if x is p)
+    mine = grams(text)
+    while i > 0 and PARAS[i - 1]["ch"] == p["ch"]:
+        G = grams(PARAS[i - 1]["text"])
+        o = len(mine & G)
+        if o < WALK_MIN or o <= max((len(grams(k) & G) for k in ITEM_TEXT if k != text), default=0):
+            break
+        i -= 1
+    if PARAS[i] is not p:
+        LISTEN_WALK.append((text, p, PARAS[i]))
+    return PARAS[i]
 
 
 PREVIEW_CH = ("开场", "结尾")   # 开场预告、结尾回顾只提一句，不算“主讲”
@@ -773,18 +936,41 @@ def main_talk(text):
     return first, top_
 
 
+# 11-15 加（经验库第 82 件）：热点原来只按排第几跳（网页第 2 条跳"热点二"）。总规矩第 5 条许播客按内容自己排顺序，
+# 11-12 网页第二条百度、第三条台积电，播客热点二讲台积电、热点三讲百度，两个按钮对调了。现在先按文字看一眼：
+# 排第几对上的那一章几乎没讲这一条（这一章最高分不到 4，或不到各热点章里最高分的六成，判据和 listen_at 找别处主讲的相同），
+# 另一个热点章明显在讲它，就跳那一章开头；都像、都不像，照旧按排第几跳（顺序一致的往期和改之前逐字相同）。
+# 环境变量 FD_LISTEN_HEADLINE=off 关掉，和改之前逐字相同。
+LISTEN_HEADLINE = (os.environ.get("FD_LISTEN_HEADLINE") or "on").strip().lower() not in ("off", "0", "false", "no", "关")
+LISTEN_HEAD_MOVED = []      # 这一期按内容改了章的热点：[(打分用的文字, 按顺序会跳的章, 现在跳的章)]
+
+
+def head_chapter(text, own, nth):
+    """热点条目跳哪一章：默认排第几就跳第几个热点章；那一章几乎没讲它、别的热点章明显在讲它时，改跳那一章。"""
+    if not LISTEN_HEADLINE or len(own) < 2:
+        return own[nth]
+    sc = [max(para_scores(text, [p for p in PARAS if p["ch"] == c["title_zh"]]) or [0]) for c in own]
+    top_ = max(sc)
+    if top_ < 4 or sc[nth] >= max(4, top_ * 0.6):
+        return own[nth]
+    c = own[sc.index(top_)]
+    LISTEN_HEAD_MOVED.append((text, own[nth]["title_zh"], c["title_zh"]))
+    return c
+
+
 def listen_at(kind, text, nth=None):
     """“听这一段”跳到哪一秒。有自己章节的栏目（热点、要闻、快讯、一词、预告）在本章里按文字找；
     没有自己章节的（国内外对照的条目：在对谈里可能夹在热点或快讯里讲）在整集的逐轮（逐段）文字里找最像的那一轮。
     11-05 改：网页放在某一栏、播客却在别的章里讲的（11-04 墨芯：网页在要闻，播客在热点三），本章里几乎找不到它
     （本章最高分不到 4，或不到整集最高分的六成，与 listen_check 的判据相同），就跳到整集里主讲它的那一段，
-    不再退回本章开头。"""
+    不再退回本章开头。热点跳章开头，跳哪一章见 head_chapter（11-15 改）。
+    11-16 改：按分数找到那一段以后，往前找这一条开讲的那一段（run_start）；打分数字统一写法、英文按词（grams）。"""
     if not HAS_POD:
         return None
     keys = KIND_CH.get(kind, ())
     own = [c for c in chapters if has_key(c["title_zh"], keys)]
     if kind == "headline" and nth is not None and nth < len(own):
-        return own[nth]["start"]
+        return head_chapter(text, own, nth)["start"]
     if kind == "deep" and own:          # 周末的深度／深谈：从第一层那一章开头听（按文字找常落在开场的预告上，11-01 彩排遇到）
         return own[0]["start"]
     if own:
@@ -795,17 +981,17 @@ def listen_at(kind, text, nth=None):
             top_ = max(sc)
         best, g_top = main_talk(text)
         if best is not None and not has_key(best["ch"], keys) and top_ < max(4, g_top * 0.6):
-            return jump_of(with_lead_in(best, text))
+            return jump_in(run_start(best, text), text)
         if top_ >= 4:
             first = next(p for p, x in zip(cand, sc) if x >= max(4, top_ * 0.6))
-            return jump_of(with_lead_in(first, text))
+            return jump_in(run_start(first, text), text)
         return own[0]["start"]
     if PARAS:                                       # 没有自己的章节：整集里找分数最高的那一轮（同分取靠前的）
         sc = para_scores(text, PARAS)
         top_ = max(sc)
         if top_ >= 4:
             best = PARAS[sc.index(top_)]
-            return jump_of(with_lead_in(best, text))
+            return jump_in(run_start(best, text), text)
     return None
 
 
@@ -828,6 +1014,10 @@ def listen_check(sid, text, t):
     best, here = PARAS[sc.index(top_)], chapter_at(t)
     in_ch = max([x for x, p in zip(sc, PARAS) if p["ch"] == here] or [0])
     if here != best["ch"] and in_ch < top_ * 0.6:   # 跳到的章节里根本没怎么讲它，才提醒（今日一词这类在本章和别处都讲的，不算）
+        if has_key(best["ch"], PREVIEW_CH):         # 最像的是开场预告、结尾回顾：指给主讲它的那一章（11-12 只说“开场”，没看出是对调）
+            main_, _ = main_talk(text)
+            if main_ is not None and main_["ch"] != here:
+                best = main_
         print("注意：“听这一段” %s 跳到 %s（%s），但整集里最像它的话在“%s” %s；请核对"
               % (sid, fmt_mmss(t), chapter_at(t), best["ch"], fmt_mmss(best["t"])))
 
@@ -1110,6 +1300,22 @@ def split_read(why, read, L):
     return why[:m.start()].strip(), rest
 
 
+def _zh_text(it):
+    """这一条更全的中文（mid_start 判一句在讲哪一条用）：标题、摘要、页签、导语、为什么重要、我们的理解；
+    正文 body 不算（周末深谈的正文上千字，跟哪句都沾一点）。"""
+    out = []
+    for k in ("title_zh", "summary_zh", "tab_zh", "lead_zh", "why_zh", "read_zh"):
+        v = it.get(k)
+        for x in (v if isinstance(v, list) else [v]):
+            if isinstance(x, str):
+                out.append(re.sub(r"\[\^[^\]]*\]", "", x))
+    return "".join(out)
+
+
+for _sec in WEB.get("sections") or []:
+    for _it in _sec.get("items") or []:
+        ITEM_TEXT[(_it.get("title_zh") or "") + (_it.get("summary_zh") or "")] = _zh_text(_it)
+
 STORIES, ORDER = {}, {}
 n_head = 0
 for sec in WEB.get("sections") or []:
@@ -1166,7 +1372,20 @@ for sec in WEB.get("sections") or []:
         if (sid if kind == "term" else ev) in IMG:
             st["image"] = IMG[sid if kind == "term" else ev]
         _lt = (it.get("title_zh") or "") + (it.get("summary_zh") or "")
+        _nm, _nh, _nw = len(LISTEN_MID), len(LISTEN_HEAD_MOVED), len(LISTEN_WALK)
         st["listen"] = listen_at(kind, _lt, n_head if kind == "headline" else None)
+        for _w in LISTEN_WALK[_nw:]:         # 11-16 加：往前找到这一条开讲的那一段（run_start）
+            print("“听这一段” %s 往前找到这一条开讲的那一段（“%s……”）：跳 %.1f 秒（按分数找到的“%s……”是 %.1f 秒）"
+                  % (sid, _w[2]["text"].strip()[:12], st["listen"], _w[1]["text"].strip()[:12], jump_of(_w[1])))
+        for _m in LISTEN_HEAD_MOVED[_nh:]:   # 11-15 加：网页和播客热点顺序不同（head_chapter）
+            print("“听这一段” %s 是网页第 %d 条热点，播客里讲它的是“%s”（按顺序会跳“%s”）：跳“%s”开头 %.1f 秒"
+                  % (sid, n_head + 1, _m[2], _m[1], _m[2], st["listen"]))
+        for _m in LISTEN_MID[_nm:]:          # 11-15 加：这一条从一段半中间才开始讲（mid_start）
+            print("%s“听这一段” %s 从那一段的第 %d 句才开始讲（“%s……”）：跳 %.1f 秒（按段首是 %.1f 秒），句首按%s定%s"
+                  % ("注意：" if _m[3].startswith("估算") else "", sid, _m[4], _m[5].strip()[:12], _m[2], _m[1],
+                     {"分句": "配音时切出的句界", "分句＋停顿": "配音时切出的句界、再吸到人声版的停顿",
+                      "估算＋停顿": "字数比例、再吸到人声版的停顿", "估算": "字数比例"}.get(_m[3], _m[3]),
+                     "，请核对" if _m[3].startswith("估算") else ""))
         if kind != "deep":                     # 深度／深谈固定跳第一层，开场里的预告和它很像，不再报"可能跳错"
             listen_check(sid, _lt, st["listen"])
         if kind == "headline":

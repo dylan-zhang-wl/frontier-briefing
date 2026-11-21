@@ -28,6 +28,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.dont_write_bytecode = True
@@ -231,6 +232,52 @@ class Sources(unittest.TestCase):
         self.assertIsNone(b["_src"]["date"])
         self.assertTrue(any("不是同一天" in w for w in SB.source_warnings(sb)))
 
+    # 11-15 加：出处签日期还要和原文开头的电头、旁白对一遍（原文截图没截成退回摘录、网页没标发表日期时也管用）
+    def _with_datelines(self, sb, text=None):
+        if text is not None:
+            d = self.issue / "03_事件卡" / "材料"
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "E003.json").write_text(json.dumps([{"url": CARDS["E003"]["sources"][0]["url"] + "/", "text": text}],
+                                                    ensure_ascii=False), encoding="utf-8")
+        SB.structure(sb, self.issue)
+        facts = SB.check_facts(sb, copy.deepcopy(CARDS))
+        SB.attach_datelines(facts, self.issue)
+        SB.check_labels(sb, facts)
+        return sb["chapters"][1]["blocks"][0]["_src"]
+
+    def test_dateline_mismatch_drops_date(self):       # 11-15 请愿卡：事件卡按 UTC 记 14 日，原文开头"11 月 15 日消息"
+        src = self._with_datelines(storyboard([shot_block(type="source_excerpt")]), "彦祖 的线索投递！ IT之家 11 月 7 日消息，据报道……")
+        self.assertIsNone(src["date"])
+        self.assertIn("原文开头写的是“11 月 7 日消息”", src["warn"])
+
+    def test_dateline_same_day_keeps_date(self):
+        src = self._with_datelines(storyboard([shot_block(type="source_excerpt")]), "IT之家 11 月 6 日消息，据报道……")
+        self.assertEqual(src["date"], {"zh": "11 月 6 日", "en": "Nov 6"})
+        self.assertIsNone(src["warn"])
+        src = self._with_datelines(storyboard([shot_block(type="source_excerpt")]), "字" * 200 + "正文里说 11 月 3 日消息……")
+        self.assertEqual(src["date"], {"zh": "11 月 6 日", "en": "Nov 6"})      # 正文后面才出现的日期不算电头
+
+    def test_narration_date_mismatch_drops_date(self):  # 卡片触发词那一句旁白说的是别的日子
+        sb = storyboard([shot_block(type="source_excerpt")])
+        sb["chapters"][1]["narration"] = NARR["vote"].replace("周四，", "到 11 月 7 日，")
+        src = self._with_datelines(sb)
+        self.assertIsNone(src["date"])
+        self.assertIn("旁白说的是 11 月 7 日", src["warn"])
+        sb = storyboard([shot_block(type="source_excerpt")])
+        sb["chapters"][1]["narration"] = NARR["vote"].replace("周四，", "11 月 6 日，")
+        self.assertEqual(self._with_datelines(sb)["date"], {"zh": "11 月 6 日", "en": "Nov 6"})
+        sb = storyboard([shot_block(type="source_excerpt")])        # 别的句子里的日期不算
+        sb["chapters"][1]["narration"] = "11 月 3 日开始投票。" + NARR["vote"]
+        self.assertEqual(self._with_datelines(sb)["date"], {"zh": "11 月 6 日", "en": "Nov 6"})
+
+    def test_date_check_switch_off(self):
+        sb = storyboard([shot_block(type="source_excerpt")])
+        sb["chapters"][1]["narration"] = NARR["vote"].replace("周四，", "到 11 月 7 日，")
+        with mock.patch.dict(os.environ, {"FD_SRC_DATE_CHECK": "off"}):
+            src = self._with_datelines(sb, "IT之家 11 月 7 日消息，据报道……")
+        self.assertEqual(src["date"], {"zh": "11 月 6 日", "en": "Nov 6"})
+        self.assertIsNone(src["warn"])
+
     def test_cue_must_be_in_narration(self):
         import video_align
         sb = storyboard([shot_block(type="source_excerpt", cues={"show": "周五", "mark": "保密协议"})])
@@ -420,6 +467,59 @@ class Combined(unittest.TestCase):
         nb = SB.compile_chapters(sb, {"vote.pc.show": 3.0}, [{"voice_start": 0, "voice_end": 1, "end": 2}] * 3, {})[1]["blocks"][0]
         self.assertNotIn("img", nb["shot"])                       # 播放器排成摘录
         self.assertEqual(nb["shot"]["full"], QUOTE)
+
+    # 11-15 加：截图退回摘录时摘录卡压在章图上（开关"摘录卡压在章图上"，同日用户定开；读不到开关文件按"关"）
+    def _fallback_compile(self, blocks):
+        sb = storyboard(blocks)
+        warn = run_checks(sb, self.issue)
+        T = {"vote.pc.show": 3.0, "vote.qc.show": 5.0, "vote.ex.show": 3.0}
+        photos = {}
+        nbs = SB.compile_chapters(sb, T, [{"voice_start": 0, "voice_end": 1, "end": 2}] * 3, photos)[1]["blocks"]
+        return sb, warn, nbs, photos
+
+    def test_excerpt_photo_off_by_default(self):
+        with mock.patch.dict(os.environ, {"FD_EXCERPT_PHOTO": ""}), mock.patch.object(SB, "MOTION_SWITCH_FILE", self.issue / "没有.json"):
+            self.assertFalse(SB.excerpt_photo_switch()[0])
+            sb, _w, nbs, photos = self._fallback_compile([post_block()])
+        self.assertNotIn("_fb_photo", sb["chapters"][1]["blocks"][0])
+        self.assertNotIn("photo_img", nbs[0])
+        self.assertEqual(photos, {})
+
+    def test_excerpt_photo_uses_replaced_image(self):        # 卡片原来写的配图（被截图替代的）垫在后面
+        with mock.patch.dict(os.environ, {"FD_EXCERPT_PHOTO": "on"}):
+            sb, warn, nbs, photos = self._fallback_compile([post_block()])
+        b = sb["chapters"][1]["blocks"][0]
+        self.assertEqual(b["_fb_photo"], "v_vote")
+        self.assertTrue(any("压在配图 v_vote 上" in w for w in warn), warn)
+        self.assertEqual(nbs[0]["photo_img"], "pc.photo")
+        self.assertNotIn("_fb_photo", nbs[0])
+        self.assertNotIn("img", nbs[0]["shot"])                  # 卡片里照旧是摘录
+        self.assertIn("pc.photo", photos)
+        self.assertIn("v_vote", SB.photo_moments(sb["chapters"][1])[0])
+        kinds = [(a, k) for a, _z, k in SB._moments(b, {"show": 3.0, "shot_mark": 4.0})]
+        self.assertIn((3.0, "img"), kinds)                         # 从卡片出现就算有图（章首不再空）
+
+    def test_excerpt_photo_uses_chapter_image(self):          # 卡片本来没配图：用这一章别的块的配图
+        q = {"type": "quote_card", "id": "qc", "text": LAB("不签保密协议", "No NDAs"), "cues": {"show": "周四"},
+             "image": "v_vote"}
+        with mock.patch.dict(os.environ, {"FD_EXCERPT_PHOTO": "on"}):
+            sb, _w, nbs, _p = self._fallback_compile([post_block(image=None), q])
+        self.assertEqual(sb["chapters"][1]["blocks"][0]["_fb_photo"], "v_vote")
+        self.assertEqual(nbs[0]["photo_img"], "pc.photo")
+        self.assertNotIn("photo_img", nbs[1])
+
+    def test_excerpt_photo_source_shot(self):                 # source_shot 截不成退回 source_excerpt，也垫
+        b = shot_block(id="ex")
+        with mock.patch.dict(os.environ, {"FD_EXCERPT_PHOTO": "on"}):
+            sb, _w, nbs, _p = self._fallback_compile([b, post_block(shot=None)])
+        self.assertEqual(nbs[0]["type"], "source_excerpt")
+        self.assertEqual(nbs[0]["photo_img"], "ex.photo")
+
+    def test_excerpt_photo_not_when_shot_ok(self):
+        write_shot(self.issue, "pc", VQ, font_px=20, clip={"w": 600}, w=1200, h=360)
+        with mock.patch.dict(os.environ, {"FD_EXCERPT_PHOTO": "on"}):
+            sb, _w, nbs, _p = self._fallback_compile([post_block()])
+        self.assertNotIn("photo_img", nbs[0])
 
     def test_card_shot_too_small_falls_back(self):
         write_shot(self.issue, "pc", VQ, font_px=12, clip={"w": 1100})

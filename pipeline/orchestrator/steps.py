@@ -18,7 +18,7 @@ from .common import (DONE, FAILED, SKIPPED, WAITING, PIPE, TOOLS, PROMPTS, PROFI
                      WEB_DRAFT, STORYBOARD, NARRATION, VIDEO_VOICE, CARDS, LINEUP, NO_PODCAST,
                      read_json, write_json, rel, fp_file, fp_dir, key_lines, tail, running_scripts, today_utc, hours_ago,
                      gemini_price_out, episode_title, iso, motion_switch, director_switch, narration_switch,
-                     zh_wrap_switch)
+                     zh_wrap_switch, excerpt_photo_switch)
 from .ledger import usage_new_spend, chunk_spend_since, mimo_tokens_since
 
 IMG_EXT = (".png", ".jpg", ".jpeg", ".webp")
@@ -1222,7 +1222,8 @@ class Video(Step):
         return [STORYBOARD, "%s/voice.json" % VIDEO_VOICE, CARDS, "@step:web", "=新动效=" + ("" if motion_switch()[0] else "关"),
                 "=视频导演=" + ("" if director_switch()[0] else "关"),
                 "=导演旁白=" + ("" if narration_switch()[0] else "关"),       # 11-09：视频旁白归导演开关，同样做法
-                "=中文整词换行=" + ("" if zh_wrap_switch()[0] else "关")]     # 11-09 晚：视频中文整词换行开关，同样做法
+                "=中文整词换行=" + ("" if zh_wrap_switch()[0] else "关"),     # 11-09 晚：视频中文整词换行开关，同样做法
+                "=摘录卡压图=" + ("" if excerpt_photo_switch()[0] else "关")]    # 11-15 加、同日用户定开：和整词换行同样做法，开着是空字符串（往期不重做）
 
     def shots_plan(self, c):
         on, why = motion_switch()
@@ -1270,6 +1271,37 @@ class Video(Step):
             return msg, warns, {"原文截图": {k: res.get(k) for k in ("处数", "成功", "退回摘录", "用时秒")}}
         except Exception as e:      # noqa: BLE001  截图只是锦上添花：fd 自己出错也照常组装
             return "原文截图这一步出错，退回原句摘录", ["原文截图这一步 fd 出错（%s: %s），照常组装" % (type(e).__name__, e)], {}
+
+    @staticmethod
+    def media_shots(media):
+        """成片里的原文截图（11-15 加）：按最后用上的那一版 11_视频v3/video3_media.json 数，导演那一段又截的也算
+        （11-15 报告写"1 处：用截图 0、退回摘录 1"，只数了导演之前那一次，成片实际 3 处：用截图 1、退回摘录 2）。
+        返回 (处数, 用截图, [退回摘录的位置]）；一处都没有返回 None。"""
+        n, ok, back = 0, 0, []
+        for ch in media.get("chapters") or []:
+            for b in (ch.get("blocks") or []) if isinstance(ch, dict) else []:
+                if not isinstance(b, dict):
+                    continue
+                t, where = b.get("type"), "「%s」%s/%s" % (ch.get("id"), b.get("type"), b.get("id"))
+                if t == "source_shot":
+                    n, ok = n + 1, ok + 1
+                elif t == "source_excerpt":
+                    n += 1
+                    back.append(where)
+                elif isinstance(b.get("shot"), dict):
+                    n += 1
+                    if b["shot"].get("img"):
+                        ok += 1
+                    else:
+                        back.append(where + " 的 shot")
+                for k, tk in enumerate(b.get("ticks") or []):
+                    if isinstance(tk, dict) and isinstance(tk.get("shot"), dict):
+                        n += 1
+                        if tk["shot"].get("img"):
+                            ok += 1
+                        else:
+                            back.append("%s 第 %d 个日子的 shot" % (where, k + 1))
+        return (n, ok, back) if n else None
 
     def engine(self, c):
         return ((c.state.step("voice") or {}).get("附加") or {}).get("视频引擎") or "gemini"
@@ -1414,7 +1446,8 @@ class Video(Step):
             return ("导演版（两轮导演 %s 秒、新画 %d 张%s，整个导演环节 %.0f 分钟）" % (
                         "＋".join(str((d.get(k) or {}).get("秒", "?")) for k in ("第一轮", "第二轮")), len(got),
                         "；旁白导演写" if res.get("旁白") == "导演写" else ("；旁白退回现行旁白" if str(res.get("旁白", "")).startswith("退回") else ""), mins),
-                    (["导演改错用了一次：%s" % "、".join(res.get("改错"))] if res.get("改错") else []) + nar.get("提醒", []),
+                    (["导演改错用了一次：%s" % "、".join(res.get("改错"))] if res.get("改错") else []) + nar.get("提醒", [])
+                    + [x for x in res.get("提醒") or [] if "空档" in x][:2],             # 11-15：第二轮以后还在的空档
                     {"视频导演": dict({"结果": "用导演版", "用时分钟": round(mins, 1), "新画的图": got,
                                      "改错": res.get("改错") or [], "导演文件夹": rel(c.p(DIRECTOR_DIR))}, **nar.get("附加", {}))})
         except Exception as e:      # noqa: BLE001  导演只是锦上添花：fd 自己出错也用老路那一版
@@ -1440,6 +1473,14 @@ class Video(Step):
         media = read_json(c.p("11_视频v3/video3_media.json"), {}) or {}
         dur = float(media.get("duration") or 0)
         warns += dwarns
+        ms = self.media_shots(media)
+        if ms and (sextra.get("视频导演") or {}).get("结果") == "用导演版":      # 11-15：导演版另截的原文截图也数进去
+            before = (sextra.get("原文截图") or {}) if isinstance(sextra.get("原文截图"), dict) else {}
+            if (before.get("处数"), before.get("成功")) != (ms[0], ms[1]):
+                smsg = "原文截图 %d 处（按成片数，含导演那一段截的）：用截图 %d、退回摘录 %d" % (ms[0], ms[1], len(ms[2]))
+                warns += ["原文截图没用上：%s（导演那一段截的，原因见导演渲染目录的 06_配图/原文截图/），退回原句摘录" % w
+                          for w in ms[2] if not any(w.split(" 的 shot")[0] in x for x in swarns)][:3]
+            sextra["原文截图"] = dict(before, 处数=ms[0], 成功=ms[1], 退回摘录=len(ms[2]), 按="成片 11_视频v3/video3_media.json")
         if dur > 180:
             return R(FAILED, "视频 %.0f 秒，超过 3 分钟" % dur, warns, sextra, go_on=True)
         if c.preview:
@@ -1496,7 +1537,8 @@ class Accept(Step):
     no, key, name = 16, "accept", "验收"
     timeout = 900
     check_text = ("shoot_v3（浅色、深色、手机）：无报错、不横向滚动、不缺字；首屏超过 2 MB 提醒；"
-                  "check_cites：上标不单独掉行；check_listen：'听这一段'从对的时间放")
+                  "check_cites：上标不单独掉行；check_listen：'听这一段'从对的时间放；"
+                  "check_listen_text：'听这一段'跳到的地方转写一遍，像在讲别的条目就提醒、跳点之前已经在讲这一条也提醒（不挡发布）")
     fix_text = "任何一项不过：标'验收没过，不要发布'，停下来叫人（现在本来也不自动发布）"
 
     def outputs(self, c):
@@ -1510,7 +1552,8 @@ class Accept(Step):
 
     def plan(self, c):
         return ["截图自检：node site/tools/shoot_v3.js <网页> 10_网页v3 10_网页v3/自检报告.json",
-                "上标：node site/tools/check_cites.js <网页>；听这一段：node site/tools/check_listen.js <网页>"]
+                "上标：node site/tools/check_cites.js <网页>；听这一段：node site/tools/check_listen.js <网页>",
+                "听这一段转写核对：$PY site/tools/check_listen_text.py <期目录> --out logs/听这一段_转写核对.json"]
 
     def run(self, c, how):
         env = dict(c.env, PW=str(PLAYWRIGHT))
@@ -1563,11 +1606,46 @@ class Accept(Step):
             if rc != 0 or not ok:
                 probs.append("'听这一段'点了没有从对的时间放：" + "；".join(tail(out, 2))[:120])
             res["听这一段"] = jr
+            warns += self.listen_text(c, env, res)
         res["没过"], res["提醒"] = probs, warns
         write_json(c.p("logs/验收.json"), res)
         if probs:
             return R(FAILED, "验收没过 %d 项，不要发布" % len(probs), probs + warns, go_on=True)
         return R(DONE, "三种视图无报错、不横滚、不缺字；上标不掉行；'听这一段'正常", warns)
+
+    def listen_text(self, c, env, res):
+        """11-15 加：每个'听这一段'从跳点截 20 秒播客转写一遍，和这一条、别的条目的网页文字比
+        （site/tools/check_listen_text.py）。像在讲别的条目（11-15 E006 跳到上一条的尾巴、11-12 热点二三对调）就提醒；
+        11-16 起要闻、快讯再转跳点之前 20 秒，跳点之前已经在讲这一条（跳到了第二段）也提醒可能跳晚了。都不挡发布；转写没跑成也只提醒。结果写 logs/听这一段_转写核对.json，摘要放进验收.json。返回提醒列表。"""
+        out_json = c.p("logs/听这一段_转写核对.json")
+        rc, out = c.run(self, c.py(TOOLS / "check_listen_text.py", c.issue, "--out", out_json),
+                        "听这一段转写核对", timeout=600, env=env)
+        jt = read_json(out_json, None)
+        if rc != 0 or not isinstance(jt, dict):
+            res["听这一段转写核对"] = "没跑成"
+            return ["'听这一段'转写核对没跑成：" + "；".join(tail(out, 2))[:120]]
+        if jt.get("跳过"):
+            res["听这一段转写核对"] = jt["跳过"]
+            return []
+        each = jt.get("各条") or {}
+        res["听这一段转写核对"] = {k: r.get("判断") for k, r in each.items()}
+        warns = []
+        for k, r in each.items():
+            if r.get("判断") != "跳早了":
+                continue
+            on = r.get("这一条开口（跳点后几秒）")
+            warns.append("'听这一段' %s 可能跳早了：跳到 %.1f 秒，之后约 %.0f 秒讲的像 %s，%s（转写核对，请耳听；"
+                         "logs/听这一段_转写核对.json）"
+                         % (k, float(r.get("跳点秒") or 0), float(r.get("之前在讲别的条目（秒）") or 0), r.get("在讲"),
+                            "这一条约 %.1f 秒才开口" % (float(r.get("跳点秒") or 0) + on) if on is not None
+                            else "%g 秒内没听到这一条" % float(jt.get("窗口秒") or 20)))
+        for k, r in each.items():            # 11-16 加：跳点之前已经在讲这一条（跳到了这一条的第二段）
+            if r.get("跳晚"):
+                t = float(r.get("跳点秒") or 0)
+                warns.append("'听这一段' %s 可能跳晚了：跳到 %.1f 秒，跳点之前约 %.0f 秒已经在讲这一条（约从 %.1f 秒起；"
+                             "转写核对，请耳听；logs/听这一段_转写核对.json）"
+                             % (k, t, float(r.get("跳点前在讲这一条（秒）") or 0), t - float(r.get("这一条约从（跳点前几秒）") or 0)))
+        return warns
 
 
 def _json_list(out):

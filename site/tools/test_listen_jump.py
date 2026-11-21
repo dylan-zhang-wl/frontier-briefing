@@ -24,6 +24,10 @@ build_v3.py 的 listen_at 只在“要闻”里按文字找，找不到就退回
        E006、E206 不再落在上一条中间；E003（热点一）照旧跳本章开头（先放转场声，1.7 秒后开口，报告认为对）。
     二里另加：本章第一段是一句和这条沾边的短引子时从引子听；引子不沾边、两句以上的不算；停顿查找的几种情况。
 
+11-16 加（六）：单人稿跳晚（11-16 E040、E028，11-11 E047、E005，11-13 E055 都跳到了这一条的第二段）。编的文字：
+    网页写 89%、播客念"百分之八十九"；后一段念到长英文名；开讲那一段分数不到六成但比别的条目都像（往前找到它）；
+    往前找不走进上一条、不越过开场白；FD_LISTEN_SCORE=off 照旧跳原来那一段。
+
 用法（在项目根目录 frontier-daily/ 下）：
     ~/.venvs/frontier-daily/bin/python site/tools/test_listen_jump.py
 草稿在项目外的 ~/.cache/frontier-daily/test_listen_jump/（每次重来）；项目里的文件、测试版/ 下的期目录都不改。
@@ -344,16 +348,235 @@ def synthetic(g):
     check(g["para_times"](blk, ps) == [(0.0, 0.5, "估算"), (10.0, 0.5, "估算")],
           "8. 没有对齐数据 → 按字数比例（%s）" % (g["para_times"](blk, ps),))
 
+    # 11. 11-15 加：网页和播客的热点顺序不同（11-12 网页第二条百度、第三条台积电，播客热点二讲台积电、热点三讲百度，
+    #     原来按排第几跳，两个按钮对调了）。文字是编的（两家虚构的公司）。热点跳章开头。
+    A_POD = "国内这边，远帆科技在年度大会上发布了新一代办公助手，创始人说下一步是让数字员工进入销售和客服环节。"
+    A_WEB = "远帆科技发布新一代办公助手远帆科技创始人在年度大会上说，下一步要让数字员工进入销售、客服各个环节。"
+    B_POD = "说到芯片，星河半导体这周准备入股两家模型公司，各投一笔数额不大的钱。"
+    B_WEB = "星河半导体准备入股两家模型公司星河半导体这周计划分别投资两家模型公司，金额不大。"
+    H = g["head_chapter"].__globals__        # runpy 返回的是全局变量的副本；开关要改函数真正读的那一份
+    moved0 = len(H["LISTEN_HEAD_MOVED"])
+    setup({"热点二": [B_POD], "热点三": [A_POD]})
+    t = g["listen_at"]("headline", A_WEB, 1)
+    check(t == 300.0, "11a. 网页第 2 条、播客在热点三讲 → 跳热点三开头（%s，应为 300.0）" % t)
+    t = g["listen_at"]("headline", B_WEB, 2)
+    check(t == 200.0, "11b. 网页第 3 条、播客在热点二讲 → 跳热点二开头（%s，应为 200.0）" % t)
+    check([m[1:] for m in H["LISTEN_HEAD_MOVED"][moved0:]] == [("热点二", "热点三"), ("热点三", "热点二")],
+          "11c. 改了章的两条都记下来，组装时报出（%s）" % (H["LISTEN_HEAD_MOVED"][moved0:],))
+    setup({"热点二": [A_POD], "热点三": [B_POD]})
+    t = g["listen_at"]("headline", A_WEB, 1)
+    check(t == 200.0, "11d. 顺序一致 → 照旧按排第几（%s，应为 200.0）" % t)
+    setup({"热点二": [B_POD, "远帆科技也在年度大会上发布了办公助手，数字员工要进入销售和客服。"], "热点三": [A_POD]})
+    t = g["listen_at"]("headline", A_WEB, 1)
+    check(t == 200.0, "11e. 排第几那一章也正经讲了它 → 照旧按排第几（%s，应为 200.0）" % t)
+    setup({"热点二": [B_POD]})
+    t = g["listen_at"]("headline", A_WEB, 1)
+    check(t == 200.0, "11f. 哪个热点章都没讲它 → 照旧按排第几（%s，应为 200.0）" % t)
+    setup({"热点二": [B_POD], "热点三": [A_POD]})
+    H["LISTEN_HEADLINE"] = False
+    try:
+        t = g["listen_at"]("headline", A_WEB, 1)
+    finally:
+        H["LISTEN_HEADLINE"] = True
+    check(t == 200.0, "11g. FD_LISTEN_HEADLINE=off → 和改之前一样按排第几（%s，应为 200.0）" % t)
+
     g["PARAS"][:], g["chapters"][:] = real_paras, real_ch
+    mid_turn(g)
+    score_walk(g)
+
+
+def mid_turn(g):
+    """9. 11-15 加：对谈一轮里，上一条的尾巴讲完才接着讲这一条（mid_start）。文字是编的（两家虚构的公司），
+    格局照 11-15 第 4–6 轮：第 4、5 轮讲钱包，第 6 轮前两句还是钱包的尾巴，第三句"国内这边"才讲接口。"""
+    print("四、对谈一轮里换条目（mid_start）")
+    saved = {k: (list(g[k]) if isinstance(g[k], list) else dict(g[k])) for k in ("PARAS", "chapters", "ITEM_TEXT", "PARA_SRC")}
+    G = g["mid_start"].__globals__          # runpy 返回的是全局变量的副本；开关要改函数真正读的那一份
+    voice0, sw0 = dict(g["VOICE_DB"]), G["LISTEN_SENTENCE"]
+    A = "星河钱包上线，智能体能替人付款" + "星河公司周五推出星河钱包，智能体可替用户下单；每笔购买都要指纹验证。"
+    B = "远帆开放全家桶接口" + "远帆的联网搜索、文件上传有了独立接口，可以单独调用、分别计费。"
+    A_RICH = A + "星河承认智能体购物还在早期阶段；付费订阅用户先用，航空公司和网店都在设限。"
+    T4 = "先说替人付款这件事。星河公司周五推出星河钱包，让智能体替用户下单付款。"
+    T5 = "补一个细节。星河说，每一笔购买都要指纹验证一次。"
+    T6 = ["首批只开放给付费订阅用户，智能体能替人付款。", "星河自己说，智能体购物还在早期阶段；航空公司和网店都在设限。",
+          "国内这边，据报道，远帆正式开放全家桶接口。", "联网搜索、文件上传，都有了独立接口，可以单独调用、分别计费。"]
+    SPANS = [[0.0, 4.9], [4.9, 15.3], [15.3, 22.1], [22.1, 34.0]]
+
+    def setup(t6=None, spans=SPANS, dialog=True, voice=None):
+        g["chapters"][:] = [{"start": 0.0, "title_zh": "开场"}, {"start": 60.0, "title_zh": "快讯"}]
+        g["ITEM_TEXT"].clear()
+        g["ITEM_TEXT"].update({A: A_RICH, B: B})
+        g["PARA_SRC"].clear()
+        paras = [{"ch": "开场", "t": 1.0, "text": "欢迎收听。", "lead": 0.5, "how": "估算"}]
+        rows = [(T4, 60.0, 15.0), (T5, 75.5, 16.0), ("".join(t6 or T6), 92.0, 34.0)]
+        for txt, st, sec in rows:
+            b = {"秒数": sec, "开始秒": st, "_对谈轮": dialog, "_句子级找平": {"各句起止秒": spans} if spans else None,
+                 "_人声目录": "/假的人声目录" if voice is not None else None, "_人声开始秒": st - 40.0}
+            paras.append({"ch": "快讯", "t": st, "text": txt, "lead": 0.5, "how": "估算"})
+            g["PARA_SRC"][id(paras[-1])] = (b, 0, [0.0])
+        g["PARAS"][:] = paras
+        g["VOICE_DB"].clear()
+        if voice is not None:
+            g["VOICE_DB"]["/假的人声目录"] = voice
+
+    try:
+        setup()
+        t = g["listen_at"]("flash", B)
+        check(t == 107.3, "9a. 第 6 轮第三句才讲这一条 → 跳到配音时切出的那个句界（%s，应为 92.0+15.3=107.3）" % t)
+        check(g["listen_at"]("flash", A) == 59.5, "9b. 上一条照旧跳它那一轮开头（%s，应为 59.5）" % g["listen_at"]("flash", A))
+        import numpy as np
+        db = np.full(14000, -20.0)               # 人声版 140 秒，全是说话
+        db[6720:6780] = -60                      # 第 6 轮第 15.2–15.8 秒（人声版 52+15.2 秒）：句间停顿
+        setup(voice=db)
+        t = g["listen_at"]("flash", B)
+        check(t == 107.5, "9c. 有人声版 → 吸到停顿，跳开口前 0.3 秒（%s，应为 92.0+15.8−0.3=107.5）" % t)
+        setup(spans=[[0.0, 8.0], [8.0, 34.0]])
+        n0 = len(g["LISTEN_MID"])
+        t = g["listen_at"]("flash", B)
+        how = g["LISTEN_MID"][-1][3] if len(g["LISTEN_MID"]) > n0 else None
+        check(how == "估算" and t is not None and 102 <= t <= 110,
+              "9d. 句界和字数估的位置对不上、也没有人声版 → 按字数比例、提醒请核对（%s，%s）" % (t, how))
+        setup(dialog=False)
+        check(g["listen_at"]("flash", B) == 91.5, "9e. 单人稿的段 → 照旧跳段首（%s，应为 91.5）" % g["listen_at"]("flash", B))
+        setup(t6=[T6[2], T6[3], T6[0], T6[1]])
+        check(g["listen_at"]("flash", B) == 91.5, "9f. 这一轮开头就在讲这一条 → 跳轮首（%s，应为 91.5）" % g["listen_at"]("flash", B))
+        setup(t6=["我们再看一件别的事。", T6[2], T6[3]], spans=[[0.0, 2.0], [2.0, 9.0], [9.0, 20.0]])
+        check(g["listen_at"]("flash", B) == 91.5,
+              "9g. 前面只是和哪条都不沾的过渡句 → 跳轮首（%s，应为 91.5）" % g["listen_at"]("flash", B))
+        G["LISTEN_SENTENCE"] = False
+        setup()
+        check(g["listen_at"]("flash", B) == 91.5, "9h. FD_LISTEN_SENTENCE=off → 和改之前一样跳轮首（%s，应为 91.5）"
+              % g["listen_at"]("flash", B))
+    finally:
+        G["LISTEN_SENTENCE"] = sw0
+        for k, v in saved.items():
+            if isinstance(g[k], list):
+                g[k][:] = v
+            else:
+                g[k].clear()
+                g[k].update(v)
+        g["VOICE_DB"].clear()
+        g["VOICE_DB"].update(voice0)
+
+
+def score_walk(g):
+    """12. 11-16 加：单人稿跳晚（11-16 E040、E028，11-11 E047、E005，11-13 E055 都跳到了这一条的第二段）。
+    打分数字统一写法、英文按词（grams），按分数找到那一段以后往前找开讲的那一段（run_start）。文字是编的（几家虚构的公司）。"""
+    print("六、单人稿跳晚：数字写法、长英文名、往前找开讲段（FD_LISTEN_SCORE）")
+    saved = {k: (list(g[k]) if isinstance(g[k], list) else dict(g[k])) for k in ("PARAS", "chapters", "ITEM_TEXT")}
+    G = g["run_start"].__globals__          # runpy 返回的是全局变量的副本；开关要改函数真正读的那一份
+    sw0 = G["LISTEN_SCORE"]
+    gr, bg = g["grams"], g["bigr"]
+    # 12a、12b：打分本身
+    a, b = "海外开发者的钱，89% 付给了中国模型", "海外开发者的钱，百分之八十九付给了中国模型"
+    check({("8", "9"), ("9", "%")} <= (gr(a) & gr(b)) and not any("89" in x for x in bg(a) & bg(b)),
+          "12a. 网页写 89%%、播客念百分之八十九 → 数字统一以后对得上（相同 %d 处，原来 %d 处）" % (len(gr(a) & gr(b)), len(bg(a) & bg(b))))
+    check(len(gr("Times Higher Education")) == 2 and len(bg("Times Higher Education")) >= 15,
+          "12b. 长英文名一个词算一个：Times Higher Education 2 处（原来按字母两两 %d 处）" % len(bg("Times Higher Education")))
+    Y = "远帆日搜索量追到行业第一的两成远帆说，它的日搜索量已经追到行业第一的两成；上个月它还发布过一款翻译耳机。"
+    YP = "远帆上个月也发布过一款翻译耳机；日搜索量追到两成，是远帆自己的说法。"
+    X = ("调研：海外调用量 89% 流向中国模型据北岸风投统计，海外开发者经聚合平台调用的开源模型里，89% 付给了中国模型；"
+         "前三名是 Brightwater、Kestrel、Larkspur。")
+    X1 = "账算到海外，还有一组数字值得放在一起读。一家风投机构的数据说，海外的开发者花在模型上的钱，百分之八十九付给了中国模型。"
+    X2 = "前三名是 Brightwater、Kestrel、Larkspur，它们都是开源模型；海外开发者经聚合平台调用的开源模型里，它们拿走了大半。"
+    Z = ("AI 垃圾论文冒充学者一位研究推荐系统的教授收到学术搜索推送，发现一篇署他名字的论文不是他写的；"
+         "他对 Times Higher Education 说，这类 AI 垃圾论文正在冒充学者。")
+    Z1 = "还有一件学术圈的事。一位研究推荐系统的教授，收到学术搜索的推送，说他又发表了一篇新论文。"
+    Z2 = "论文是发表了，可这篇论文不是他写的。这位教授对 Times Higher Education 说，AI 垃圾论文正在冒充学者。"
+    W = "青禾发布离线翻译耳机青禾的新耳机不联网也能做 12 种语言的同声传译，售价 1999 元，下个月开卖。"
+    W1 = "说回翻译这件事。青禾这周也拿出了新耳机，主打离线。"
+    W2 = "这款耳机不联网也能做十二种语言的同声传译，售价一千九百九十九元，下个月开卖。"
+
+    def setup(ch, texts):
+        """ch 章从 400 秒开始，各段 10 秒：texts 前面先放一段和哪条都不沾的开场白。"""
+        g["chapters"][:] = [{"start": 0.0, "title_zh": "开场"}, {"start": 400.0, "title_zh": ch}, {"start": 600.0, "title_zh": "结尾"}]
+        g["PARAS"][:] = [{"ch": "开场", "t": 1.0, "text": "欢迎收听。", "lead": 0.5, "how": "估算"}] + [
+            {"ch": ch, "t": 401.0 + 10 * i, "text": x, "lead": 0.5, "how": "估算"} for i, x in enumerate(["再看几条消息。"] + texts)]
+        g["PARAS"].append({"ch": "结尾", "t": 601.0, "text": "今天就到这里。", "lead": 0.5, "how": "估算"})
+        g["ITEM_TEXT"].clear()
+        g["ITEM_TEXT"].update({k: k for k in (Y, X, Z, W)})
+
+    def both(kind, text):
+        G["LISTEN_SCORE"] = False
+        try:
+            off = g["listen_at"](kind, text)
+        finally:
+            G["LISTEN_SCORE"] = sw0
+        return g["listen_at"](kind, text), off
+
+    try:
+        setup("要闻", [YP, X1, X2])
+        on, off = both("brief", X)
+        check(on == 420.5 and off == 430.5, "12c. 数字写法（门罗风投 89%% 那种）→ 跳开讲那一段 %s（应为 420.5；FD_LISTEN_SCORE=off 照旧 %s，应为 430.5）" % (on, off))
+        setup("快讯", [YP, Z1, Z2])
+        on, off = both("flash", Z)
+        check(on == 420.5 and off == 430.5, "12d. 后一段念到长英文名（AI 垃圾论文那种）→ 跳开讲那一段 %s（应为 420.5；关掉照旧 %s，应为 430.5）" % (on, off))
+        setup("要闻", [YP, W1, W2])
+        on, off = both("brief", W)
+        check(on == 420.5 and off == 430.5,
+              "12e. 开讲那一段分数不到六成、但比别的条目都像 → 往前找到它 %s（应为 420.5；关掉照旧 %s，应为 430.5）" % (on, off))
+        check(g["run_start"](g["PARAS"][4], W) is g["PARAS"][3],
+              "12f. 往前找停在上一条（远帆那段也提到翻译耳机，但更像远帆）、不走进上一条")
+        setup("要闻", [W1, W2])
+        on, _ = both("brief", W)
+        check(on == 410.5, "12g. 开讲那一段前面只有和哪条都不沾的开场白 → 停在开讲那一段 %s（应为 410.5）" % on)
+        setup("要闻", [X2, W2])
+        on, off = both("brief", W)
+        check(on == off == 420.5, "12h. 前一段是别的条目 → 不往前走 %s（关掉 %s，都应为 420.5）" % (on, off))
+    finally:
+        G["LISTEN_SCORE"] = sw0
+        for k, v in saved.items():
+            if isinstance(g[k], list):
+                g[k][:] = v
+            else:
+                g[k].clear()
+                g[k].update(v)
+
+
+def judge_cases():
+    """五、第 16 步的转写核对（check_listen_text.judge）：编好的转写小段，不跑转写模型。"""
+    print("五、第 16 步：'听这一段'转写核对的判断（check_listen_text.judge）")
+    sys.path.insert(0, HERE)
+    import check_listen_text as T
+    grams = T.make_grams()
+    texts = {"A": "星河钱包上线，智能体能替人付款。星河公司周五推出星河钱包，每笔购买都要指纹验证；智能体购物还在早期阶段。",
+             "B": "远帆开放全家桶接口。远帆的联网搜索、文件上传有了独立接口，可以单独调用、分别计费。",
+             "C": "英国卫报 11 月 13 日报道，逻辑学家用模型读懂速记笔记。"}
+    r = T.judge("B", [(0.0, 4.5, "首批只开放给付费订阅用户智能体能替人付款"), (4.5, 10.0, "星河自己说智能体购物还在早期阶段"),
+                      (10.0, 15.0, "国内这边远帆正式开放全家桶接口")], texts, grams)
+    check(r["判断"] == "跳早了" and r["在讲"] == "A" and r["这一条开口（跳点后几秒）"] == 10.0,
+          "10a. 前 10 秒在讲上一条 → 跳早了，在讲 A、10 秒后开口（%s）" % r)
+    r = T.judge("B", [(0.0, 1.5, "字幕由某某提供"), (1.5, 6.0, "国内这边远帆正式开放全家桶接口")], texts, grams)
+    check(r["判断"] == "对上", "10b. 片头音乐里编出来的字不算 → 对上（%s）" % r["判断"])
+    r = T.judge("C", [(0.0, 3.0, "和做研究的朋友贴得最近的是英国卫报11月13日的一篇报道"), (3.0, 8.0, "逻辑学家用模型读懂速记笔记")],
+                texts, grams)
+    check(r["判断"] == "对上", "10c. 日期、虚字不算相同（“11 月 13 日”哪条都有）→ 对上（%s）" % r["判断"])
+    r = T.judge("B", [(0.0, 4.0, "星河钱包每笔购买都要指纹验证"), (4.0, 9.0, "远帆开放全家桶接口")], texts, grams)
+    check(r["判断"] == "对上", "10d. 开头只有 4 秒在讲别的、后面听到这一条 → 不判跳早（%s）" % r["判断"])
+    r = T.judge("A", [(0.0, 20.0, "远帆的联网搜索文件上传有了独立接口可以单独调用分别计费")], texts, grams)
+    check(r["判断"] == "跳早了" and r["这一条开口（跳点后几秒）"] is None, "10e. 整段都在讲别的条目、没听到这一条 → 跳早了（%s）" % r["判断"])
+    # 11-16 加：跳点之前那一截（check_listen_text.judge_late；起止是距跳点前多少秒）
+    r = T.judge_late("B", [(-12.0, -7.0, "星河自己说智能体购物还在早期阶段"), (-7.0, -3.0, "国内这边远帆正式开放全家桶接口"),
+                           (-3.0, 0.0, "联网搜索文件上传都有了独立接口")], texts, grams)
+    check(r.get("跳晚") == "可能跳晚了" and r["跳点前在讲这一条（秒）"] == 7.0 and r["这一条约从（跳点前几秒）"] == 7.0,
+          "10f. 跳点前 7 秒已经在讲这一条、再往前是上一条 → 可能跳晚了，约从跳点前 7 秒起（%s）" % r)
+    r = T.judge_late("B", [(-9.0, -4.0, "星河钱包每笔购买都要指纹验证"), (-4.0, -1.0, "再快看几条消息"), (-1.0, 0.0, "嗯")], texts, grams)
+    check(not r.get("跳晚") and r["跳点前在讲这一条（秒）"] == 0.0, "10g. 跳点前是上一条和过渡句 → 不报（%s）" % r)
+    r = T.judge_late("B", [(-10.0, -4.0, "首批只开放给付费订阅用户智能体能替人付款"), (-4.0, 0.0, "国内这边远帆正式开放全家桶接口")],
+                     texts, grams)
+    check(not r.get("跳晚") and r["跳点前在讲这一条（秒）"] == 4.0, "10h. 跳点前只有 4 秒像这一条（引子）→ 不到 5 秒，不报（%s）" % r)
+    r = T.judge_late("B", [(-15.0, -6.0, "国内这边远帆正式开放全家桶接口"), (-6.0, 0.0, "星河自己说智能体购物还在早期阶段")],
+                     texts, grams)
+    check(not r.get("跳晚"), "10i. 这一条的话在上一条前面（中间隔着在讲别的条目的）→ 不报（%s）" % r)
 
 
 def main():
+    judge_cases()                            # 不用样期、不跑转写模型，先跑
     if not os.path.isdir(REAL):
         sys.exit("找不到 %s" % REAL)
     if not os.path.exists(os.path.join(REAL, POD)):
         print("跳过：%s 的完整样期（%s）不在。仓库的 测试版/ 只存文字；要跑这个测试，设 FD_SAMPLE_ROOT 指向完整样期所在的文件夹，"
               "或在有 本机资料/归档/mini试运行_1031-1109/ 的本机上跑" % (DAY, POD))
-        sys.exit(0)
+        sys.exit(1 if FAILS else 0)
     if not os.path.exists(CFG):              # 旧期网页配置只在私有仓库（2026-11 拆仓库）
         print("跳过：%s 不在（往期内容只在私有仓库；把私有仓库的 site/tools/v3_issues/ 拷进来再跑）" % os.path.relpath(CFG, ROOT))
         sys.exit(0)
