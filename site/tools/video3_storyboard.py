@@ -285,6 +285,17 @@ def image_take_switch():
     return _switch("FD_VIDEO_IMAGE_TAKE", IMAGE_TAKE_KEY)
 
 
+# 11-22 加（画面两处叠压：分岔对照同侧小卡、压图对比卡超高）：画面防叠压。做法同上面几个，默认关；
+# pipeline/orchestrator/common.py 的 layout_guard_switch 是同一套规则，两边要一起改。
+# 开着时组装数据只多写 layoutguard: true（video3_build），播放器 site/v3/video3.js 的 LG 读它；关着不写，视频和加开关以前逐像素一样。
+LAYOUT_GUARD_KEY = "画面防叠压"
+
+
+def layout_guard_switch():
+    """画面防叠压（video3_build 用它决定写不写 layoutguard）。返回 (开着没有, 从哪来的一句话)。默认关。"""
+    return _switch("FD_LAYOUT_GUARD", LAYOUT_GUARD_KEY)
+
+
 # 视频导演开关（2026-11-08 晚加；pipeline/orchestrator/common.py 的 director_switch 是同一套规则，两边要一起改）：
 # 先看环境变量 FD_DIRECTOR，再看 fd_开关.json 的"视频导演"；都没有或读不出来按"开"。
 # 组装这边只用它决定 11-08 的渲染修复（fix1108：封面图、对比卡长数值、卡片及时收起、柱子、时间轴小图与小字、对比卡压图不出画、

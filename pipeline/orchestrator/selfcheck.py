@@ -121,6 +121,9 @@ def build(issue, steps, costs, month, image_lines, now):
         L.append("- 视频：老路那一版（导演环节没做：%s）" % (m.group(1) if m else dr_skip))
     else:
         L.append("- 视频：老路那一版（%s）" % ("导演环节没做" if st("video").get("状态") else "第 14 步没跑"))
+    ov = overlap_line(vid)
+    if ov:
+        L.append("- " + ov)
     tot = "、".join("%s $%.4f" % (k, x) for k, x in costs.items() if x) or "没有花钱"
     mline = ""
     if month and month.get("上限美元") is not None:
@@ -133,6 +136,21 @@ def build(issue, steps, costs, month, image_lines, now):
     if lw:
         L.append("- " + lw)
     return "\n".join(L) + "\n"
+
+
+def overlap_line(vid):
+    """画面叠压检查（2026-11-22 加，开关"画面叠压检查"）：第 14 步记的 附加.画面叠压检查。开关关着时第 14 步不记这一项，
+    这里返回空字符串，自检.md 和加这一项以前逐字一样。vid：第 14 步的"附加"。"""
+    k = (vid or {}).get("画面叠压检查")
+    if not isinstance(k, dict):
+        return ""
+    if k.get("结果") != "跑了":
+        return "画面叠压检查：没跑成（只是少了这道提醒，见 00_调度报告.md 第 14 步）"
+    n = int(k.get("处数") or 0)
+    if not n:
+        return "画面叠压检查：0 处（第 14 步成片上量的：同侧小卡相交、卡片内容超出卡片、卡片字压在字幕条下）"
+    kinds = "、".join("%s %s" % (a, b) for a, b in (k.get("各类") or {}).items())
+    return "画面叠压检查（只提醒，不挡）：%d 处%s，时刻见 %s" % (n, "（%s）" % kinds if kinds else "", k.get("文件") or "logs/视频_叠压检查.json")
 
 
 LISTEN_ID = re.compile(r"“听这一段”\s*(\S+?)\s")

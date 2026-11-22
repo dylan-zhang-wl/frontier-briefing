@@ -19,7 +19,7 @@ from .common import (DONE, FAILED, SKIPPED, WAITING, PIPE, TOOLS, PROMPTS, PROFI
                      read_json, write_json, rel, fp_file, fp_dir, key_lines, tail, running_scripts, today_utc, hours_ago,
                      gemini_price_out, episode_title, iso, motion_switch, director_switch, narration_switch,
                      zh_wrap_switch, excerpt_photo_switch, video_switch, bare_fix_switch, card_sync_switch,
-                     image_take_switch)
+                     image_take_switch, layout_guard_switch, layout_check_switch)
 from .ledger import usage_new_spend, chunk_spend_since, mimo_tokens_since
 
 IMG_EXT = (".png", ".jpg", ".jpeg", ".webp")
@@ -1336,7 +1336,9 @@ class Video(Step):
                 # 11-21：两个默认关的开关反过来记——关着是空字符串（往期不重做），开了记"开"，一换开关第 14 步自动重做
                 "=空档补图=" + ("开" if bare_fix_switch()[0] else ""),
                 "=卡片数值跟旁白=" + ("开" if card_sync_switch()[0] else ""),
-                "=配图收截图卡=" + ("开" if image_take_switch()[0] else "")] + video_fp(c, self.key)    # 11-17：视频开关（做法同第 7 步）；11-15 加、同日用户定开：和整词换行同样做法，开着是空字符串（往期不重做）
+                "=配图收截图卡=" + ("开" if image_take_switch()[0] else ""),
+                # 11-22：画面防叠压，同样关着记空字符串（往期不重做）。画面叠压检查只量、不改成片，不进指纹
+                "=画面防叠压=" + ("开" if layout_guard_switch()[0] else "")] + video_fp(c, self.key)    # 11-17：视频开关（做法同第 7 步）；11-15 加、同日用户定开：和整词换行同样做法，开着是空字符串（往期不重做）
 
     def shots_plan(self, c):
         on, why = motion_switch()
@@ -1426,6 +1428,41 @@ class Video(Step):
     def record_cmd(self, c):
         return ["node", TOOLS / "video3_record.mjs", c.issue]
 
+    OVERLAP_JSON = "logs/视频_叠压检查.json"
+    OVERLAP_TIMEOUT = 300
+
+    def overlap_cmd(self, c):
+        return ["node", TOOLS / "video3_overlap.mjs", c.issue, "--out", c.p(self.OVERLAP_JSON)]
+
+    def overlap(self, c):
+        """画面叠压检查（2026-11-22 加，开关"画面叠压检查"，默认关）：成片就位以后另开一页，逐 0.5 秒量看得见的卡片外框
+        （site/tools/video3_overlap.mjs）：同侧小卡相交、卡片内容超出卡片、卡片里的字压在字幕条下面。只提醒：不挡这一步、
+        不进导演"必须改"，量的那一页和截关键帧、录预览不是同一页，成片一个像素不动。关着时不跑，返回 ("", [], {})。
+        返回 (一句话, 提醒, 附加)。任何情况都不抛错。"""
+        on, why = layout_check_switch()
+        if not on:
+            return "", [], {}
+        out_p = c.p(self.OVERLAP_JSON)
+        try:
+            t0 = time.time()
+            rc, out = c.run(self, self.overlap_cmd(c), "画面叠压检查", timeout=self.OVERLAP_TIMEOUT)
+            res = read_json(out_p, {}) or {}
+            if rc != 0 or not out_p.exists() or out_p.stat().st_mtime < t0 - 1:
+                why2 = "超过 %d 秒被停掉" % self.OVERLAP_TIMEOUT if rc == 124 else (_err(out) or "退出码 %s" % rc)
+                return "", ["画面叠压检查没跑成（%s），只是少了这道提醒；日志 %s" % (why2, rel(c.log_path(self)))], {"画面叠压检查": {"结果": "没跑成"}}
+            n = int(res.get("处数") or 0)
+            kinds = res.get("各类") or {}
+            extra = {"画面叠压检查": {"结果": "跑了", "处数": n, "各类": kinds, "文件": self.OVERLAP_JSON}}
+            if not n:
+                return "画面叠压检查：0 处", [], extra
+            spans = "、".join("%s–%s 秒" % (x.get("从"), x.get("到")) for x in (res.get("各处") or [])[:6])
+            return ("画面叠压检查：%d 处" % n,
+                    ["画面叠压检查（只提醒，不挡）：%d 处（%s）：%s；见 %s" % (
+                        n, "、".join("%s %d" % (k, v) for k, v in kinds.items()), spans, self.OVERLAP_JSON)],
+                    extra)
+        except Exception as e:      # noqa: BLE001  检查只是提醒：fd 自己出错也照常往下
+            return "", ["画面叠压检查这一步 fd 出错（%s: %s），只是少了这道提醒" % (type(e).__name__, e)], {"画面叠压检查": {"结果": "没跑成"}}
+
     def director_on(self):
         """导演环节做不做：(做不做, 一句话)。新动效开关关着时不做（导演用的模板和渲染修复都挂在新动效开关后面）。"""
         on, why = director_switch()
@@ -1483,7 +1520,9 @@ class Video(Step):
             ["视频旁白：%s" % ("归导演写（%s）；过了第 7 步那套检查才重配视频旁白（Gemini，最多 $%.3f），不过就整段用第 6 步的旁白" % (
                 self.narration_on(c)[1], self.narration_budget(c)[0]) if self.narration_on(c)[0] else "不归导演（%s），用第 6 步写、第 11 步配好的" % self.narration_on(c)[1])]
              if don else []) + (
-            ["预览：" + c.show(self.record_cmd(c)) + "（录屏约 2.5 分钟）"] if c.preview else ["不录预览（--no-preview）"])
+            ["预览：" + c.show(self.record_cmd(c)) + "（录屏约 2.5 分钟）"] if c.preview else ["不录预览（--no-preview）"]) + (
+            ["画面叠压检查：" + c.show(self.overlap_cmd(c)) + "（另开一页逐 0.5 秒量卡片外框，只提醒，不挡；成片不动）"]
+            if layout_check_switch()[0] else [])
 
     def narration_record(self, c, res, t0):
         """旁白归导演时（11-09）：导演重配视频旁白花的钱记进账本（退回了也记，钱已经花了），旁白最后用的是谁的写进附加。"""
@@ -1607,9 +1646,12 @@ class Video(Step):
             rc2, out2 = c.run(self, self.record_cmd(c), "录预览", timeout=900)
             if rc2 != 0:
                 warns.append("预览 MP4 没录成（不影响网页）：" + "；".join(key_lines(out2, 2)))
+        kmsg, kwarns, kextra = self.overlap(c)           # 11-22：画面叠压检查（开关关着时什么都不做）
+        warns += kwarns
+        sextra = dict(sextra, **kextra)
         m = re.search(r"对齐中位误差 ([\d.]+) 秒", out)
-        return R(DONE, "%.1f 秒，%d 章%s%s%s" % (dur, len(media.get("chapters") or []), "，对齐中位误差 %s 秒" % m.group(1) if m else "",
-                                                "；" + smsg if smsg else "", "；" + dmsg if dmsg else ""), warns, sextra)
+        return R(DONE, "%.1f 秒，%d 章%s%s%s%s" % (dur, len(media.get("chapters") or []), "，对齐中位误差 %s 秒" % m.group(1) if m else "",
+                                                  "；" + smsg if smsg else "", "；" + dmsg if dmsg else "", "；" + kmsg if kmsg else ""), warns, sextra)
 
 
 # ================================================================ 15 网页带视频再组装

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .common import (ROOT, PIPE, PY, VENV, CACHE, PLAYWRIGHT, PROFILE, TESTDIR, DEFAULT_LEDGER, SWITCH_FILE, tts_constants, read_json, rel,
                      motion_switch, director_switch, zh_wrap_switch, excerpt_photo_switch, bare_fix_switch, card_sync_switch,
-                     image_take_switch)
+                     image_take_switch, layout_guard_switch, layout_check_switch)
 from .ledger import Ledger
 
 OK, BAD, WARN = "✓ 好了", "✗ 缺了", "! 提醒"
@@ -269,6 +269,12 @@ class Doctor:
         ion, iwhy = image_take_switch()        # 11-21 加：配图收截图卡（原来只认环境变量 FD_VIDEO_IMAGE_TAKE）
         self.add(OK, "配图收截图卡（开关）", "%s（%s）%s" % ("开" if ion else "关", iwhy,
                                                 "：配图卡说到时，前一张原文截图卡收起、配图立在它的位置" if ion else "：截图卡留到下一块或章末"))
+        gon, gwhy = layout_guard_switch()      # 11-22 加：画面防叠压（默认关）
+        self.add(OK, "画面防叠压（开关）", "%s（%s）%s" % ("开" if gon else "关", gwhy,
+                                              "：分岔对照同侧小卡按前一张带不带图让开，压图对比卡放不下时收紧" if gon else "：小卡、对比卡按原来的位置和字号"))
+        kon, kwhy = layout_check_switch()      # 11-22 加：画面叠压检查（默认关；只提醒，不挡）
+        self.add(OK, "画面叠压检查（开关）", "%s（%s）%s" % ("开" if kon else "关", kwhy,
+                                               "：第 14 步成片后量卡片外框，叠压写进提醒和 logs/视频_叠压检查.json" if kon else "：第 14 步不量"))
         self.qc_switches()
 
     def qc_switches(self):

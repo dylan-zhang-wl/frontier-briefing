@@ -1008,6 +1008,12 @@ def build(issue, mp3, marks, dur, al, T, titles, narr, sb, cards, facts, pl=None
     # 开关关着时不写这个键
     if (sync or {}).get("cardsync") is not None:
         data["cardsync"] = True
+    # 11-22：画面防叠压（video3.js 读 layoutguard，见那边的 LG：分岔对照同侧小卡按前一张带不带图让开、压图对比卡放不下时收紧）。
+    # 开关关着时不写这个键，数据和加开关以前逐字节一样
+    gon, gwhy = SB.layout_guard_switch()
+    if gon:
+        data["layoutguard"] = True
+        say("  画面防叠压：开（%s）" % gwhy)
     js = "/* 视频 v3 场景数据 · %s · 由 site/tools/video3_build.py 生成，请勿手改 */\nwindow.FD_VIDEO3 = %s;\n" % (
         issue.name, json.dumps(data, ensure_ascii=False, separators=(",", ":")))
     (out / "data.js").write_text(js, encoding="utf-8")

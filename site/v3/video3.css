@@ -725,3 +725,24 @@
    开关关着时没有元素带这两个类，画面和以前逐像素一样 */
 .v3p .v3wb { word-break: keep-all; overflow-wrap: anywhere; }
 .v3p .v3wbn { word-break: normal; overflow-wrap: normal; }
+
+/* ---------- 11-22 画面防叠压（开关"画面防叠压"，组装数据写 layoutguard 时 video3.js 的 lgFit 才加这几个类）----------
+   压在配图上的对比卡高度按玻璃板写死，内容放不下（scrollHeight > clientHeight）时一级一级加（lgt1 → lgt1＋lgt2 → …），
+   放进内容区（底注离卡片下沿留出内边距）就停；放得下的卡一个类都不加。先收间距和大数字（大数字太宽、说明被挤到第二行是最常见的原因），
+   再收条和标题、底注。11-22 第 70.5 秒那张（"约 1.3 万亿美元"）到 lgt2 放下。开关关着时没有元素带这几个类 */
+.v3card.v3cp.ovp.lgt1 { gap: calc(.55 * var(--u)); }
+.v3card.v3cp.ovp.lgt1 .kpi .n { font-size: calc(4 * var(--u)); }
+.v3card.v3cp.ovp.lgt1 .kpi .sb { min-width: calc(9 * var(--u)); }
+.v3card.v3cp.ovp.lgt2 .kpi { row-gap: calc(.3 * var(--u)); }
+.v3card.v3cp.ovp.lgt2 .kpi .n { font-size: calc(3.5 * var(--u)); }
+.v3card.v3cp.ovp.lgt2 .bars { row-gap: calc(.55 * var(--u)); }
+.v3card.v3cp.ovp.lgt2 .bar i { height: calc(1.7 * var(--u)); }
+.v3card.v3cp.ovp.lgt3 .hd { font-size: calc(2 * var(--u)); }
+.v3card.v3cp.ovp.lgt3 > .sb { font-size: calc(1.35 * var(--u)); }
+.v3card.v3cp.ovp.lgt3 .kpi .n { font-size: calc(3.1 * var(--u)); }
+.v3card.v3cp.ovp.lgt3 .bar.wv.lv .v { font-size: calc(1.5 * var(--u)); }
+.v3card.v3cp.ovp.lgt3 .ft { font-size: calc(1.25 * var(--u)); }
+.v3card.v3cp.ovp.lgt4 { gap: calc(.35 * var(--u)); }
+.v3card.v3cp.ovp.lgt4 .bar { font-size: calc(1.3 * var(--u)); }
+.v3card.v3cp.ovp.lgt4 .bars { row-gap: calc(.4 * var(--u)); }
+.v3card.v3cp.ovp.lgt4 .kpi .n { font-size: calc(2.8 * var(--u)); }

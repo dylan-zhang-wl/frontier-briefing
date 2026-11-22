@@ -31,6 +31,16 @@
   // 带 shot 的 quote_card / post_card）开讲 2 秒以后时，截图卡到这时收起，配图立在截图卡原来的位置、填满这一镜（镜头不动）。
   // 只在组装数据写了 imgtake（环境变量 FD_VIDEO_IMAGE_TAKE=on）时起作用；没写时和改之前逐像素一样。
   var TAKE = false;
+  // 11-22（画面防叠压，fd_开关.json"画面防叠压"）：只在组装数据写了 layoutguard 时起作用；没写时和改之前逐像素一样。两处：
+  //   ① 分岔对照（TPL.split）同侧小卡：前一张带题图（约 203 像素高）、同侧后面还有卡时，下一张往后让开 LG_GAP_IMG
+  //      （原来一律 7.4，按纯文字小卡定的，第二张压在第一张的字上：11-12 第 115 秒、11-22 第 113–120 秒），
+  //      再按那一镜把它横向挪回和前一张对齐（离镜头近，透视下偏外约 40 像素）、参考距离按前一张折算（画面上一样大）；
+  //      带图那张更高（标题两行）或者竖屏时世界里让开的不够，每一帧再按画面像素查一遍，到位以后仍相交就往下挪（lgCols）。
+  //      同侧两张都带图时第二张不出题图，三四张时都不出题图（让开会进字幕带、出画）。别的情况（一张、前一张不带图）位置一点不变。
+  //   ② 压在配图上的对比卡（compare_panel 写了 photo）：卡片高度按玻璃板写死，内容放不下（按布局量的 scrollHeight > clientHeight）
+  //      才逐级加 .lgt1–.lgt4（间距、大数字、条收紧），收到内容放进内容区（底注离卡片下沿留出内边距）为止（lgFit）；
+  //      放得下的卡一个类都不加（11-17 至 11-20 那五张）。竖屏卡片高度本来就随内容走，不动。
+  var LG = false, LG_GAP_IMG = 18.5, LG_LV = ['lgt1', 'lgt2', 'lgt3', 'lgt4'];
   var clamp = function (v, a, b) { return Math.min(b, Math.max(a, v)); };
   var sat = function (u) { return clamp(u, 0, 1); };
   var lerp = function (a, b, u) { return a + (b - a) * u; };
@@ -735,6 +745,32 @@
         if (moved) { var t2 = 'translate3d(' + k.x.toFixed(1) + 'px,' + k.y.toFixed(1) + 'px,0) scale(' + k.s.toFixed(3) + ')'; if (t2 !== k.lb._s) { k.lb.el.style.transform = t2; k.lb._s = t2; } }
       }
     }
+    // 11-22（LG①）：分岔对照让开的那几张小卡（锚点在上沿中点），到位以后画面上仍和同侧前一张相交，就往下挪到前一张下沿以下 1.4u。
+    //   世界里按 LG_GAP_IMG 让开的，是按带图小卡约 203 像素高（标题一行）定的：11-12、11-22 横屏隔约 27 像素，这一步不动；
+    //   带图那张字多、更高（标题两行约 238 像素），或者竖屏（小卡按画面宽度放大），世界里让开的不够，靠这一步。
+    //   离自己的位置越近挪得越足（4 个世界单位以内渐渐挪足），飞进来、章末飞回去的半路不挪，免得被前一张推着走、一下跳回
+    if (LG && this.lgCols) {
+      var mg = 1.4 * (w < h ? 1.95 : 1) * w / 100;
+      this.lgCols.forEach(function (col) {
+        for (var m2 = 1; m2 < col.length; m2++) {
+          var kq = col[m2]; if (!kq._o || !kq.lgTo) continue;
+          var near = 1 - sat(kq.at.distanceTo(kq.lgTo) / 4); if (!near) continue;
+          var kw = (kq._bw || (kq._bw = kq.inEl.offsetWidth || 0)) * kq._sc, ky = kq._y;
+          for (var n2 = 0; n2 < m2; n2++) {
+            var jq = col[n2]; if (!jq._o) continue;
+            var jw = (jq._bw || (jq._bw = jq.inEl.offsetWidth || 0)) * jq._sc, jh = (jq._bh || (jq._bh = jq.inEl.offsetHeight || 0)) * jq._sc;
+            var ox2 = Math.min(jq._x + jw / 2, kq._x + kw / 2) - Math.max(jq._x - jw / 2, kq._x - kw / 2);
+            if (ox2 > 0 && jq._y + jh + mg > ky) ky = jq._y + jh + mg;
+          }
+          ky = kq._y + (ky - kq._y) * near;
+          if (ky !== kq._y) {
+            kq._y = ky;
+            var t3 = 'translate3d(' + kq._x.toFixed(1) + 'px,' + ky.toFixed(1) + 'px,0) scale(' + kq._sc.toFixed(3) + ')';
+            if (t3 !== kq._s) { kq.el.style.transform = t3; kq._s = t3; }
+          }
+        }
+      });
+    }
   };
   // 标签的“参考距离”：镜头在它那一镜（按当前画幅算出的位置）时，标签缩放正好是 1
   W.refLabels = function () {
@@ -747,9 +783,42 @@
         var portrait = sw < sh, wpx = lb.fitW * ppu, hpx = lb.fitH * ppu;
         if (portrait && !lb.tight) { var k = Math.max(1, sw * (lb.fitH ? 0.9 : 0.86) / wpx); wpx *= k; hpx = lb.fitH ? 0 : 0; if (ch && ch.classList.contains('v3machine-box')) hpx = wpx * 900 / 1600; }
         if (ch) { ch.style.width = wpx.toFixed(1) + 'px'; ch.style.height = hpx ? hpx.toFixed(1) + 'px' : ''; }
+        if (LG && lb.lgFit) lgFit(ch);      // 11-22：压图对比卡放不下才收紧（见文件头 LG②）
       }
     }
+    // 11-22（LG①）：分岔对照里往后让开的小卡离镜头近，按原来的参考距离会比同侧第一张大一圈；改成在那一镜里和第一张一样大
+    for (var j = 0; LG && j < this.L.length; j++) {
+      var q = this.L[j]; if (!q.lgRef || !q.shot) continue;
+      var cam = this.shotPos(q.shot); q.ref = q.lgRef.ref * q.lgTo.distanceTo(cam) / Math.max(1e-6, q.lgRef.lgTo.distanceTo(cam));
+    }
   };
+  // 11-22（LG②）：字体到位以后再量一次（第一次量时网页字体可能还没载入）。只碰标了 lgFit 的卡，别的标签不重算
+  W.lgRefit = function () {
+    for (var i = 0; i < this.L.length; i++) { var lb = this.L[i]; if (lb.lgFit) lgFit(lb.inEl.firstElementChild); }
+  };
+  // 先摘掉收紧的类再量（幂等）；高度没写死（竖屏）或放得下就到此为止，一个类都不加；放不下就一级一级加，放进内容区为止。
+  //   "放不下"＝最后一个子元素下沿比卡片内框（clientHeight）还低 1 像素以上，也就是不算动画位移的 scrollHeight > clientHeight：
+  //   按布局量（offsetTop），卡片数值跟着旁白出那几样还没出场时往下错开的 6 像素（csShow）、标签缩放都不算进去
+  function lgFit(ch) {
+    if (!ch) return;
+    for (var k = 0; k < LG_LV.length; k++) ch.classList.remove(LG_LV[k]);
+    if (!ch.style.height || lgSpan(ch)[1] <= ch.clientHeight + 1) return;
+    for (var j = 0; j < LG_LV.length; j++) { ch.classList.add(LG_LV[j]); if (lgFits(ch)) return; }
+  }
+  // 子元素上沿、下沿（布局像素，从卡片内框上沿量）
+  function lgSpan(ch) {
+    var kids = ch.children, top = Infinity, bot = -Infinity;
+    for (var i = 0; i < kids.length; i++) {
+      var e = kids[i], y = e.offsetTop - (e.offsetParent === ch ? 0 : ch.offsetTop + ch.clientTop);
+      top = Math.min(top, y); bot = Math.max(bot, y + e.offsetHeight);
+    }
+    return kids.length ? [top, bot] : [0, 0];
+  }
+  // 内容（第一个子元素上沿到最后一个子元素下沿）不比内容区（卡片内框高减上下内边距）高
+  function lgFits(ch) {
+    var sp = lgSpan(ch), cs = getComputedStyle(ch), box = ch.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    return sp[1] - sp[0] <= box + 0.5;
+  }
 
   /* ---------- 镜头：每一镜＝看向哪里、从哪个方向、要装下多大；位置按当前画幅现算 ---------- */
   W.shot = function (c, yaw, pitch, fw, fh, o) {
@@ -1693,6 +1762,7 @@
         (bars.length ? '<div class="bars' + (FX && hasV && !longV ? ' sg' : '') + '">' + bars.map(function (bar, i) { return '<div class="bar' + (bar.me ? ' me' : '') + (hasV ? ' wv' : '') + (longV ? ' lv' : '') + '"><span>' + esc(S2(bar.label, L)) + '</span><i data-bar="' + i + '"></i>' + (hasV ? '<b class="v">' + esc(S2(bar.val, L) || '') + '</b>' : '') + '</div>'; }).join('') + '</div>' : '') +
         (b.foot ? '<div class="ft v3acc" style="font-weight:600">' + esc(S2(b.foot, L)) + '</div>' : ''), ovp ? [7.4, 6.0] : undefined, ovp ? 'v3cp ovp' : undefined);
       b._.o.bars = bars;
+      if (LG && ovp) b._.o.lb.lgFit = true;      // 11-22：放不下才收紧（见文件头 LG②）
       // 卡片站在配图右半边，镜头对着整张图；11-08：配图中心从 −4.4 挪到 −3.9（卡片在画面里左移约 40 像素），原来卡片外框出右边
       if (ovp) { b._.shS = ovpBuild(this, b, FX ? -3.9 : -4.4, 18, 0.5); b._.o.lb.shot = b._.shS; }
     },
@@ -2188,6 +2258,30 @@
     explore: function (b) { return [2, b._.shA]; }
   };
 
+  // 11-22（LG①）分岔对照小卡的三个小工具。lgTiles：同侧三四张带图的都不出题图；两张都带图的第二张不出题图（按下面的间距让开，
+  //   第二张带图会进字幕带）。lgZ：同侧第 i 张的 z，前一张带图让开 LG_GAP_IMG、不带图照原来的 gap；没有"带图、后面还有卡"的返回 null。
+  //   lgX：z 处的小卡在这一镜里和 z0 处那张横向对齐要放在哪个 x（透视：画面横坐标＝镜头右方分量÷纵深，两者对 x 都是一次式）
+  function lgTiles(items) {
+    var strip = function (it) { var o = {}; for (var k in it) if (k !== 'img') o[k] = it[k]; return o; };
+    var has = items.some(function (it) { return it.img; });
+    if (items.length >= 3 && has) return items.map(function (it) { return it.img ? strip(it) : it; });
+    if (items.length === 2 && items[0].img && items[1].img) return [items[0], strip(items[1])];
+    return items;
+  }
+  function lgZ(items, gap) {
+    if (!items.some(function (it, i) { return it.img && i < items.length - 1; })) return null;
+    var z = [], at = -9.5;
+    items.forEach(function (it) { z.push(at); at += it.img ? LG_GAP_IMG : gap; });
+    return z;
+  }
+  function lgX(self, sh, x0, y, z0, z) {
+    var cam = self.shotPos(sh), f = self.shotC(sh).clone().sub(cam).normalize(), r = new THREE.Vector3().crossVectors(f, V3(0, 1, 0)).normalize();
+    var uv = function (x, zz) { var d = V3(x, y, zz).sub(cam); return [d.dot(r), d.dot(f)]; };
+    var a = uv(x0, z0), k = a[0] / a[1], p0 = uv(0, z), p1 = uv(1, z);
+    var den = (p1[0] - p0[0]) - k * (p1[1] - p0[1]);
+    return Math.abs(den) < 1e-9 ? x0 : (k * p0[1] - p0[0]) / den;
+  }
+
   /* ---- 国内外：地图沿中缝对折，卡片从各自那一片飞到两边 ----
    * 11-06 晚补：两边的小卡可带一张题图 image（卡片上半截，和时间轴小图同样从网页图或视频图里备；没写就和原来一样只有字）；
    *   两边标题的 logos 原来就能挂（标题在 left/right 触发词出现）。 */
@@ -2200,6 +2294,7 @@
       C.hIntl = this.label('<div class="v3side">' + esc(S2(lt.head, L) || (L === 'en' ? 'World' : '国外')) + (lt.tag ? '<small>' + esc(S2(lt.tag, L)) + '</small>' : '') + sideLg(lt) + '</div>', { obj: this.left, at: V3(-15, 7, -16), shot: sh, align: 'b', keep: true });
       C.hCn = this.label('<div class="v3side">' + esc(S2(rt.head, L) || (L === 'en' ? 'China' : '国内')) + (rt.tag ? '<small>' + esc(S2(rt.tag, L)) + '</small>' : '') + sideLg(rt) + '</div>', { obj: this.right, at: V3(22, 7, -16), shot: sh, align: 'b', keep: true });
       var li = (b.left_items || []).slice(0, 4), ri = (b.right_items || []).slice(0, 4);
+      if (LG) { li = lgTiles(li); ri = lgTiles(ri); }      // 11-22：会叠的那几种不出题图（见文件头 LG①）
       var gapL = li.length >= 4 ? 6.2 : 7.4, gapR = ri.length >= 4 ? 6.2 : 7.4;
       var tile = function (it) {        // 小卡：可带题图（11-06 晚补），图在上、字在下
         var ph = it.img ? imgUrl(P, it.img) : null;
@@ -2210,13 +2305,22 @@
       //   （只有一两张卡时；卡多了间距本来就紧，不挪；video3.css 里竖屏的带图小卡也收窄、图压扁一点）
       var imgL = li.length <= 2 && li.some(function (it) { return it.img; }), imgR = ri.length <= 2 && ri.some(function (it) { return it.img; });
       var yL = imgL ? 4.6 : 4, yR = imgR ? 4.6 : 4;
+      // 11-22（LG①）：前一张带图、后面还有卡的那一侧，第 i 张按累加的间距放、横向挪回和第一张对齐；用不着让的照原来的式子
+      var zL = LG ? lgZ(li, gapL) : null, zR = LG ? lgZ(ri, gapR) : null;
+      var lgAt = function (x0, y, zs, i, gap) { return (zs && i && zs[i] !== -9.5 + i * gap) ? V3(lgX(self, sh, x0, y, zs[0], zs[i]), y, zs[i]) : V3(x0, y, -9.5 + i * gap); };
       C.tl = li.map(function (it, i) {
-        return { lb: self.label(tile(it), { at: V3(-15, yL, -9.5 + i * gapL), shot: sh, align: imgL ? 't' : '' }),
-          to: V3(-15, yL, -9.5 + i * gapL), from: src(it.from), side: -1, logos: it.logos };
+        return { lb: self.label(tile(it), { at: lgAt(-15, yL, zL, i, gapL), shot: sh, align: imgL ? 't' : '' }),
+          to: lgAt(-15, yL, zL, i, gapL), from: src(it.from), side: -1, logos: it.logos };
       });
       C.tr = ri.map(function (it, i) {
-        return { lb: self.label(tile(it), { at: V3(22, yR, -9.5 + i * gapR), shot: sh, align: imgR ? 't' : '' }),
-          to: V3(22, yR, -9.5 + i * gapR), from: src(it.from), side: 1, logos: it.logos };
+        return { lb: self.label(tile(it), { at: lgAt(22, yR, zR, i, gapR), shot: sh, align: imgR ? 't' : '' }),
+          to: lgAt(22, yR, zR, i, gapR), from: src(it.from), side: 1, logos: it.logos };
+      });
+      [[C.tl, zL, gapL], [C.tr, zR, gapR]].forEach(function (sd) {      // 11-22（LG①）：让开的那几张记下跟谁一样大（refLabels 用）、
+        var qs = sd[0], zs = sd[1];                                       //   同侧这一列在画面上再查一遍相交（updateLabels 用）
+        if (!zs) return;
+        qs.forEach(function (q, i) { if (i && zs[i] !== -9.5 + i * sd[2]) { q.lb.lgRef = qs[0].lb; q.lb.lgTo = q.to; qs[0].lb.lgTo = qs[0].to; } });
+        (self.lgCols = self.lgCols || []).push(qs.map(function (q) { return q.lb; }));
       });
       C.seamGlow = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 84), new THREE.MeshBasicMaterial({ map: this.glowTex, color: this.pal.acc.clone().multiplyScalar(this.pal.dark ? 2.2 : 0.85), transparent: true, opacity: 0, depthWrite: false,
         blending: this.pal.dark ? THREE.AdditiveBlending : THREE.NormalBlending }));
@@ -3113,6 +3217,7 @@
     this.scenes = this.chapters.map(function (c) { return { start: c.start, end: c.end }; }); // app.js 的“看这一段”按它跳
     this.cues = this.v.cues || [];
     CS = !!this.v.cardsync;              // 11-21：卡片数值跟着旁白出（见 OVP_Z 上面 CS 的说明）
+    LG = !!this.v.layoutguard;           // 11-22：画面防叠压（见文件头 LG）
     this.duration = +this.v.duration || 1;
     this.t = 0; this.base = 0; this.at = 0; this.playing = false; this.started = false; this.ended = false;
     this.cc = this.store('fd.video.cc', '1') !== '0';
@@ -3285,6 +3390,11 @@
     this.watchVisible();
     this.syncUI();
     this.render(true);
+    if (LG && document.fonts) {          // 11-22（LG②）：网页字体载入以后，压图对比卡再量一次放不放得下
+      var self = this, w0 = this.world, re = function () { if (self.world === w0) w0.lgRefit(); };
+      if (document.fonts.ready) document.fonts.ready.then(re);
+      if (document.fonts.addEventListener) document.fonts.addEventListener('loadingdone', re);
+    }
     return true;
   };
   // 按正确顺序初始化：渲染器 → 镜头定义 → 搭场景 → 后期

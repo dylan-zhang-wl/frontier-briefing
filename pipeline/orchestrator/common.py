@@ -305,6 +305,25 @@ def image_take_switch():
     return _switch_off_default("FD_VIDEO_IMAGE_TAKE", IMAGE_TAKE_KEY)
 
 
+# ---------------------------------------------------------------- 画面防叠压、画面叠压检查（2026-11-22 加）
+# 画面防叠压（FD_LAYOUT_GUARD）：分岔对照同侧小卡按前一张带不带图让开、压图对比卡放不下时收紧（site/v3/video3.js 的 LG）。
+#   site/tools/video3_storyboard.py 的 layout_guard_switch 是同一套规则，两边要一起改。默认关；关着时视频和加开关以前逐像素一样。
+# 画面叠压检查（FD_LAYOUT_CHECK）：第 14 步成片就位以后另开一页量卡片外框（site/tools/video3_overlap.mjs），
+#   写 logs/视频_叠压检查.json、第 14 步提醒一行、自检.md 一行；只提醒，不挡、不进导演"必须改"。默认关；关着时不跑，什么都不变。
+LAYOUT_GUARD_KEY = "画面防叠压"
+LAYOUT_CHECK_KEY = "画面叠压检查"
+
+
+def layout_guard_switch():
+    """画面防叠压。返回 (开着没有, 从哪来的一句话)。默认关。"""
+    return _switch_off_default("FD_LAYOUT_GUARD", LAYOUT_GUARD_KEY)
+
+
+def layout_check_switch():
+    """画面叠压检查。返回 (开着没有, 从哪来的一句话)。默认关。"""
+    return _switch_off_default("FD_LAYOUT_CHECK", LAYOUT_CHECK_KEY)
+
+
 # ---------------------------------------------------------------- 视频开关（2026-11-17 加，feat/mimo-fallback 分支；第 10–17 步 feat/mimo-release 分支）
 # 开（默认）：和加开关以前一样，第 6 步要三份稿子（播客、网页、视频分镜），第 7、9 步查分镜，第 10–17 步照旧。
 # 关：这一期不出视频——第 6 步只要播客和网页两份；第 7 步（和第 9 步改后复查）不跑分镜检查（helpers.py storyboard），

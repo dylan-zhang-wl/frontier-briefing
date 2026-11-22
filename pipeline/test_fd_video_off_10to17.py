@@ -277,16 +277,17 @@ class Fingerprints(unittest.TestCase):
         c = FakeCtx("/nonexistent/2026-11-16")
         with Env(None), mock.patch.dict(os.environ, {}, clear=False):
             for k in ("FD_MOTION", "FD_DIRECTOR", "FD_DIRECTOR_NARRATION", "FD_VIDEO_ZH_WRAP", "FD_EXCERPT_PHOTO", "FD_BARE_FIX", "FD_CARD_SYNC",
-                      "FD_VIDEO_IMAGE_TAKE"):
+                      "FD_VIDEO_IMAGE_TAKE", "FD_LAYOUT_GUARD"):
                 os.environ.pop(k, None)
             # 11-21 合并加"=摘录卡压图="（网页／视频那一路 11-15 加的开关）：这里 fd_开关.json 换成了不存在的文件，摘录卡开关按"关"，
             # 所以是"=摘录卡压图=关"；视频开关开着时这一列表和只合了网页／视频那一路时一字不差，后面不多"=视频="
             # 11-21 画面那一路加"=空档补图=""=卡片数值跟旁白="：两个开关默认关，关着记空字符串（往期不因此重做）
             # 11-21 同日"配图收截图卡"接进 fd_开关.json，加"=配图收截图卡="，同样关着记空字符串
+            # 11-22 加"=画面防叠压="，同样关着记空字符串（"画面叠压检查"只量、不改成片，不进指纹）
             self.assertEqual(steps.Video().inputs(c), [common.STORYBOARD, "05_配音/视频旁白_v3/voice.json", common.CARDS,
                                                        "@step:web", "=新动效=", "=视频导演=", "=导演旁白=", "=中文整词换行=",
                                                        "=摘录卡压图=关", "=空档补图=", "=卡片数值跟旁白=",
-                                                       "=配图收截图卡="])
+                                                       "=配图收截图卡=", "=画面防叠压="])
             self.assertEqual(steps.Web2().inputs(c), ["@step:web", "11_视频v3/video3_media.json"])
 
 
