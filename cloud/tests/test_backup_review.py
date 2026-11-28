@@ -208,6 +208,13 @@ class NameTone(unittest.TestCase):
             with mock.patch.dict(os.environ, {"FD_REVIEW_NAME_TONE": "off"}):
                 by = {x["原稿"]: x for x in BR.listen_material(BR.Issue(DAY, d))["处"]}
             self.assertEqual(by["振"]["程序分拣"], BR.LISTEN_ASR)     # 关掉：和以前一样
+            # 配音复核两个新模型都听成原稿：B2 算转写毛病，不再按声调另判
+            b = human["各块"][0]
+            b["各条"][1]["复核"] = [{"原稿": "李振东", "SenseVoice": "李振东", "Paraformer": "李振东", "判": "转写听错"}]
+            wj(d / "05_配音/播客_v3/qc.json", human)
+            by = {x["原稿"]: x for x in BR.listen_material(BR.Issue(DAY, d))["处"]}
+            self.assertEqual(by["振"]["程序分拣"], BR.LISTEN_ASR)
+            self.assertIsNone(by["振"]["最低判断"])
 
 
 class CheckPlan(unittest.TestCase):

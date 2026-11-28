@@ -544,6 +544,8 @@ def listen_material(iss):
         ops = Q.align(ref, hyp)
         runs = runs_at(ops)
         spans = name_spans(ref, names)
+        # 配音复核两个新模型都听成原稿（判"转写听错"）的名字，B2 算转写毛病，这里不再按声调另判
+        heard = [str(x.get("原稿") or "") for x in t.get("复核") or [] if isinstance(x, dict) and x.get("判") == "转写听错"]
         stored = [(d.get("原稿"), d.get("转写")) for d in t.get("差异") or []]
         exact = [(r["原稿"], r["转写"]) for r in runs] == stored
         start, dur = float(b.get("开始秒") or 0), float(b.get("秒数") or 0)
@@ -562,7 +564,7 @@ def listen_material(iss):
                 spaces += 1               # 只差空格（英文词连写、分写）：归一化的毛病，不算对不上
                 continue
             k += 1
-            hit = [nm for s0, s1, nm in spans if s0 < r["i"] + max(1, r["n"]) and s1 > r["i"]]
+            hit = [nm for s0, s1, nm in spans if s0 < r["i"] + max(1, r["n"]) and s1 > r["i"] and not any(nm in h for h in heard)]
             parts, floor, guess = analyse(r["原稿"], r["转写"], reminders, hit)
             wa, wb = window(ops, r["i"])
             out.append({"编号": "P%02d-%d" % (int(b.get("块") or 0), k), "块": b.get("块"), "秒": round(at(r["i"]), 1),
