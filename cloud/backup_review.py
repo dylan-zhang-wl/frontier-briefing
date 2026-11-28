@@ -15,6 +15,8 @@
             listen_pinyin 的结果）、每日审片.md 的 B2 一节、读音表和专名读音清单里这一期用到的条目、清单第 25、54 项原文。
             位置由程序算（混音版时间：那一章在混音版里的开始秒＋块在人声版里离章首的秒数＋按字数比例算的块内秒数），
             不让 MiMo 算。程序再按 B2 第 3 步复核：数字不同、中文不同音、中文转成了字母的，判断至少是"多半真念错"。
+            11-28 加（经验库第 90 件，已定规矩"人名只差声调要算"）：差异落在人名上、不带声调的拼音一样、带声调不同的
+            （黄仁勋→黄仁荀），也照第 3 步算，不算同音字（tone_names、name_tone_pairs）。环境变量 FD_REVIEW_NAME_TONE=off 退回原来的判法。
   调用 B    清单里要读稿子、日志来判断的几项（第 6、7、8、10、13、14 播客那半、18、41、43、44；周末另加 9、17）。
   调用 C    第 11 项"人名、头衔在原文里"：对着事件卡逐个查。MiMo 摘的卡里原文，程序逐字核在不在卡里。
   不看图    第 20、21、58 项（周末另加 42）记"查不了：MiMo 审片这一项不看图"。
@@ -227,6 +229,99 @@ def names_used(text, path=NAMES):
     return [e for e in (yaml_load(path).get("名字") or []) if isinstance(e, dict) and any(appears(f, text) for f in forms(e))]
 
 
+def _card_strings(obj):
+    """事件卡里的中文字段（英文那几栏、url、id 不看）。"""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if not str(k).endswith("_en") and k not in ("url", "id", "source_id", "event_id", "date", "type"):
+                yield from _card_strings(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from _card_strings(v)
+    elif isinstance(obj, str) and HAN.search(obj):
+        yield obj
+
+
+# 常见姓（百家姓里人口最多的一百来个，外加崔、卢、鲍这类前几期出现过的）：事件卡里 jieba 标成人名（nr）的词，
+# 第一个字是这里的才收（11-28 加）。jieba 的 nr 很杂（"塞进""吉瓦""分析师"都被标过），只靠它会把普通词的同音字当成人名。
+SURNAMES = set("王李张刘陈杨黄赵吴周徐孙马朱胡郭何高林罗郑梁谢宋唐许韩冯邓曹彭曾肖田董袁潘于蒋蔡余杜叶程苏魏吕丁任沈"
+               "姚卢姜崔钟谭陆汪范金石廖贾夏韦付方邹孟熊秦邱江尹薛闫段雷侯龙史陶黎贺顾毛郝龚邵万钱严覃武戴莫孔向汤"
+               "常温康施文牛樊葛邢安齐易乔伍庞颜倪庄聂章鲁岳翟殷詹申欧耿关兰焦俞左柳甘祝包宁尚舒阮柯纪梅童凌毕裴霍"
+               "涂苗盛翁冉骆蓝路游辛靳管柴蒙鲍喻祁蒲房滕屈饶解艾尤穆司卓缪简车项连麦褚娄窦戚岑景宫费卜冷晏席卫柏"
+               "宗瞿桂佟臧闵苟邬卞姬仇栾隋商刁荣巫寇桑郎甄仲虞敖巩佘池查麻苑迟邝")
+
+
+ORG_TAIL = set("社局部院所会厅署委网报")    # "彭博社"也被 jieba 标成人名：机构的尾字不收
+
+
+def _person_like(w):
+    return bool(re.fullmatch(r"[㐀-鿿]{2,4}", w)) and w[0] in SURNAMES and w[-1] not in ORG_TAIL
+
+
+def card_people(cards):
+    """事件卡里像人名的中文名字（11-28 加）：who_said 的"who"括号前那截（按"·"拆开）、卡里中文字段被 jieba 标成人名（nr）的词
+    （11-22 的崔教振只在卡的正文里，不在 who_said）。都要像人名（_person_like：两到四个汉字、第一个字是常见姓、尾字不是机构字），
+    还不能是 jieba 词典里常见的词（词频 100 以上：陈述、顾问、高峰这类被 jieba 标过人名的）；卡里写着"彭博社"的，
+    "彭博"是机构名的前半截，也不收。jieba 没装或坏了返回空（只用读音表和专名读音清单）。"""
+    cards = [c for c in cards or [] if isinstance(c, dict)]
+    texts = list(_card_strings(cards))
+    try:
+        import jieba
+        import jieba.posseg as pseg
+        jieba.setLogLevel(60)
+        got = {w for t in texts for w, f in pseg.cut(t) if f == "nr"}
+        freq = jieba.dt.FREQ
+    except Exception:  # noqa: BLE001  jieba 坏了不能让审片停下
+        return set()
+    for c in cards:
+        for w in c.get("who_said") or []:
+            who = re.split(r"[（(]", str(w.get("who") or ""), 1)[0] if isinstance(w, dict) else ""
+            got |= set(re.split(r"[·・•\s]", who))
+    blob = "\n".join(texts)
+    return {w for w in got if _person_like(w) and (freq.get(w) or 0) < 100 and not any(w + t in blob for t in ORG_TAIL)}
+
+
+def tone_names(cards=(), names_path=NAMES, lexicon_path=LEXICON):
+    """只差声调也算的名字（11-28 加，经验库第 90 件）：读音表"人名"、专名读音清单里整个用汉字写的名字（和配音复核同一份，
+    tts_qc.load_tone_names），加上事件卡里像人名的中文名字（card_people）。
+    认错的代价只是那几个字只差声调时多一行"多半真念错"；不像人名的外国译名（科莱特）要进读音表"人名"才算。
+    FD_REVIEW_NAME_TONE=off 时返回 []（退回原来的判法）。"""
+    if os.environ.get("FD_REVIEW_NAME_TONE", "").strip().lower() in ("off", "0", "关"):
+        return []
+    found = set(Q.load_tone_names(names_path, lexicon_path)) | card_people(cards)
+    return sorted({f for f in found if re.fullmatch(r"[㐀-鿿]{2,4}", f)}, key=lambda f: (-len(f), f))
+
+
+def name_spans(ref, names):
+    """原稿 token 里每个名字出现在哪：[(起, 止, 名字)]，长的名字先占，不重叠。"""
+    out, taken = [], set()
+    for nm in names:
+        L = list(nm)
+        for k in range(len(ref) - len(L) + 1):
+            if ref[k:k + len(L)] == L and not taken & set(range(k, k + len(L))):
+                out.append((k, k + len(L), nm))
+                taken |= set(range(k, k + len(L)))
+    return out
+
+
+def name_tone_pairs(han_a, han_b, names):
+    """名字里只差声调的字：[(名字, 原稿字, 转写字)]。原稿字按这个名字整体的读法（pypinyin 不开多音字，按词选读音），
+    转写字看它所有读音：原稿读音不在里面才算声调不同（"振"zhèn 多音字里也有 zhēn，开多音字比会把"崔教振→崔教真"当同音）。
+    调用的一方已经确认不带声调的拼音一样、字数相同。"""
+    if not names or LP.pinyin is None:
+        return []
+    from pypinyin import Style
+    read = {}
+    for nm in names:
+        for ch, py in zip(nm, LP.pinyin(nm, style=Style.TONE3)):
+            read.setdefault(ch, (nm, py[0]))
+    out = []
+    for ca, cb in zip(han_a, han_b):
+        if ca != cb and ca in read and read[ca][1] not in LP.pinyin(cb, style=Style.TONE3, heteronym=True)[0]:
+            out.append((read[ca][0], ca, cb))
+    return out
+
+
 def dump_yaml(obj):
     import yaml
     return yaml.safe_dump(obj, allow_unicode=True, sort_keys=False, width=200).strip()
@@ -304,7 +399,7 @@ def runs_at(ops, gap=Q.RUN_GAP):
             i += 1
     if cur is not None:
         runs.append(cur)
-    return [{"原稿": Q._join(x["ref"]), "转写": Q._join(x["hyp"]), "i": x["i"]} for x in runs]
+    return [{"原稿": Q._join(x["ref"]), "转写": Q._join(x["hyp"]), "i": x["i"], "n": len(x["ref"])} for x in runs]
 
 
 def window(ops, ref_i, before=10, after=10):
@@ -324,9 +419,10 @@ def window(ops, ref_i, before=10, after=10):
 HAN = re.compile(r"[㐀-鿿]")
 
 
-def analyse(a, b, reminders=()):
+def analyse(a, b, reminders=(), names=()):
     """一处差异按 B2 拆开看。返回 (各部分的说法, 程序定的最低判断或 None, 程序自己分拣时的判断)。
-    reminders：专名读音清单里标"只提醒"的 (写法, 已知误读) 对，算转写惯常写法。"""
+    reminders：专名读音清单里标"只提醒"的 (写法, 已知误读) 对，算转写惯常写法。
+    names：这处差异落在上面的名字（tone_names 里的；11-28 加）。名字里的字不带声调一样、带声调不同，不算同音字，照第 3 步算。"""
     han_a, han_b = "".join(HAN.findall(a)), "".join(HAN.findall(b))
     lat_a, lat_b = re.findall(r"[a-z]+", a.lower()), re.findall(r"[a-z]+", b.lower())
     dig_a, dig_b = re.findall(r"[\d.%]+", a), re.findall(r"[\d.%]+", b)
@@ -335,7 +431,12 @@ def analyse(a, b, reminders=()):
         real.append("数字或数字字不同（归一化以后 %s→%s）" % ("".join(dig_a) or "无", "".join(dig_b) or "无"))
     if han_a != han_b:
         if han_a and han_b and LP.same_toneless(han_a, han_b):
-            asr.append("中文同音（不带声调的拼音一样）")
+            tone = name_tone_pairs(han_a, han_b, names)
+            if tone:
+                real.append("人名只差声调（%s；已定规矩：人名只差声调要算）" % "、".join(
+                    "“%s”%s→%s" % (nm, x, y) for nm, x, y in tone))
+            else:
+                asr.append("中文同音（不带声调的拼音一样）")
         elif han_a and lat_b and not han_b:
             real.append("中文转成了字母")
         elif han_a and han_b:
@@ -428,6 +529,7 @@ def listen_material(iss):
         first.setdefault(b.get("章"), float(b.get("开始秒") or 0))
     reminders = [(f, m) for e in (yaml_load(NAMES).get("名字") or []) if e.get("只提醒")
                  for f in forms(e) for m in e.get("已知误读") or []]
+    names = tone_names(read_json(iss.p("03_事件卡/cards_写稿用.json"), []) or [])
     out, blocks, spaces, unread = [], [], 0, []
     for b in rows:
         takes = [x for x in b.get("各条") or [] if isinstance(x, dict) and x.get("第几条") == b.get("选用第几条")]
@@ -441,6 +543,7 @@ def listen_material(iss):
         ref, hyp = Q.tokens(b.get("原稿") or ""), Q.tokens(t.get("转写") or "")
         ops = Q.align(ref, hyp)
         runs = runs_at(ops)
+        spans = name_spans(ref, names)
         stored = [(d.get("原稿"), d.get("转写")) for d in t.get("差异") or []]
         exact = [(r["原稿"], r["转写"]) for r in runs] == stored
         start, dur = float(b.get("开始秒") or 0), float(b.get("秒数") or 0)
@@ -459,7 +562,8 @@ def listen_material(iss):
                 spaces += 1               # 只差空格（英文词连写、分写）：归一化的毛病，不算对不上
                 continue
             k += 1
-            parts, floor, guess = analyse(r["原稿"], r["转写"], reminders)
+            hit = [nm for s0, s1, nm in spans if s0 < r["i"] + max(1, r["n"]) and s1 > r["i"]]
+            parts, floor, guess = analyse(r["原稿"], r["转写"], reminders, hit)
             wa, wb = window(ops, r["i"])
             out.append({"编号": "P%02d-%d" % (int(b.get("块") or 0), k), "块": b.get("块"), "秒": round(at(r["i"]), 1),
                         "位置": "播客 " + mmss(at(r["i"])), "原稿": r["原稿"], "转写": r["转写"],
@@ -889,7 +993,7 @@ def task_a(iss, lm, script, resp):
            "所以 B2 第 2 步“另一次转写在这里对上了”这一条这次用不上。同一块里别的“条”是另一段录音，不是另一次转写。",
            "- 程序已经把差异逐处列好，每处有编号、位置（%s，按字数比例估的，误差几秒）、原稿片段、转写片段、前后文（都是归一化以后的写法："
            "小写、去标点空格、中文数字写成阿拉伯数字），还有 pipeline/listen_pinyin.py 的结果和程序按 B2 拆开看的说法。位置不用你写。" % lm["时间"],
-           "- 程序会按 B2 第 3 步复核：数字不同、中文不同音、中文转成了字母的，判断至少是“多半真念错”。",
+           "- 程序会按 B2 第 3 步复核：数字不同、中文不同音、人名只差声调、中文转成了字母的，判断至少是“多半真念错”。",
            "",
            "# 每一块的原稿、转写和差异"]
     for b in lm["块"]:
@@ -966,7 +1070,8 @@ class Caller:
 
 # ---------------------------------------------------------------- 把 MiMo 的回答收拢
 def fact_guess(d):
-    return bool(re.search(r"[a-z\d]", (d["原稿"] + d["转写"]).lower()))
+    return bool(re.search(r"[a-z\d]", (d["原稿"] + d["转写"]).lower())) or any(
+        str(p).startswith("人名只差声调") for p in d.get("程序拆开看") or [])
 
 
 def merge_listen(lm, reply, raw, script_text):
@@ -995,7 +1100,7 @@ def merge_listen(lm, reply, raw, script_text):
             items.append(make_item(by, keep, j, str(x.get("依据") or "").strip(), fact, quote, "MiMo", j))
         for i in low:
             notes.append("%s：MiMo 判“%s”，程序按 B2 第 3 步（%s）改成“多半真念错”" % (i, j, "；".join(by[i]["程序拆开看"])))
-            why = "；".join(p for p in by[i]["程序拆开看"] if p.startswith(("数字", "中文不同音", "中文转成", "原稿的中文少")))
+            why = "；".join(p for p in by[i]["程序拆开看"] if p.startswith(("数字", "中文不同音", "人名只差声调", "中文转成", "原稿的中文少")))
             items.append(make_item(by, [i], LISTEN_REAL, "程序按 B2 第 3 步：" + why, fact_guess(by[i]), "", "程序复核", j))
     for i, d in by.items():
         if i not in used:

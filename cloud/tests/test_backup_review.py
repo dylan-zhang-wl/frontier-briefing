@@ -165,6 +165,51 @@ class Material(unittest.TestCase):
             self.assertEqual(lm["时间"], "混音版（网页上播的那一版）")
 
 
+class NameTone(unittest.TestCase):
+    """11-28 加（经验库第 90 件，已定规矩"人名只差声调要算"）：名字里的字不带声调一样、带声调不同，照 B2 第 3 步算；
+    普通词、同音同调的名字照旧算同音字。名字全是自造的。"""
+
+    def test_analyse(self):
+        parts, floor, guess = BR.analyse("振", "真", (), ["李振东"])                 # zhèn→zhēn："振"多音字里也有 zhēn，要按名字的读法比
+        self.assertEqual((floor, guess), (BR.LISTEN_REAL, BR.LISTEN_REAL))
+        self.assertTrue(parts[0].startswith("人名只差声调"))
+        self.assertEqual(BR.analyse("振", "真")[1:], (None, BR.LISTEN_ASR))           # 不在名字上：照旧算同音字
+        self.assertEqual(BR.analyse("冰", "兵", (), ["刘冰"])[1:], (None, BR.LISTEN_ASR))   # 同音同调（bīng）：转写选错字
+        self.assertEqual(BR.analyse("冰", "斌", (), ["刘冰"])[1:], (BR.LISTEN_REAL, BR.LISTEN_REAL))  # 韵母不同：本来就算
+        self.assertEqual(BR.analyse("会话", "绘画", (), ["刘冰"])[1:], (None, BR.LISTEN_ASR))  # 名字不含这几个字
+
+    def test_card_people(self):
+        cards = [{"event_id": "E001", "title_zh": "示例国的部长李振东宣布辞职。", "title_en": "Minister Li resigns",
+                  "facts": [{"text_zh": "据彭博社报道，分析师说了话", "quote": "高峰时段陈述了意见"}],
+                  "who_said": [{"who": "某研究所 分析师"}, {"who": "唐纳德·示例（示例国总统）"}]}]
+        got = BR.card_people(cards)
+        self.assertIn("李振东", got)                       # 只在正文里、不在 who_said 的人名
+        self.assertIn("唐纳德", got)                       # who_said 按"·"拆开
+        for w in ("分析师", "彭博社", "彭博", "高峰", "陈述"):
+            self.assertNotIn(w, got)
+        with mock.patch.dict(os.environ, {"FD_REVIEW_NAME_TONE": "off"}):
+            self.assertEqual(BR.tone_names(cards), [])
+        self.assertIn("李振东", BR.tone_names(cards))
+
+    def test_material(self):
+        ref, hyp = "示例国的部长李振东宣布辞职。会话也同样。", "示例国的部长李真东宣布辞职会画也同样"
+        cards = [{"event_id": "E001", "title_zh": "部长李振东辞职", "facts": [{"text_zh": "示例国的部长李振东宣布辞职。"}]}]
+        with tempfile.TemporaryDirectory() as t:
+            d = make_issue(t)
+            wj(d / "03_事件卡/cards_写稿用.json", cards)
+            human = json.loads((d / "05_配音/播客_v3/qc.json").read_text(encoding="utf-8"))
+            human["各块"] = [qc_block(1, "开场", 0.0, 10.0, ref, hyp)]
+            wj(d / "05_配音/播客_v3/qc.json", human)
+            by = {x["原稿"]: x for x in BR.listen_material(BR.Issue(DAY, d))["处"]}
+            self.assertEqual(by["振"]["程序分拣"], BR.LISTEN_REAL)
+            self.assertEqual(by["振"]["最低判断"], BR.LISTEN_REAL)
+            self.assertTrue(BR.fact_guess(by["振"]))                  # 人名：关乎事实
+            self.assertEqual(by["话"]["程序分拣"], BR.LISTEN_ASR)     # 普通词只差声调：照旧
+            with mock.patch.dict(os.environ, {"FD_REVIEW_NAME_TONE": "off"}):
+                by = {x["原稿"]: x for x in BR.listen_material(BR.Issue(DAY, d))["处"]}
+            self.assertEqual(by["振"]["程序分拣"], BR.LISTEN_ASR)     # 关掉：和以前一样
+
+
 class CheckPlan(unittest.TestCase):
     def test_real_checklist_matches_plan(self):
         rows, common = BR.checklist()
