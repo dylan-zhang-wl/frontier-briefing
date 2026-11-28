@@ -1418,8 +1418,27 @@ class Video(Step):
                             back.append("%s 第 %d 个日子的 shot" % (where, k + 1))
         return (n, ok, back) if n else None
 
+    def engine_why(self, c):
+        """第 14 步配视频旁白（组装时旁白对不上要重配、导演重配旁白）用哪个声音：(引擎, 为什么)。
+        原来只看第 11 步记的"视频引擎"。11-28 补（经验库第 100 件，11-22 运行 45023502009）：云端测试 gemini=off 从第 14 步
+        接着跑，第 11 步的记录来自那天早上用 Gemini 的正式运行，这里组装预算又是 $0，旁白一要重配就 BudgetExceeded，
+        没有像第 11 步那样改走备用。现在和第 11 步（Voice.decide）一样，命令行 --use-backup 就用 MiMo 备用；另外，这一期根本
+        没有视频旁白的人声（voice.json 或各章 wav 不在）、又不是离线时也用备用——这里 Gemini 预算是 $0，配不了，整段重配
+        也不会一段 Gemini 一段 MiMo。第 11 步用 Gemini 配好了旁白的正式运行不变（月度过 90% 也不在这里半路换声音）。"""
+        st11 = c.state.step("voice") or {}
+        rec = (st11.get("附加") or {}).get("视频引擎") or "gemini"
+        if rec == "mimo":
+            return "mimo", "第 11 步视频旁白用的是 MiMo 备用"
+        if getattr(c, "force_backup", False):
+            return "mimo", "命令行要求用备用（--use-backup）"
+        vdir = c.p(VIDEO_VOICE)      # 只在第 11 步记着"做完"时看（还没配音时的 --dry-run 计划照旧）
+        if st11.get("状态") == DONE and not c.offline and not (
+                (vdir / "voice.json").exists() and any((vdir / "chapters").glob("*.wav"))):
+            return "mimo", "这一期没有视频旁白的人声（%s 里没有 voice.json 或各章 wav），第 14 步 Gemini 预算是 $0，改走备用" % VIDEO_VOICE
+        return rec, ""
+
     def engine(self, c):
-        return ((c.state.step("voice") or {}).get("附加") or {}).get("视频引擎") or "gemini"
+        return self.engine_why(c)[0]
 
     def command(self, c):
         return c.py(TOOLS / "video3_build.py", c.issue, "--no-gen", "--budget-usd", "0",
@@ -1618,6 +1637,10 @@ class Video(Step):
         if v.get("视频旁白") == "没配成":
             return R(SKIPPED, "视频旁白没配成，这一期不出视频", go_on=True)
         smsg, swarns, sextra = self.shots(c)            # 11-07：组装前截原文截图；不管成没成都往下
+        eng, ewhy = self.engine_why(c)                  # 11-28：第 14 步自己改走备用时记下来（第 11 步就是备用、用主声音时不记，和原来一样）
+        if eng == "mimo" and (v.get("视频引擎") or "gemini") != "mimo":
+            sextra = dict(sextra, 视频引擎={"引擎": "mimo", "原因": ewhy})
+            swarns = swarns + ["第 14 步要重配视频旁白时用 MiMo 备用声音（%s）" % ewhy]
         rc, out = c.run(self, self.command(c), "组装视频")
         if rc != 0:
             return R(FAILED, "视频没组装成，这一期网页不放视频：" + "；".join(key_lines(out, 3)), swarns, sextra, go_on=True)
