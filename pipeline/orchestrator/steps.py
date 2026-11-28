@@ -1431,7 +1431,11 @@ class Video(Step):
             return "mimo", "第 11 步视频旁白用的是 MiMo 备用"
         if getattr(c, "force_backup", False):
             return "mimo", "命令行要求用备用（--use-backup）"
-        vdir = c.p(VIDEO_VOICE)      # 只在第 11 步记着"做完"时看（还没配音时的 --dry-run 计划照旧）
+        vdir = c.p(VIDEO_VOICE)
+        # 现有视频旁白人声是 MiMo 配的（比如这一步组装时刚因为人声不在改走备用重配过）：导演重配也用它，不在同一步里换回 Gemini
+        if str((read_json(vdir / "voice.json", {}) or {}).get("engine", "")).lower() == "mimo":
+            return "mimo", "现有视频旁白人声是 MiMo 备用配的"
+        # 只在第 11 步记着"做完"时看（还没配音时的 --dry-run 计划照旧）
         if st11.get("状态") == DONE and not c.offline and not (
                 (vdir / "voice.json").exists() and any((vdir / "chapters").glob("*.wav"))):
             return "mimo", "这一期没有视频旁白的人声（%s 里没有 voice.json 或各章 wav），第 14 步 Gemini 预算是 $0，改走备用" % VIDEO_VOICE

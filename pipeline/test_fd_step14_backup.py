@@ -10,6 +10,7 @@
   · 什么都没要求、第 11 步用 Gemini 配好了旁白：组装命令和改以前一字不差（正式运行不变）；
   · 11-25 那种：第 11 步用 Gemini，月度已经过 90%：第 14 步照旧用 Gemini，不半路换声音；
   · 第 11 步记"做完"、视频旁白人声却不在、不离线：改走备用；离线、或第 11 步还没做（--dry-run 计划）时照旧；
+  · 现有视频旁白人声是 MiMo 配的：同一步里导演重配也用备用，不换回 Gemini；
   · 第 14 步自己改走备用时，附加记"视频引擎"和原因、提醒一行；第 11 步本来就是备用、或用主声音时不多记。
 用法（在项目根运行）：~/.venvs/frontier-daily/bin/python -m unittest pipeline/test_fd_step14_backup.py
 不调用任何模型、不花钱；只在临时目录读写，跑子程序的地方都换成假的。
@@ -112,6 +113,15 @@ class Step14Engine(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d, Env():
             c = self.ctx(d, voice=False, offline=True)
             self.assertEqual(steps.Video().engine(c), "gemini")
+
+    def test_switch_sticks_after_mimo_redub(self):
+        """人声不在、组装时改走备用重配完（voice.json 写着 mimo）以后，导演重配旁白也还是备用，不换回 Gemini。"""
+        with tempfile.TemporaryDirectory() as d, Env():
+            c = self.ctx(d, voice=False)
+            self.assertEqual(steps.Video().engine(c), "mimo")
+            put_voice(c.issue, "mimo")
+            self.assertEqual(steps.Video().narration_budget(c), (0.0, "mimo"))
+            self.assertEqual(steps.Video().engine_why(c), ("mimo", "现有视频旁白人声是 MiMo 备用配的"))
 
     def test_voice_json_without_wavs_counts_as_missing(self):
         with tempfile.TemporaryDirectory() as d, Env():
