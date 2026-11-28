@@ -5,8 +5,8 @@
 视频旁白：主声音"），11-28 周六只跑到第 3 步、没有配音，也都写了这句。现在按这一期实际用的声音写：
   · 整期改走备用（第 11 步 决定.用备用），或用到的几路都是备用 → "配音已改走 MiMo 备用"（和原来一字不差）；
   · 只一路是备用（主声音出错换的、或第 14 步自己改走的）→ 写清是哪一路，从下一期起整期改走；
-  · 都是主声音 → "这一期配音用的是主声音（Gemini），从下一期起改走 MiMo 备用"；
-  · 这一期没跑配音（没有第 11 步的记录）→ 不写；
+  · 都是主声音（记录里确有一路写着主声音）→ "这一期配音用的是主声音（Gemini），从下一期起改走 MiMo 备用"；
+  · 这一期没跑配音（没有第 11 步的记录），或查不出用的是哪个声音 → 不写；
   · 没到 90% → 什么都不加（和原来一样）。
 用法（在项目根运行）：~/.venvs/frontier-daily/bin/python -m unittest pipeline/test_fd_report_over90.py
 不调用任何模型、不花钱；只在临时目录读写。往期 测试版/ 一个字不碰。
@@ -123,6 +123,18 @@ class Over90(unittest.TestCase):
             self.assertEqual(self.note(d, {"voice": v}, usage={"引擎": "MiMo 复刻"}), USED)
         with tempfile.TemporaryDirectory() as d:
             self.assertIn("这一期视频旁白用的是 MiMo 备用", self.note(d, {"voice": v}, usage={"引擎": "gemini"}))
+
+    def test_no_evidence_writes_nothing(self):
+        """查不出这一期用的是哪个声音：不写"用的是主声音"。"""
+        cases = [{"状态": steps.FAILED},                                                     # 第 11 步失败、没留附加
+                 {"状态": steps.FAILED, "附加": {"决定": {"用备用": False}, "播客": "没配成", "视频旁白": "没配成"}},
+                 {"状态": steps.DONE, "附加": {"播客": "沿用已有", "视频旁白": "沿用已有", "视频引擎": "gemini"}}]  # 没有 usage.json
+        for v in cases:
+            with tempfile.TemporaryDirectory() as d:
+                self.assertEqual(self.note(d, {"voice": v}), "", v)
+        with tempfile.TemporaryDirectory() as d:          # 沿用已有、usage.json 写着 Gemini：算确有主声音
+            v = {"状态": steps.DONE, "附加": {"播客": "沿用已有", "视频旁白": "沿用已有", "视频引擎": "gemini"}}
+            self.assertEqual(self.note(d, {"voice": v}, usage={"引擎": "gemini-2.5-flash-tts"}), NEXT)
 
     def test_video_off_podcast_backup_is_whole(self):
         v = {"状态": steps.DONE, "附加": {"决定": {"用备用": False}, "播客": "MiMo 备用", "视频旁白": "不配（视频：关）", "视频开关": "关"}}

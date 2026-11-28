@@ -36,7 +36,8 @@ def missing(c):
 
 def backup_used(c, st):
     """这一期配音实际用了 MiMo 备用的有哪几路（按第 11 步、第 14 步记下的和配音程序自己的 usage.json，不按月度花费猜）。
-    返回 (第 11 步有没有配音记录, 第 11 步是不是一开始就整期改走备用, [用了备用的那几路], 这一期一共几路)。"""
+    返回 (第 11 步有没有配音记录, 第 11 步是不是一开始就整期改走备用, [用了备用的那几路], 这一期一共几路,
+    有没有哪一路确实是主声音配的)。"""
     v11 = st["voice"]
     v = v11.get("附加") or {}
     ran = v11.get("状态") in (DONE, FAILED) or bool(v)
@@ -48,22 +49,27 @@ def backup_used(c, st):
     vid = str(v.get("视频旁白", "")).startswith("MiMo") or v.get("视频引擎") == "mimo" or \
         (isinstance(v14, dict) and v14.get("引擎") == "mimo")
     tracks = 1 if (v.get("视频开关") == "关" or video_off(st)) else 2       # 视频开关关着：只有播客一路
-    return ran, whole, [x for x, y in (("播客", pod), ("视频旁白", vid)) if y], tracks
+    main = str(v.get("播客", "")).startswith("主声音") or str(v.get("视频旁白", "")).startswith("主声音") or \
+        (v.get("播客") == "沿用已有" and "gemini" in str(uj.get("引擎", "")).lower())
+    return ran, whole, [x for x, y in (("播客", pod), ("视频旁白", vid)) if y], tracks, main
 
 
 def over90_note(c, st):
     """月度 Gemini 到 90% 时，花费那一行后面那句（11-28 改）。原来只要过 90% 就写"配音已改走 MiMo 备用"，
     11-25 那期是用 Gemini 配完才过 90%（第 11 步"播客：主声音；视频旁白：主声音"），11-28 周六只跑到第 3 步、
     根本没配音，也都写了这句。现在按这一期实际用的声音写：整期改走或两路都用了备用写"已改走"；只一路用了备用写清是哪一路；
-    都没用写"从下一期起改走"；这一期没跑配音（没有第 11 步的记录）不写。"""
-    ran, whole, used, tracks = backup_used(c, st)
+    都没用、而且记录里确有一路是主声音配的写"从下一期起改走"；这一期没跑配音（没有第 11 步的记录），或者查不出用的是
+    哪个声音（第 11 步失败没留记录、两路都没配成、沿用已有又没有 usage.json）不写。"""
+    ran, whole, used, tracks, main = backup_used(c, st)
     if not ran:
         return ""
     if whole or len(used) >= tracks:
         return "——**到 90% 了，配音已改走 MiMo 备用**"
     if used:
         return "——**到 90%% 了：这一期%s用的是 MiMo 备用，从下一期起配音整期改走 MiMo 备用**" % used[0]
-    return "——**到 90% 了：这一期配音用的是主声音（Gemini），从下一期起改走 MiMo 备用**"
+    if main:
+        return "——**到 90% 了：这一期配音用的是主声音（Gemini），从下一期起改走 MiMo 备用**"
+    return ""
 
 
 def write(c, outcome, first, last):
